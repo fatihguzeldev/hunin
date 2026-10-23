@@ -93,19 +93,7 @@ impl Operations {
             )),
             "timeline.query" => Ok(query::timeline(&store.records(id()?)?, &params)),
             "resources.query" => {
-                let mut result = query::resources(&store.records(id()?)?);
-                let series = result["series"].as_array_mut().unwrap();
-                let total = series.len();
-                let page = series
-                    .iter()
-                    .skip(cursor)
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                result["series"] = json!(page);
-                result["next_cursor"] =
-                    json!((cursor + limit < total).then(|| (cursor + limit).to_string()));
-                Ok(result)
+                Ok(query::resources_page(&store.records(id()?)?, &params))
             }
             "contexts.query" => {
                 let records = store.records(id()?)?;
