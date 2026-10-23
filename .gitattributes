@@ -1,0 +1,2 @@
+# Unified patches require a context prefix even for blank source lines.
+collectors/native/patches/*.patch -whitespace
