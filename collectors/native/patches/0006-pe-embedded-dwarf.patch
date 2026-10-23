@@ -1,0 +1,179 @@
+diff --git a/samply/src/windows/profile_context.rs b/samply/src/windows/profile_context.rs
+--- a/samply/src/windows/profile_context.rs
++++ b/samply/src/windows/profile_context.rs
+@@ -2171,8 +2171,9 @@
+             let pdb_path = std::str::from_utf8(pdb_info.path()).ok()?;
+             Some(pdb_path.to_string())
+         });
+-        let debug_id: Option<DebugId> = pdb_info
+-            .and_then(|pdb_info| DebugId::from_guid_age(&pdb_info.guid(), pdb_info.age()).ok());
++        // Use the symbol reader's identity algorithm, including its .text
++        // fallback for PE images with embedded DWARF instead of CodeView/PDB.
++        let debug_id = wholesym::samply_symbols::debug_id_for_object(pe);
+ 
+         Self {
+             image_size,
+diff --git a/samply-symbols/src/dwarf.rs b/samply-symbols/src/dwarf.rs
+--- a/samply-symbols/src/dwarf.rs
++++ b/samply-symbols/src/dwarf.rs
+@@ -1,3 +1,4 @@
++use std::io::Read;
+ use std::marker::PhantomData;
+ 
+ use addr2line::{fallible_iterator, gimli};
+@@ -88,7 +89,16 @@
+     } else {
+         section_id.name()
+     };
+-    let section = file.section_by_name(section_name)?;
++    let section = match file.section_by_name(section_name) {
++        Some(section) => section,
++        None => {
++            // object 0.36 recognizes GNU .zdebug aliases for ELF/Mach-O, but
++            // not PE. PE can embed the same 12-byte GNU ZLIB header + stream.
++            let suffix = section_name.strip_prefix(".debug_")?;
++            let section = file.section_by_name(&format!(".zdebug_{suffix}"))?;
++            return gnu_zlib_data(section.data().ok()?).map(SingleSectionData::Owned);
++        }
++    };
+     let file_range = section.compressed_file_range().ok()?;
+     match file_range.format {
+         CompressionFormat::None => Some(SingleSectionData::View {
+@@ -105,6 +115,58 @@
+     }
+ }
+ 
++fn gnu_zlib_data(data: &[u8]) -> Option<Vec<u8>> {
++    const MAX_SECTION_SIZE: u64 = 128 * 1024 * 1024;
++    if data.get(..4)? != b"ZLIB" {
++        return None;
++    }
++    let expected = u64::from_be_bytes(data.get(4..12)?.try_into().ok()?);
++    if expected > MAX_SECTION_SIZE {
++        return None;
++    }
++    let mut result = Vec::new();
++    flate2::read::ZlibDecoder::new(data.get(12..)?)
++        .take(expected + 1)
++        .read_to_end(&mut result)
++        .ok()?;
++    (result.len() as u64 == expected).then_some(result)
++}
++
++#[cfg(test)]
++mod hunin_pe_compression_tests {
++    use super::*;
++    use std::io::Write;
++
++    #[test]
++    fn gnu_zlib_sections_reject_missing_truncated_mismatched_and_unbounded_data() {
++        let payload = b"controlled embedded DWARF bytes";
++        let mut encoder =
++            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
++        encoder.write_all(payload).unwrap();
++        let mut section = b"ZLIB".to_vec();
++        section.extend_from_slice(&(payload.len() as u64).to_be_bytes());
++        section.extend(encoder.finish().unwrap());
++        assert_eq!(gnu_zlib_data(&section).unwrap(), payload);
++        assert!(gnu_zlib_data(b"ZLIB").is_none());
++        let mut wrong = section.clone();
++        wrong[4..12].copy_from_slice(&(payload.len() as u64 - 1).to_be_bytes());
++        assert!(gnu_zlib_data(&wrong).is_none());
++        wrong[4..12].copy_from_slice(&(payload.len() as u64 + 1).to_be_bytes());
++        assert!(gnu_zlib_data(&wrong).is_none());
++        wrong[4..12].copy_from_slice(&u64::MAX.to_be_bytes());
++        assert!(gnu_zlib_data(&wrong).is_none());
++        let mut damaged = section.clone();
++        *damaged.last_mut().unwrap() ^= 1;
++        assert!(gnu_zlib_data(&damaged).is_none());
++        for length in 0..section.len() {
++            assert!(
++                gnu_zlib_data(&section[..length]).is_none(),
++                "accepted truncated section with {length} bytes"
++            );
++        }
++    }
++}
++
+ /// Holds on to section data so that we can create an addr2line::Context for that
+ /// that data. This avoids one copy compared to what addr2line::Context::new does
+ /// by default, saving 1.5 seconds on libxul. (For comparison, dumping all symbols
+diff --git a/wholesym/tests/hunin_pe_dwarf.rs b/wholesym/tests/hunin_pe_dwarf.rs
+new file mode 100644
+--- /dev/null
++++ b/wholesym/tests/hunin_pe_dwarf.rs
+@@ -0,0 +1,74 @@
++use std::path::PathBuf;
++use wholesym::samply_symbols::{debug_id_for_object, object::Object};
++use wholesym::{LibraryInfo, LookupAddress, SymbolManager, SymbolManagerConfig};
++
++/// Run against an actual PE with embedded compressed DWARF and no CodeView.
++/// The fixture is supplied explicitly rather than committing a target binary.
++#[tokio::test]
++#[ignore = "requires HUNIN_PE_DWARF_FIXTURE, an actual PE recording input"]
++async fn pe_without_codeview_resolves_compressed_dwarf() {
++    let path =
++        PathBuf::from(std::env::var_os("HUNIN_PE_DWARF_FIXTURE").expect("fixture path required"));
++    let bytes = std::fs::read(&path).unwrap();
++    let image = wholesym::samply_symbols::object::File::parse(bytes.as_slice()).unwrap();
++    assert!(image.pdb_info().unwrap().is_none());
++    assert!(image.section_by_name(".zdebug_info").is_some());
++    let id = debug_id_for_object(&image).unwrap();
++    let pe = wholesym::samply_symbols::object::read::pe::PeFile64::parse(bytes.as_slice()).unwrap();
++    assert_eq!(debug_id_for_object(&pe), Some(id));
++    assert_ne!(id, Default::default());
++    eprintln!("PE synthetic debug ID: {id}");
++    let manager = SymbolManager::with_config(SymbolManagerConfig::default());
++    let map = manager
++        .load_symbol_map_for_binary_at_path(&path, None)
++        .await
++        .unwrap();
++    let (address, name) = map
++        .iter_symbols()
++        .find(|(_, name)| name.contains("huninSmokeHotspot"))
++        .expect("known function missing");
++    let info = map
++        .lookup(LookupAddress::Relative(address + 1))
++        .await
++        .unwrap();
++    eprintln!("PE lookup: {name} at RVA {address:x}: {info:?}");
++    let frames = info
++        .frames
++        .expect("embedded compressed DWARF source frames missing");
++    assert!(
++        frames.iter().any(|frame| frame
++            .function
++            .as_ref()
++            .is_some_and(|name| name.contains("huninSmokeHotspot"))
++            && frame
++                .file_path
++                .as_ref()
++                .is_some_and(|path| path.raw_path().ends_with("cpu_test.go"))
++            && frame.line_number.is_some_and(|line| line > 0)),
++        "{frames:?}"
++    );
++}
++
++#[tokio::test]
++#[ignore = "requires HUNIN_PE_DWARF_FIXTURE, an actual PE recording input"]
++async fn pe_profile_identity_must_match_the_symbol_reader() {
++    let path =
++        PathBuf::from(std::env::var_os("HUNIN_PE_DWARF_FIXTURE").expect("fixture path required"));
++    let bytes = std::fs::read(&path).unwrap();
++    let image = wholesym::samply_symbols::object::File::parse(bytes.as_slice()).unwrap();
++    let id = debug_id_for_object(&image).unwrap();
++    let name = path.file_name().unwrap().to_str().unwrap();
++    let mut manager = SymbolManager::with_config(SymbolManagerConfig::default());
++    for expected in [Default::default(), id] {
++        manager.add_known_library(LibraryInfo {
++            path: Some(path.to_str().unwrap().into()),
++            debug_path: Some(path.to_str().unwrap().into()),
++            debug_name: Some(name.into()),
++            debug_id: Some(expected),
++            ..Default::default()
++        });
++        let result = manager.load_symbol_map(name, expected).await;
++        eprintln!("Profile identity {expected}: {:?}", result.as_ref().err());
++        assert_eq!(result.is_ok(), expected == id);
++    }
++}
