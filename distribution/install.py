@@ -31,6 +31,19 @@ def verify(bundle):
     return manifest
 
 
+def owned_link(link, prefix):
+    """Only replace a link to an intact, versioned installation we own."""
+    if not link.is_symlink():
+        return False
+    try:
+        executable = link.resolve(strict=True)
+        manifest = verify(executable.parent)
+        expected = prefix.resolve() / f"{manifest['version']}-{manifest['platform']}" / "hunin"
+        return executable == expected and not manifest["platform"].startswith("windows")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def install(bundle, prefix, bin_dir=None):
     manifest = verify(bundle)
     destination = prefix / f"{manifest['version']}-{manifest['platform']}"
@@ -53,7 +66,7 @@ def install(bundle, prefix, bin_dir=None):
     if bin_dir:
         bin_dir.mkdir(parents=True, exist_ok=True)
         link = bin_dir / "hunin"
-        if link.exists() and not link.is_symlink():
+        if (link.exists() or link.is_symlink()) and not owned_link(link, prefix):
             raise ValueError(f"Preserving existing executable: {link}. Bundle installed at {executable}.")
         replacement = bin_dir / ".hunin-link"
         if replacement.exists() or replacement.is_symlink():
