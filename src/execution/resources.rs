@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -25,11 +25,19 @@ impl Observer {
         let (sender, receiver) = tokio::sync::mpsc::channel(4);
         let task = tokio::task::spawn_blocking(move || {
             let mut system = System::new();
+            let mut identities = ObservationIdentities::new(root);
             let mut sequence = 0;
             let mut previous = None;
             while !worker_stopped.load(Ordering::Acquire) {
                 sequence += 1;
-                let mut rows = observe(&mut system, root, &run_id, sequence, collector_wrapper);
+                let mut rows = observe(
+                    &mut system,
+                    &mut identities,
+                    root,
+                    &run_id,
+                    sequence,
+                    collector_wrapper,
+                );
                 if worker_stopped.load(Ordering::Acquire) {
                     break;
                 }
@@ -67,14 +75,41 @@ impl Drop for Observer {
     }
 }
 
-pub fn observe(
+struct ObservationIdentities {
+    root: Option<String>,
+    tracked: HashSet<u32>,
+}
+
+impl ObservationIdentities {
+    fn new(root: u32) -> Self {
+        Self {
+            root: super::process_identity::birth(root),
+            tracked: HashSet::from([root]),
+        }
+    }
+}
+
+fn stable_birth<'a>(before: Option<&'a str>, after: Option<&str>) -> Option<&'a str> {
+    before.filter(|value| Some(*value) == after)
+}
+
+fn observe(
     system: &mut System,
+    identities: &mut ObservationIdentities,
     root: u32,
     run_id: &str,
     sequence: u64,
     collector_wrapper: bool,
 ) -> Vec<Value> {
     let refresh_started = std::time::Instant::now();
+    let before = identities
+        .tracked
+        .iter()
+        .filter_map(|pid| Some((*pid, super::process_identity::birth(*pid)?)))
+        .collect::<HashMap<_, _>>();
+    // sysinfo's cached lifetime check uses whole seconds. A fresh table avoids
+    // retaining a prior process's resource counters after same-second PID reuse.
+    *system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -83,7 +118,15 @@ pub fn observe(
             .with_cpu()
             .with_memory(),
     );
-    let refresh_elapsed_us = refresh_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    if stable_birth(
+        identities.root.as_deref(),
+        before.get(&root).map(String::as_str),
+    )
+    .is_none()
+        || super::process_identity::birth(root).as_deref() != identities.root.as_deref()
+    {
+        return Vec::new();
+    }
     let mut owned = HashSet::from([Pid::from_u32(root)]);
     loop {
         let previous = owned.len();
@@ -98,9 +141,19 @@ pub fn observe(
     }
     let now = crate::model::now_us();
     let mut records = Vec::new();
+    identities.tracked = owned.iter().map(|p| p.as_u32()).collect();
     for pid in owned {
         if let Some(p) = system.process(pid) {
-            let producer = format!("resources:{run_id}:{}:{}", pid.as_u32(), p.start_time());
+            let after = super::process_identity::birth(pid.as_u32());
+            let Some(birth) = stable_birth(
+                before.get(&pid.as_u32()).map(String::as_str),
+                after.as_deref(),
+            ) else {
+                continue;
+            };
+            let producer = format!("resources:{run_id}:{}:{birth}", pid.as_u32());
+            let refresh_elapsed_us =
+                refresh_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
             for (name, value, unit) in [
                 ("process.rss", p.memory() as f64, "bytes"),
                 (
@@ -109,9 +162,34 @@ pub fn observe(
                     "milliseconds",
                 ),
             ] {
-                records.push(json!({"schema_version":1,"kind":"metric","id":format!("{producer}:{sequence}:{name}"),"run_id":run_id,"producer_id":producer,"pid":pid.as_u32(),"tid":"process","timestamp_us":now,"basis":"observed","name":name,"value":value,"unit":unit,"scope":"process","attributes":{"process_started_at_seconds":p.start_time(),"requested_interval_us":100000,"observation_refresh_elapsed_us":refresh_elapsed_us,"temporality":if name=="process.rss" {"gauge"}else{"cumulative"},"process_role":if collector_wrapper&&pid.as_u32()==root{"collector"}else{"measured"},"process_name":p.name().to_string_lossy(),"lifetime_basis":"pid_and_os_start_time_seconds"}}));
+                records.push(json!({"schema_version":1,"kind":"metric","id":format!("{producer}:{sequence}:{name}"),"run_id":run_id,"producer_id":producer,"pid":pid.as_u32(),"tid":"process","timestamp_us":now,"basis":"observed","name":name,"value":value,"unit":unit,"scope":"process","attributes":{"process_started_at_seconds":p.start_time(),"process_lifetime_id":birth,"requested_interval_us":100000,"observation_refresh_elapsed_us":refresh_elapsed_us,"temporality":if name=="process.rss" {"gauge"}else{"cumulative"},"process_role":if collector_wrapper&&pid.as_u32()==root{"collector"}else{"measured"},"process_name":p.name().to_string_lossy(),"lifetime_basis":"native_birth_identity_brackets_resource_refresh"}}));
             }
         }
     }
     records
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn real_resource_rows_retain_native_birth_and_reject_a_replaced_root() {
+        let pid = std::process::id();
+        let mut system = System::new();
+        let mut identities = ObservationIdentities::new(pid);
+        let rows = observe(&mut system, &mut identities, pid, "run", 1, false);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| row["attributes"]["process_lifetime_id"].as_str()
+                    == identities.root.as_deref())
+        );
+        // A numeric PID that now resolves to another birth must not seed tree
+        // discovery or return that unrelated process's resources.
+        identities.root = Some("previous-process-birth".into());
+        assert!(observe(&mut system, &mut identities, pid, "run", 2, false).is_empty());
+        identities.root = None;
+        assert!(observe(&mut system, &mut identities, pid, "run", 3, false).is_empty());
+    }
 }

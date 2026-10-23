@@ -8,6 +8,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 pub struct Owner {
     pub pid: u32,
     pub process_start_time_seconds: Option<u64>,
+    pub process_birth_identity: Option<String>,
     pub instance_id: String,
 }
 
@@ -18,6 +19,7 @@ impl Owner {
         refresh(&mut system, &[Pid::from_u32(pid)]);
         Self {
             pid,
+            process_birth_identity: super::process_identity::birth(pid),
             process_start_time_seconds: system
                 .process(Pid::from_u32(pid))
                 .map(|p| p.start_time())
@@ -92,6 +94,11 @@ fn owner_absent(value: &Value, system: &System) -> bool {
     else {
         return false;
     };
+    if let Some(saved) = value["process_birth_identity"].as_str() {
+        if let Some(current) = super::process_identity::birth(pid) {
+            return saved != current;
+        }
+    }
     if let Some(process) = system.process(Pid::from_u32(pid)) {
         return value["process_start_time_seconds"]
             .as_u64()

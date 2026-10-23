@@ -3,6 +3,7 @@ mod identity;
 mod native_outcome;
 pub(crate) mod ownership;
 pub(crate) mod process;
+mod process_identity;
 mod resources;
 
 use crate::{
@@ -326,7 +327,7 @@ impl Engine {
         while let Ok(rows) = observations.try_recv() {
             metrics.extend(rows);
         }
-        run.source["resource_observation"] = json!({"scope":"observed processes in supervised tree","requested_interval_us":100000,"implementation":"CPU/memory-only process discovery on a blocking worker","limitations":"observer work can perturb the target; refresh duration and actual point intervals are recorded; short-lived processes or final cumulative values may be missed"});
+        run.source["resource_observation"] = json!({"scope":"observed processes in supervised tree","requested_interval_us":100000,"implementation":"CPU/memory-only process discovery on a blocking worker, bracketed by native process birth identities","limitations":"observer work can perturb the target; refresh duration and actual point intervals are recorded; missing or changing birth identities are omitted; newly discovered children need a subsequent stable observation; short-lived processes or final cumulative values may be missed"});
         run.source["process_elapsed_limitation"] = json!(if collector_wrapper {
             "includes collector startup/shutdown, observer overhead and supervised command; not isolated target elapsed"
         } else if run.runtime == "none" {
