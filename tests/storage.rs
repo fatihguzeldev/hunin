@@ -68,6 +68,27 @@ fn shared_raw_artifacts_survive_removing_one_run() {
 }
 
 #[test]
+fn opening_a_newer_database_does_not_rewrite_its_schema_version() {
+    let root = tempfile::tempdir().unwrap();
+    Store::open(root.path()).unwrap();
+    let connection = rusqlite::Connection::open(root.path().join("hunin.sqlite")).unwrap();
+    connection.execute_batch("PRAGMA user_version=999").unwrap();
+    assert!(
+        Store::open(root.path())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("newer Hunin")
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        999
+    );
+}
+
+#[test]
 fn distinct_artifact_names_share_bytes_without_losing_their_roles() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

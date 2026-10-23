@@ -71,10 +71,14 @@ impl Store {
         let store = Self {
             root: root.canonicalize()?,
         };
-        store
-            .connection()?
-            .execute_batch(include_str!("storage/schema.sql"))?;
-        let c = store.connection()?;
+        let mut connection = store.connection()?;
+        let version: u32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            version <= 2,
+            "recording database schema {version} requires a newer Hunin; this executable supports up to 2"
+        );
+        let c = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        c.execute_batch(include_str!("storage/schema.sql"))?;
         let columns: Vec<String> = c
             .prepare("PRAGMA table_info(artifacts)")?
             .query_map([], |r| r.get(1))?
@@ -82,9 +86,7 @@ impl Store {
         if !columns.iter().any(|name| name == "sha256") {
             c.execute_batch("ALTER TABLE artifacts ADD COLUMN sha256 TEXT; UPDATE artifacts SET sha256=json_extract(metadata,'$.sha256');")?;
         }
-        c.execute_batch(
-            "CREATE INDEX IF NOT EXISTS artifact_blob ON artifacts(sha256); PRAGMA user_version=1;",
-        )?;
+        c.execute_batch("CREATE INDEX IF NOT EXISTS artifact_blob ON artifacts(sha256);")?;
         let columns: Vec<String> = c
             .prepare("PRAGMA table_info(result_sets)")?
             .query_map([], |r| r.get(1))?
@@ -104,6 +106,8 @@ impl Store {
         if !columns.iter().any(|name| name == "owner_run_id") {
             c.execute_batch("ALTER TABLE documents ADD COLUMN owner_run_id TEXT REFERENCES runs(id) ON DELETE CASCADE;")?;
         }
+        c.execute_batch("UPDATE documents SET owner_run_id=json_extract(payload,'$.run_id') WHERE namespace IN('analysis-results','cancellations') AND owner_run_id IS NULL AND json_extract(payload,'$.run_id') IN(SELECT id FROM runs); PRAGMA user_version=2;")?;
+        c.commit()?;
         Ok(store)
     }
 
@@ -430,9 +434,11 @@ impl Store {
         }
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let candidates = tx.prepare("SELECT metadata FROM artifacts WHERE run_id=?1")?
-            .query_map([run_id], |r| r.get::<_,String>(0))?
-            .map(|r| Ok(serde_json::from_str::<Artifact>(&r?)?)).collect::<Result<Vec<_>>>()?;
+        let candidates = tx
+            .prepare("SELECT metadata FROM artifacts WHERE run_id=?1")?
+            .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str::<Artifact>(&r?)?))
+            .collect::<Result<Vec<_>>>()?;
         if tx.query_row("SELECT COUNT(*) FROM documents WHERE owner_run_id=?1 AND json_extract(payload,'$.status')='running'",[run_id],|r|r.get::<_,i64>(0))?>0 {bail!("cancel active analyzer executions before removing this recording");}
         let attempts: Vec<String> = tx
             .prepare(
