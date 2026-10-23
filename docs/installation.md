@@ -1,8 +1,8 @@
 # Installation
 
-Hunin bundles contain the application, its local UI, a ready native profiler, collector adapters, SDK sources, the observation protocol, and documentation. Start with a bundle built for the machine you will profile. The candidate host set is Windows x64, macOS x64/ARM64, and glibc Linux x64/ARM64. A successful bundle build establishes compilation and packaging; it does not establish every collector/runtime combination.
+Hunin bundles contain the application, its local UI, a ready native profiler, collector adapters, SDK sources, the observation protocol, and documentation. Start with a bundle built for the machine you will profile. The application targets are Windows x64, macOS x64/ARM64, and glibc Linux x64/ARM64. A successful bundle build establishes compilation and packaging; it does not establish every collector/runtime combination.
 
-The [support evidence](support.md) distinguishes observed runtime/host cells from CI candidates, including the current GraalPy Intel Mac exclusion. The [collection paths](../collectors/collection-paths.md) describe collection routes, prerequisites, and actual execution evidence. Runtime detection and `capabilities` report missing tools and permissions on the current machine. Windows ARM64 and musl Linux are outside the current candidate set.
+The [support evidence](support.md) lists measured OS/runtime baselines and the exercised collection and installation controls, including the current GraalPy Intel Mac exclusion. The [collection paths](../collectors/collection-paths.md) describe collection routes, prerequisites, and actual execution evidence. Runtime detection and `capabilities` report missing tools and permissions on the current machine. Windows ARM64 and musl Linux are outside this host set.
 
 ## Build from source
 
@@ -23,7 +23,7 @@ Package the host-built executable, selecting the matching platform:
 python3 distribution/package.py --binary target/release/hunin --platform macos-arm64
 ```
 
-The other platform values are `macos-x64`, `linux-x64`, `linux-arm64`, and `windows-x64`. On Windows use `collectors/native/bin/samply.exe` for the profiler build output, a user-owned cache path, and `target/release/hunin.exe` for packaging. The output archive and its `.sha256` file are written to `dist/`. Packaging verifies the profiler's target, binary checksum, upstream pin, and exact patch identity before accepting it. CI builds native bundles for the five candidate hosts and retains them as workflow artifacts. A workflow artifact is an unsigned development build, not a signed release.
+The other platform values are `macos-x64`, `linux-x64`, `linux-arm64`, and `windows-x64`. On Windows use `collectors/native/bin/samply.exe` for the profiler build output, a user-owned cache path, and `target/release/hunin.exe` for packaging. The output archive and its `.sha256` file are written to `dist/`. Packaging verifies the profiler's target, binary checksum, upstream pin, and exact patch identity before accepting it. CI builds native bundles for the five application targets and retains them as workflow artifacts. A workflow artifact is an unsigned development build, not a signed release.
 
 Each manifest retains the packaging host's actual OS release, kernel/build version, Linux distribution and libc where available. It also records the source revision and dirty state, GitHub commit/run URL when present, and the explicitly supplied Rust build provenance. For example, add `--rust-toolchain stable --rust-target aarch64-apple-darwin` only when that toolchain and target produced the executable. Omitted or unavailable provenance stays `unknown`; packaging does not infer the compiler from the filename. The tested runner baseline and its linked workflow evidence do not certify an older minimum OS or a successful collection cell. The manifest links the bundled runtime matrix and permission requirements.
 
@@ -46,7 +46,7 @@ On Windows, run `py install.py`. The default is `%LOCALAPPDATA%\hunin\<version>-
 
 ## Collector prerequisites
 
-- Native Rust/C/C++ and Go automatic stack collection uses the adjacent patched `samply` executable; retain debug symbols and measured binaries. Its build provenance and upstream licenses are beside the executable under `collectors/native/bin/`. Linux additionally needs a usable perf configuration, Windows ETW collection may need elevation, and macOS restricts protected system targets.
+- Native Rust/C/C++ and Go automatic stack collection uses the adjacent patched `samply` executable; retain debug symbols and measured binaries. Its build provenance and upstream licenses are beside the executable under `collectors/native/bin/`. Linux additionally needs a usable perf configuration. Windows needs the Windows Performance Toolkit (`xperf.exe`) and ETW privileges; the collector checks these prerequisites separately from runtime presence. macOS restricts protected system targets.
 - Node.js and Deno use their V8 CPU profiling routes. Bun uses its own JavaScriptCore profile route. Their control and worker coverage differ; consult the collection path documentation before selecting a mode.
 - On Unix, CPython and PyPy require the supported `vmprof` package in the target interpreter. Decoding uses the configured decoder interpreter or Hunin-managed environment; it does not replace the target interpreter. On Windows the CPU route uses OS-thread CPU progress and Python stack sampling without a vmprof dependency; verify the current host evidence and its native attribution gaps in the support guide. Imported Windows vmprof wall snapshots remain distinct from CPU samples.
 - GraalPy requires its CPU sampler tooling and a compatible distribution/execution mode. An interpreter name alone is not a capability guarantee.
