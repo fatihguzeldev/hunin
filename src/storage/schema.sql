@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS result_sets (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     input_identity TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
     UNIQUE(run_id,input_identity)
 );
 CREATE TABLE IF NOT EXISTS observations (
@@ -27,4 +29,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
     metadata TEXT NOT NULL,
     sha256 TEXT NOT NULL,
     PRIMARY KEY(run_id,id)
+);
+CREATE TABLE IF NOT EXISTS documents (
+    namespace TEXT NOT NULL,
+    id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    updated_at_us INTEGER NOT NULL,
+    PRIMARY KEY(namespace,id)
 );

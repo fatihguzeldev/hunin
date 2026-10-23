@@ -101,3 +101,14 @@ fn references_preserve_kind_and_acyclic_parent_context_ownership() {
     b["parent_id"] = json!("a");
     assert!(store.accept("run-1", "parent-cycle", &[a, b]).is_err());
 }
+
+#[test]
+fn reanalysis_selects_one_normalization_and_preserves_history() {
+    let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();store.save_run(&run()).unwrap();
+    store.accept_import("run-1","raw-recording","importer-v1-sidecar-a",&[event("old")]).unwrap();
+    store.accept_import("run-1","raw-recording","importer-v1-sidecar-b",&[event("new")]).unwrap();
+    assert_eq!(store.records("run-1").unwrap().len(),1);assert_eq!(store.records("run-1").unwrap()[0]["id"],"new");
+    assert_eq!(store.records_history("run-1").unwrap().len(),2);
+    store.accept_import("run-1","raw-recording","importer-v1-sidecar-a",&[event("old")]).unwrap();
+    assert_eq!(store.records("run-1").unwrap()[0]["id"],"old");
+}

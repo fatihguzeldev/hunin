@@ -19,6 +19,20 @@ pub struct Store {
 }
 
 impl Store {
+    pub fn document(&self,namespace:&str,id:&str)->Result<Value> {
+        let text:String=self.connection()?.query_row("SELECT payload FROM documents WHERE namespace=?1 AND id=?2",params![namespace,id],|r|r.get(0)).context("document not found")?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub fn documents(&self,namespace:&str)->Result<Vec<Value>> {
+        let c=self.connection()?;
+        let mut statement=c.prepare("SELECT payload FROM documents WHERE namespace=?1 ORDER BY updated_at_us DESC,id")?;
+        statement.query_map([namespace],|r|r.get::<_,String>(0))?.map(|r|Ok(serde_json::from_str(&r?)?)).collect()
+    }
+
+    pub fn save_document(&self,namespace:&str,id:&str,value:&Value)->Result<()> {
+        self.connection()?.execute("INSERT INTO documents(namespace,id,payload,updated_at_us) VALUES(?1,?2,?3,?4) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload,updated_at_us=excluded.updated_at_us",params![namespace,id,serde_json::to_string(value)?,crate::model::now_us()])?;Ok(())
+    }
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root.join("artifacts"))?;
         let store = Self {
@@ -38,6 +52,9 @@ impl Store {
         c.execute_batch(
             "CREATE INDEX IF NOT EXISTS artifact_blob ON artifacts(sha256); PRAGMA user_version=1;",
         )?;
+        let columns:Vec<String>=c.prepare("PRAGMA table_info(result_sets)")?.query_map([],|r|r.get(1))?.collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|name|name=="source_key") {c.execute_batch("ALTER TABLE result_sets ADD COLUMN source_key TEXT NOT NULL DEFAULT ''; UPDATE result_sets SET source_key=input_identity;")?;}
+        if !columns.iter().any(|name|name=="active") {c.execute_batch("ALTER TABLE result_sets ADD COLUMN active INTEGER NOT NULL DEFAULT 1;")?;}
         Ok(store)
     }
 
@@ -77,27 +94,35 @@ impl Store {
 
     /// Validate and publish a whole result set in one transaction. Replays are no-ops.
     pub fn accept(&self, run_id: &str, input_identity: &str, records: &[Value]) -> Result<bool> {
+        self.publish(run_id,input_identity,input_identity,records,None)
+    }
+
+    pub fn accept_import(&self,run_id:&str,source_key:&str,fingerprint:&str,records:&[Value])->Result<bool> {
+        self.publish(run_id,source_key,&format!("normalization:{fingerprint}"),records,None)
+    }
+
+    pub fn publish(&self,run_id:&str,source_key:&str,input_identity:&str,records:&[Value],document:Option<(&str,&str,&Value)>)->Result<bool> {
         self.run(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if tx
-            .query_row(
-                "SELECT 1 FROM result_sets WHERE run_id=?1 AND input_identity=?2",
-                params![run_id, input_identity],
-                |r| r.get::<_, i32>(0),
-            )
-            .optional()?
-            .is_some()
-        {
+        if let Some((id,active))=tx.query_row("SELECT id,active FROM result_sets WHERE run_id=?1 AND input_identity=?2",params![run_id,input_identity],|r|Ok((r.get::<_,String>(0)?,r.get::<_,bool>(1)?))).optional()? {
+            if !active {
+                tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key=?2",params![run_id,source_key])?;
+                tx.execute("UPDATE result_sets SET active=1 WHERE id=?1",[id])?;
+                tx.commit()?;
+            }
             return Ok(false);
         }
+        let replacing=tx.query_row("SELECT COUNT(*) FROM result_sets WHERE run_id=?1 AND source_key=?2 AND active=1",params![run_id,source_key],|r|r.get::<_,i64>(0))?>0;
+        tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key=?2",params![run_id,source_key])?;
+        if replacing && source_key.starts_with("import-v1:") {tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key LIKE 'analysis:%'",[run_id])?;}
         let existing: HashSet<String> = tx
-            .prepare("SELECT id FROM observations WHERE run_id=?1")?
+            .prepare("SELECT o.id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
             .query_map([run_id], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         ingestion::validate(run_id, records, &existing)?;
         let existing_rows: HashMap<String, Value> = tx
-            .prepare("SELECT id,record FROM observations WHERE run_id=?1")?
+            .prepare("SELECT o.id,o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
             .query_map([run_id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
@@ -109,8 +134,8 @@ impl Store {
         ingestion::validate_ownership(records, &existing_rows)?;
         let result_id = uuid::Uuid::new_v4().to_string();
         tx.execute(
-            "INSERT INTO result_sets(id,run_id,input_identity) VALUES(?1,?2,?3)",
-            params![result_id, run_id, input_identity],
+            "INSERT INTO result_sets(id,run_id,input_identity,source_key,active) VALUES(?1,?2,?3,?4,1)",
+            params![result_id, run_id, input_identity,source_key],
         )?;
         {
             let mut insert=tx.prepare("INSERT INTO observations(run_id,id,kind,timestamp_us,result_set_id,record) VALUES(?1,?2,?3,?4,?5,?6)")?;
@@ -125,6 +150,7 @@ impl Store {
                 ])?;
             }
         }
+        if let Some((namespace,id,value))=document {tx.execute("INSERT INTO documents(namespace,id,payload,updated_at_us) VALUES(?1,?2,?3,?4) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload,updated_at_us=excluded.updated_at_us",params![namespace,id,serde_json::to_string(value)?,crate::model::now_us()])?;}
         tx.commit()?;
         Ok(true)
     }
@@ -132,12 +158,17 @@ impl Store {
     pub fn records(&self, run_id: &str) -> Result<Vec<Value>> {
         self.run(run_id)?;
         let c = self.connection()?;
-        let mut statement =
-            c.prepare("SELECT record FROM observations WHERE run_id=?1 ORDER BY timestamp_us,seq")?;
+        let mut statement = c.prepare("SELECT o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq")?;
         statement
             .query_map([run_id], |r| r.get::<_, String>(0))?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect()
+    }
+
+    pub fn records_history(&self,run_id:&str)->Result<Vec<Value>> {
+        self.run(run_id)?;let c=self.connection()?;
+        let mut statement=c.prepare("SELECT record FROM observations WHERE run_id=?1 ORDER BY seq")?;
+        statement.query_map([run_id],|r|r.get::<_,String>(0))?.map(|r|Ok(serde_json::from_str(&r?)?)).collect()
     }
 
     pub fn add_artifact(&self, run_id: &str, source: &Path, format: &str) -> Result<Artifact> {
