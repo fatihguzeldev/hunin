@@ -28,13 +28,19 @@ export function generateOperations(operations) {
     'export type OperationInputs = {\n' + operations.map(operation => `  ${JSON.stringify(operation.name)}: ${typeOf(operation.inputSchema)};`).join('\n') + '\n};\n';
 }
 
+// Git may check out generated sources with CRLF on Windows. Ignore only that
+// representation difference; schema or generated type changes must still fail.
+export function generatedMatches(actual, expected) {
+  return actual.replace(/\r\n/g, '\n') === expected;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const schema = JSON.parse(await readFile(new URL('../../protocol/record.schema.json', import.meta.url), 'utf8'));
   const operations = JSON.parse(await readFile(new URL('../../protocol/operations.json', import.meta.url), 'utf8'));
   for (const [name, generated] of [['record', generate(schema)], ['operations', generateOperations(operations)]]) {
     const target = new URL(`../src/${name}.generated.ts`, import.meta.url);
     if (process.argv.includes('--check')) {
-      if (await readFile(target, 'utf8') !== generated) throw new Error(`${name} types are stale. Run npm run generate.`);
+      if (!generatedMatches(await readFile(target, 'utf8'), generated)) throw new Error(`${name} types are stale. Run npm run generate.`);
     } else await writeFile(target, generated);
   }
 }

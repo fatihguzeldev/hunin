@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
-import { generate, generateOperations } from '../scripts/generate-record.mjs';
+import { generate, generateOperations, generatedMatches } from '../scripts/generate-record.mjs';
 
 async function moduleFrom(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
@@ -16,15 +16,23 @@ test('canonical schema produces required fields per observation kind', async () 
   for (const kind of schema.properties.kind.enum) assert.ok(text.includes(`{ kind: "${kind}" }`));
   assert.ok(text.includes('Required<Pick<RecordBase, "stack" | "weight" | "weight_unit">>'));
   assert.ok(text.includes('"timestamp_us": number;'));
-  assert.equal(await readFile(new URL('../src/record.generated.ts', import.meta.url), 'utf8'), text);
+  assert.ok(generatedMatches(await readFile(new URL('../src/record.generated.ts', import.meta.url), 'utf8'), text));
 });
 
 test('operation input types are generated from the authoritative transport contract', async () => {
   const operations = JSON.parse(await readFile(new URL('../../protocol/operations.json', import.meta.url), 'utf8'));
   const generated = generateOperations(operations);
-  assert.equal(await readFile(new URL('../src/operations.generated.ts', import.meta.url), 'utf8'), generated);
+  assert.ok(generatedMatches(await readFile(new URL('../src/operations.generated.ts', import.meta.url), 'utf8'), generated));
   assert.ok(generated.includes('"timeline.query"'));
   assert.ok(generated.includes('"command": Array<string>'));
+});
+
+test('generated freshness tolerates Windows checkout line endings but rejects stale types', () => {
+  const generated = 'export type Example = {\n  id: string;\n};\n';
+  assert.equal(generatedMatches(generated, generated), true);
+  assert.equal(generatedMatches(generated.replaceAll('\n', '\r\n'), generated), true);
+  assert.equal(generatedMatches(generated.replace('string', 'number'), generated), false);
+  assert.equal(generatedMatches(generated.replaceAll('\n', '\r'), generated), false);
 });
 
 test('transport preserves operation arguments and rejects backend errors', async () => {
