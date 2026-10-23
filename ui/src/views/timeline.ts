@@ -3,7 +3,7 @@ import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { duration, numeric } from '../format';
 import type { Observation } from '../record.generated';
 import type { ViewContext } from '../workspace';
-import { hasLocalSource } from '../source-path';
+import { hasInspectableSource } from '../source-path';
 
 export async function timeline(context: ViewContext): Promise<HTMLElement> {
   const canvas = el('div');
@@ -44,11 +44,11 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
     void load();
   }
   function inspect(record: Observation): void {
-    const source = record.stack?.find(frame => hasLocalSource(frame.file));
+    const source = record.stack?.find(frame => hasInspectableSource(frame.file, frame.code_id));
     const references = [...new Set([record.context_id, record.parent_id, record.from, record.to, ...(record.evidence ?? [])].filter((id): id is string => Boolean(id)))];
     detail.replaceChildren(el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, record.name ?? record.stack?.at(-1)?.function ?? record.kind), badge(record.basis), badge(record.kind)),
-      el('div', { class: 'panel-body stack' }, source ? button(`Open ${source.file}:${source.line ?? ''}`, () => context.source(source.file!, source.line), 'text-button mono') : null,
+      el('div', { class: 'panel-body stack' }, source ? button(`Open ${source.file}:${source.line ?? ''}`, () => context.source(source.file!, source.line, source.code_id), 'text-button mono') : null,
         references.length ? el('div', { class: 'toolbar' }, ...references.map(id => button(`Open reference ${id}`, () => {
           void operation('evidence.get', { run_id: context.run.id, ids: [id] }).then(data => {
             if (data.records.length) inspect(data.records[0]);

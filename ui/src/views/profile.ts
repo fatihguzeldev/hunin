@@ -3,7 +3,7 @@ import { button, el, empty, errorView, loading } from '../dom';
 import { numeric } from '../format';
 import type { ViewContext } from '../workspace';
 import { weight } from './overview';
-import { hasLocalSource } from '../source-path';
+import { hasInspectableSource } from '../source-path';
 
 export async function profile(context: ViewContext, unit = '', path: string[] = [], cursor?: string, breadcrumbs: string[] = [], initialMode: 'tree' | 'flame' = 'tree'): Promise<HTMLElement> {
   const data = await operation('profiles.tree', { run_id: context.run.id, weight_unit: unit || undefined, limit: 1000, depth_limit: 16, path, cursor });
@@ -50,7 +50,7 @@ export async function profile(context: ViewContext, unit = '', path: string[] = 
     if (focused && mode === 'flame') selection.append(el('div', { class: 'toolbar' },
       el('span', { class: 'mono' }, focused.name), el('span', {}, `inclusive ${weight(focused.total_weight, weight_unit)} · self ${weight(focused.self_weight, weight_unit)}`),
       focused.children_truncated ? button('Inspect omitted children', () => navigate(focusedPath, undefined, focusedNames), 'button small') : null,
-      hasLocalSource(focused.file) ? button('Open source', () => context.source(focused!.file!, focused!.line), 'text-button') : el('span', {}, focused.file ?? 'Source unavailable')));
+      hasInspectableSource(focused.file, focused.code_id) ? button('Open source', () => context.source(focused!.file!, focused!.line, focused!.code_id ?? undefined), 'text-button') : el('span', {}, focused.file ?? 'Source unavailable')));
     treeButton.setAttribute('aria-pressed', String(mode === 'tree'));
     flameButton.setAttribute('aria-pressed', String(mode === 'flame'));
     treeButton.className = `button ${mode === 'tree' ? 'primary' : 'subtle'}`;
@@ -69,8 +69,8 @@ export async function profile(context: ViewContext, unit = '', path: string[] = 
       toggle.disabled = !node.children.length;
       toggle.setAttribute('aria-label', `${expanded.has(key) ? 'Collapse' : 'Expand'} ${node.name}`);
       if (node.children.length) toggle.setAttribute('aria-expanded', String(expanded.has(key)));
-      const name = button(node.name, () => { if (hasLocalSource(node.file)) context.source(node.file, node.line); }, 'text-button mono');
-      name.disabled = !hasLocalSource(node.file);
+      const name = button(node.name, () => { if (hasInspectableSource(node.file, node.code_id)) context.source(node.file, node.line, node.code_id ?? undefined); }, 'text-button mono');
+      name.disabled = !hasInspectableSource(node.file, node.code_id);
       const label = el('div', { class: 'tree-name' }, toggle, name);
       if (node.children_truncated) label.append(button('Inspect children…', () => navigate([...ancestors, node.id], undefined, [...names, node.name]), 'text-button small'));
       label.style.paddingLeft = `${depth * 16}px`;

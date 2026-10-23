@@ -6,7 +6,7 @@ import { capabilities } from './views/capabilities';
 import { overview, runTone } from './views/overview';
 import { scenarios } from './views/scenarios';
 
-export type ViewContext = { run: Run; summary: Summary; runs: Run[]; source: (path: string, line?: number) => void };
+export type ViewContext = { run: Run; summary: Summary; runs: Run[]; source: (path: string, line?: number, codeId?: string) => void };
 export type View = { name: string; render: (context: ViewContext) => Promise<HTMLElement> };
 
 export class Workspace {
@@ -23,7 +23,7 @@ export class Workspace {
   private poll: ReturnType<typeof setTimeout> | undefined;
   private views: Record<string, View>;
 
-  constructor(views: Record<string, View>, private sourceView: (run: Run, path: string, line?: number) => Promise<HTMLElement>) {
+  constructor(views: Record<string, View>, private sourceView: (run: Run, path: string, line?: number, codeId?: string) => Promise<HTMLElement>) {
     this.views = { overview: { name: 'Overview', render: context => overview(context.run, context.summary, context.source) }, ...views };
     this.normalizeTab();
     window.addEventListener('popstate', () => {
@@ -154,8 +154,8 @@ export class Workspace {
         this.content.querySelector<HTMLButtonElement>(`#tab-${this.tab}`)?.focus();
         this.focusSelectedTab = false;
       }
-      const source = (path: string, line?: number): void => {
-        void this.showSource(run, path, line);
+      const source = (path: string, line?: number, codeId?: string): void => {
+        void this.showSource(run, path, line, codeId);
       };
       const renderer = this.views[this.tab] ?? this.views.overview;
       const body = await renderer.render({ run, summary, runs: this.runs, source });
@@ -184,19 +184,19 @@ export class Workspace {
     }, 2_000);
   }
 
-  private async showSource(run: Run, path: string, line?: number): Promise<void> {
+  private async showSource(run: Run, path: string, line?: number, codeId?: string): Promise<void> {
     const epoch = ++this.epoch;
     const view = this.content.querySelector('.view');
     if (!view) return;
     view.replaceChildren(loading('Loading measured source…'));
     try {
-      const body = await this.sourceView(run, path, line);
+      const body = await this.sourceView(run, path, line, codeId);
       if (epoch === this.epoch) {
         view.replaceChildren(button(`← Back to ${this.views[this.tab]?.name ?? 'recording'}`, () => { void this.render(); }, 'button subtle small'), body);
         if (run.status === 'running') this.pollStatus(run.id, epoch);
       }
     } catch (error) {
-      if (epoch === this.epoch) view.replaceChildren(errorView(error, () => { void this.showSource(run, path, line); }));
+      if (epoch === this.epoch) view.replaceChildren(errorView(error, () => { void this.showSource(run, path, line, codeId); }));
     }
   }
 

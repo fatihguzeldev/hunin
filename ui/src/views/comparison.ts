@@ -7,7 +7,7 @@ function correctness(value: unknown): HTMLElement {
   const passed = value && typeof value === 'object' && 'passed' in value ? value.passed : null;
   const validation = value && typeof value === 'object' && 'validation' in value ? value.validation : null;
   return el('div', { class: 'stack' }, badge(passed === true ? 'correctness passed' : passed === false ? 'correctness failed' : 'correctness unknown', passed === true ? 'good' : passed === false ? 'bad' : 'warn'),
-    validation === 'exit_code_and_stdout' ? el('p', { class: 'metric-note' }, 'Declared exit code and stdout checks') : el('p', { class: 'metric-note' }, 'Exit code check only; output correctness is unvalidated.'),
+    passed == null ? el('p', { class: 'metric-note' }, 'Correctness validation is unavailable.') : validation === 'exit_code_and_stdout' ? el('p', { class: 'metric-note' }, 'Declared exit code and stdout checks') : el('p', { class: 'metric-note' }, 'Exit code check only; output correctness is unvalidated.'),
     el('pre', {}, JSON.stringify(value, null, 2)));
 }
 

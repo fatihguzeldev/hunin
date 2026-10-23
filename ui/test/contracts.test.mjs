@@ -90,7 +90,18 @@ test('workload recipes preserve exact output bytes and reject invalid environmen
 });
 
 test('virtual runtime source locations are not offered as local filesystem paths', async () => {
-  const { hasLocalSource } = await moduleFrom('../src/source-path.ts');
+  const { hasLocalSource, hasInspectableSource } = await moduleFrom('../src/source-path.ts');
   for (const local of ['/src/main.rs', 'src/main.py', 'file:///src/a%20b.js', 'C:\\src\\main.cpp']) assert.equal(hasLocalSource(local), true);
   for (const virtual of [null, undefined, '', 'node:internal/loader', 'wasm:wasm-function[1]', 'https://example.test/app.js']) assert.equal(hasLocalSource(virtual), false);
+  for (const retained of ['webpack://app/src/main.ts', 'https://example.test/src.ts']) {
+    assert.equal(hasInspectableSource(retained), false);
+    assert.equal(hasInspectableSource(retained, 'measured-script-sha256'), true);
+  }
+  for (const internal of ['node:internal/loader', 'wasm:wasm-function[1]']) assert.equal(hasInspectableSource(internal, 'code-id'), false);
+});
+
+test('profile reanalysis actions exclude SDK spools and analyzer output artifacts', async () => {
+  const { canReanalyze } = await moduleFrom('../src/artifact.ts');
+  for (const format of ['samply', 'v8-cpuprofile', 'vmprof', 'go-pprof', 'go-trace', 'graal-cpusampler']) assert.equal(canReanalyze(format), true);
+  for (const format of ['hunin-jsonl', 'jsonl', 'stdout', 'analysis-output', 'source', 'native-image', 'profile-sidecar']) assert.equal(canReanalyze(format), false);
 });

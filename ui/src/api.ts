@@ -9,9 +9,9 @@ export type Run = {
   correctness: { passed: boolean | null; expected_exit_code?: number; actual_exit_code?: number | null; reason?: string; validation?: 'exit_code_only' | 'exit_code_and_stdout'; checks?: unknown[]; stdout_sha256?: string; stdout_bytes?: number; canceled?: boolean; timed_out?: boolean };
 };
 export type Summary = { sample_count: number; total_weight: number; weight_unit: string; span_count: number; metric_count: number; relation_count: number; diagnostics: string[] };
-export type Capability = { runtime: string; available: boolean; version?: string; capabilities: string[]; diagnostics: string[] };
-export type Hotspot = { function: string; file?: string; line?: number; self_weight: number; inclusive_weight: number; weight_unit: string };
-export type TreeNode = { id: string; name: string; file?: string; line?: number; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
+export type Capability = { runtime: string; available: boolean; version?: string | null; executable?: string | null; probe_status?: string; verification?: string; modes?: { mode: string; mechanism: string; availability: string; basis: string; recording_verified: boolean }[]; capabilities: string[]; diagnostics: string[] };
+export type Hotspot = { function: string; file?: string; line?: number; code_id?: string | null; self_weight: number; inclusive_weight: number; weight_unit: string };
+export type TreeNode = { id: string; name: string; file?: string; line?: number; code_id?: string | null; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
 export type Artifact = { id: string; name: string; size: number; sha256: string; format: string };
 export type Analysis = { id: string; name: string; version: string; command: string[]; requirements: unknown; dependencies?: unknown; status?: string };
 export type AnalysisResult = { id: string; result_set_id?: string; analysis_id: string; version: string; status: string; selected?: boolean; diagnostics: string[]; created_at_us: number; finished_at_us?: number; input_fingerprint: string };
@@ -20,7 +20,7 @@ export type Comparison = { before: Run; after: Run; comparable: boolean; reasons
 export type Scenario = { id: string; name: string; command: string[]; cwd: string; runtime: string; timeout_seconds: number; expected_exit_code: number; env?: Record<string,string>; input_files?: string[]; expected_stdout?: string; expected_stdout_sha256?: string };
 
 type Responses = {
-  capabilities: { host: { os: string; arch: string }; runtimes: Capability[]; schema_version: number };
+  capabilities: { host: { os: string; arch: string }; runtimes: Capability[]; schema_version: number; native_sampling_permission?: { state: string; probe: string }; probe_limits?: { output_bytes_per_stream: number; timeout_seconds_per_command: number } };
   'runs.list': { runs: Run[]; next_cursor?: string };
   'runs.get': { run: Run; summary: Summary };
   'runs.start': { run: Run };
@@ -33,7 +33,8 @@ type Responses = {
   'evidence.get': { records: Observation[] };
   'artifacts.list': { artifacts: Artifact[] };
   'artifacts.read': { content: string; next_offset?: number | null; size: number };
-  'source.read': { path: string; content: string; start_line: number; identity_verified: boolean; source_kind?: 'recorded_snapshot' | 'current_file'; build_mapping_verified?: boolean; diagnostic?: string };
+  'source.read': { path: string; content: string; start_line: number; identity_verified: boolean; source_kind?: 'recorded_snapshot' | 'current_file' | 'recorded_source_map'; build_mapping_verified?: boolean; diagnostic?: string; provenance?: unknown };
+  'recordings.reanalyze': { accepted: boolean; diagnostics: string[]; summary: Summary };
   'analyses.list': { analyses: Analysis[] };
   'analyses.register': { analysis: Analysis };
   'analyses.results': { results: AnalysisResult[] };
