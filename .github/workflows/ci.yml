@@ -140,6 +140,9 @@ jobs:
       - name: Verify Go CPU profiling
         if: always() && steps.build.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-test --output collector-evidence/go-test
+      - name: Verify ordinary Go executable native stacks and source
+        if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
+        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go --output collector-evidence/go-native
       - name: Verify Go execution tracing
         if: always() && steps.build.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-trace --output collector-evidence/go-trace
