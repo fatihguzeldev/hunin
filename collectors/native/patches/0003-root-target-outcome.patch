@@ -1,0 +1,161 @@
+--- a/samply/src/shared/lifetimes.rs
++++ b/samply/src/shared/lifetimes.rs
+@@ -13,6 +13,46 @@
+ };
+ 
+ static OUTPUT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
++static TARGET_OUTCOME: std::sync::Mutex<serde_json::Value> =
++    std::sync::Mutex::new(serde_json::Value::Null);
++
++fn observed_at_us() -> u64 {
++    std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_micros()
++        .min(u64::MAX as u128) as u64
++}
++
++pub fn target_started(pid: u32) {
++    if OUTPUT.get().is_none() {
++        return;
++    }
++    let mut outcome = TARGET_OUTCOME.lock().unwrap();
++    if outcome.is_null() {
++        *outcome = json!({"state":"running","pid":pid,"launch_observed_at_us":observed_at_us(),"source":"root_target_os_wait_status"});
++    }
++}
++
++pub fn target_finished(pid: u32, exit_code: Option<i32>, signal: Option<i32>) {
++    if OUTPUT.get().is_none() {
++        return;
++    }
++    let mut outcome = TARGET_OUTCOME.lock().unwrap();
++    if outcome["pid"].as_u64() != Some(u64::from(pid)) {
++        return;
++    }
++    outcome["state"] = json!(if exit_code.is_some() {
++        "exited"
++    } else if signal.is_some() {
++        "signaled"
++    } else {
++        "unknown"
++    });
++    outcome["exit_code"] = json!(exit_code);
++    outcome["signal"] = json!(signal);
++    outcome["wait_observed_at_us"] = json!(observed_at_us());
++}
+ pub fn configure(path: std::path::PathBuf) {
+     let _ = OUTPUT.set(path);
+     Profile::enable_hunin_lifetimes();
+@@ -99,6 +139,12 @@
+         return Ok(());
+     };
+     let mut data = profile.hunin_lifetime_data();
++    let target = TARGET_OUTCOME.lock().unwrap().clone();
++    data["target_outcome"] = if target.is_null() {
++        json!({"state":"unknown","reason":"no launched root target wait status available","source":"root_target_os_wait_status"})
++    } else {
++        target
++    };
+     data["raw_profile_sha256"] = json!(sha256(path)?);
+     data["collector"] = json!({"upstream_commit":"da75c28f367454c621e690eeb4e44ec2ebb29a78","revision":"hunin-native1","patch_sha256":option_env!("HUNIN_NATIVE_PATCH_SHA256"),"binary_sha256":sha256(&std::env::current_exe()?)?,"os":std::env::consts::OS});
+     let mut output = std::io::BufWriter::new(File::create(output)?);
+--- a/samply/src/windows/profiler.rs
++++ b/samply/src/windows/profiler.rs
+@@ -63,6 +63,7 @@
+         .start_xperf(&recording_props, &profile_creation_props, &recording_mode)
+         .unwrap();
+ 
++    let mut launched_exit_status = ExitStatus::from_raw(0);
+     let included_processes = match recording_mode {
+         RecordingMode::All => {
+             let ctrl_c_receiver = CtrlC::observe_oneshot();
+@@ -97,7 +98,10 @@
+                 child.args(&process_launch_props.args);
+                 child.envs(process_launch_props.env_vars.iter().map(|(k, v)| (k, v)));
+                 let mut child = child.spawn().unwrap();
+-
++                let is_root = pids.is_empty();
++                if is_root {
++                    crate::shared::lifetimes::target_started(child.id());
++                }
+                 pids.push(child.id());
+ 
+                 // Wait for the child to exit.
+@@ -109,6 +113,10 @@
+                 // press Ctrl+C again, which would immediately terminate this process and not
+                 // give us a chance to stop xperf.
+                 let exit_status = child.wait().unwrap();
++                launched_exit_status = exit_status;
++                if is_root {
++                    crate::shared::lifetimes::target_finished(child.id(), exit_status.code(), None);
++                }
+                 if !exit_status.success() {
+                     eprintln!(
+                         "Skipping remaining iterations due to non-success exit status: \"{}\"",
+@@ -202,7 +210,7 @@
+         start_server_main(&output_file, server_props, symbol_props, libinfo_map);
+     }
+ 
+-    Ok(ExitStatus::from_raw(0))
++    Ok(launched_exit_status)
+ }
+ 
+ #[cfg(target_arch = "x86")]
+--- a/samply/src/mac/process_launcher.rs
++++ b/samply/src/mac/process_launcher.rs
+@@ -4,6 +4,7 @@
+ use std::io::Write;
+ use std::os::raw::{c_int, c_void};
+ use std::os::unix::prelude::OsStrExt;
++use std::os::unix::process::ExitStatusExt;
+ use std::path::PathBuf;
+ use std::process::{Child, Command, ExitStatus};
+ use std::sync::Arc;
+@@ -38,7 +39,14 @@
+         let mut ctrl_c_receiver = CtrlC::observe_oneshot();
+ 
+         let mut root_child = self.launch_child();
++        let root_pid = root_child.id();
++        crate::shared::lifetimes::target_started(root_pid);
+         let mut exit_status = root_child.wait().expect("couldn't wait for child");
++        crate::shared::lifetimes::target_finished(
++            root_pid,
++            exit_status.code(),
++            exit_status.signal(),
++        );
+ 
+         for i in 2..=self.iteration_count {
+             if !exit_status.success() {
+--- a/samply/src/linux/profiler.rs
++++ b/samply/src/linux/profiler.rs
+@@ -181,10 +181,17 @@
+     };
+ 
+     // Phew, we're profiling!
++    crate::shared::lifetimes::target_started(pid);
+ 
+     // Wait for the child process to quit.
+     // This is where the main thread spends all its time during profiling.
+     let mut wait_status = process.wait().unwrap();
++    let (code, signal) = match &wait_status {
++        WaitStatus::Exited(_, code) => (Some(*code), None),
++        WaitStatus::Signaled(_, signal, _) => (None, Some(*signal as i32)),
++        _ => (None, None),
++    };
++    crate::shared::lifetimes::target_finished(pid, code, signal);
+ 
+     for i in 2..=iteration_count {
+         let previous_run_exited_with_success = match &wait_status {
+@@ -258,7 +265,10 @@
+     }
+ 
+     let exit_status = match wait_status {
+-        WaitStatus::Exited(_pid, exit_code) => ExitStatus::from_raw(exit_code),
++        WaitStatus::Exited(_pid, exit_code) => ExitStatus::from_raw(exit_code << 8),
++        WaitStatus::Signaled(_pid, signal, core_dumped) => {
++            ExitStatus::from_raw(signal as i32 | if core_dumped { 0x80 } else { 0 })
++        }
+         _ => ExitStatus::default(),
+     };
+     Ok(exit_status)

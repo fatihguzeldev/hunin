@@ -1,5 +1,6 @@
 mod correctness;
 mod identity;
+mod native_outcome;
 pub(crate) mod ownership;
 pub(crate) mod process;
 mod resources;
@@ -328,12 +329,50 @@ impl Engine {
         } else {
             "includes runtime profiling and observer overhead; not an unprofiled speed measurement"
         });
-        run.exit_code = status.code();
+        let native_collection = matches!(
+            run.runtime.as_str(),
+            "go" | "rust" | "c" | "cpp" | "c++" | "native"
+        );
+        let target_outcome = if native_collection {
+            let capture_directory = directory.clone();
+            let collector = PathBuf::from(&plan.command[0]);
+            let outcome = match tokio::task::spawn_blocking(move || {
+                native_outcome::read(&capture_directory, &collector)
+            })
+            .await
+            {
+                Ok(Ok(outcome)) => outcome,
+                result => {
+                    let reason = match result {
+                        Ok(Err(error)) => format!("{error:#}"),
+                        Err(error) => error.to_string(),
+                        _ => unreachable!(),
+                    };
+                    run.diagnostics.push(format!("Native target wait status unavailable: {reason}; collector exit is not substituted for target exit"));
+                    native_outcome::unknown(&reason)
+                }
+            };
+            run.source["collector_outcome"] = json!({"state":if status.code().is_some(){"exited"}else{"terminated"},"exit_code":status.code(),"scope":"supervised native profiler process","exit_status_consistent_with_target":outcome["exit_code"].as_i64().map(|code|Some(code)==status.code().map(i64::from))});
+            Some(outcome)
+        } else {
+            None
+        };
+        run.exit_code = if let Some(outcome) = &target_outcome {
+            if outcome["state"] == "exited" {
+                outcome["exit_code"]
+                    .as_i64()
+                    .and_then(|code| i32::try_from(code).ok())
+            } else {
+                None
+            }
+        } else {
+            status.code()
+        };
         run.finished_at_us = Some(now_us());
         run.correctness = correctness::evaluate(
             &run.source["correctness_recipe"],
             &stdout,
-            status.code(),
+            run.exit_code,
             canceled,
             timed_out,
         )?;
@@ -356,7 +395,9 @@ impl Engine {
         }
         .into();
         run.source["target_outcome"] =
-            json!({"status":run.status,"exit_code":run.exit_code,"correctness":run.correctness});
+            target_outcome.unwrap_or_else(|| json!({"exit_code":run.exit_code}));
+        run.source["target_outcome"]["status"] = json!(run.status);
+        run.source["target_outcome"]["correctness"] = run.correctness.clone();
         run.source["collection_status"] = json!(if run.runtime == "none" {
             "disabled"
         } else {
@@ -397,6 +438,15 @@ impl Engine {
                         run.status = "failed".into();
                     }
                 }
+            }
+        }
+        if native_collection
+            && run.source["collector_outcome"]["exit_status_consistent_with_target"] == false
+        {
+            run.source["collection_status"] = json!("failed");
+            run.diagnostics.push("Native collector exited differently from the observed target status; raw and any accepted profile evidence were retained, and collector failure does not replace the target outcome".into());
+            if run.status == "completed" {
+                run.status = "failed".into();
             }
         }
         let mut sdk = Vec::new();
