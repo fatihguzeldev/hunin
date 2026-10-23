@@ -29,7 +29,10 @@ async fn mcp_eof_finalizes_its_owned_live_recording() {
     assert_eq!(initialized["id"], 1);
     input.write_all(format!("{}\n{}\n",json!({"jsonrpc":"2.0","method":"notifications/initialized"}),json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runs.start","arguments":{"runtime":"none","cwd":project.path(),"command":["node","-e","setInterval(()=>{},1000)"]}}})).as_bytes()).await.unwrap();
     let started: Value = serde_json::from_str(
-        &tokio::time::timeout(Duration::from_secs(10), output.next_line())
+        // Starting records source/executable identity. The installed MCP
+        // acceptance uses this same budget on cold hosts; EOF finalization
+        // below retains its separate, shorter cancellation bound.
+        &tokio::time::timeout(Duration::from_secs(35), output.next_line())
             .await
             .unwrap()
             .unwrap()
