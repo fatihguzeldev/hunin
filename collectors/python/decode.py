@@ -21,6 +21,8 @@ def decode(path):
     symbols = dict(state.virtual_ips)
     metadata_file = path.with_suffix(path.suffix + ".meta.json")
     metadata = json.loads(metadata_file.read_text()) if metadata_file.exists() else {}
+    profile_os = str(state.meta.get("os", "")).lower()
+    wall_timer = profile_os.startswith("win") or state.profile_real_time
     samples = []
     for (trace, estimated_periods, tid, memory_kb), timestamp in zip(state.profiles, times):
         stack = []
@@ -55,7 +57,11 @@ def decode(path):
         })
     return {
         "format": "vmprof-decoded-v1", "pid": metadata.get("pid", 0),
-        "clock": "realtime" if state.profile_real_time else "process_cpu",
+        # vmprof's Windows writer uses QueryPerformanceCounter even when the
+        # PROFILE_REAL_TIME flag is unset; the raw OS metadata is authoritative.
+        "clock": "runtime_monotonic" if wall_timer else "process_cpu",
+        "sampling_basis": "wall_timer_stack_snapshots" if wall_timer else "process_cpu_timer",
+        "profile_os": profile_os,
         "clock_alignment": "unmapped", "interval_us": state.period,
         "metadata": metadata, "lost_time_seconds": state.lost_time,
         "samples": samples,

@@ -58,8 +58,14 @@ root, and `HUNIN_GO` selects a compatible Go trace decoder where needed.
 
 - Native Firefox/samply samples use the recording's epoch start plus relative
   sample times. The recorded thread CPU deltas remain separate from sample count.
-- vmprof CPU timestamps are process-CPU time. They remain explicitly unmapped to
-  epoch time; a wall-clock start/end bracket cannot turn CPU progress into a
+- vmprof timestamps use process-CPU time on the default Unix CPU timer. Windows
+  uses QueryPerformanceCounter and wall-timer stack snapshots even when its raw
+  real-time flag is unset; the decoder reads the raw OS metadata and preserves
+  that runtime-monotonic clock. Windows vmprof RSS capture is unavailable; Hunin
+  disables it and keeps external process RSS observations separately. PyPy's
+  unsupported line tracing is disabled so its setup cannot alter target stdout.
+  Both clock domains remain explicitly unmapped to epoch time; a wall-clock
+  start/end bracket cannot turn CPU progress into a
   per-sample wall timeline. Every actual recorded stack weighs one sample;
   vmprof's estimated missed timer periods are retained as separate attributes.
 - Graal self-hit timestamps are epoch milliseconds. Inclusive node hit counts

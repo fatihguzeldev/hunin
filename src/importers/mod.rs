@@ -30,7 +30,7 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
     let bytes = fs::read(path).with_context(|| format!("read profile {}", path.display()))?;
     let sidecars = sidecars(path, format);
     let mut digest = Sha256::new();
-    digest.update(b"hunin-import-v1\0");
+    digest.update(b"hunin-import-v2\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);
@@ -207,6 +207,7 @@ fn decode_vmprof(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Ve
             "samples",
             json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
                 "estimated_timer_periods":value["estimated_timer_periods"],"source_format":"vmprof",
+                "sampling_basis":raw["sampling_basis"],"profile_os":raw["profile_os"],
                 "profile_metadata":raw["metadata"],"lost_time_seconds":raw["lost_time_seconds"]}),
         );
         record["interval_us"] = raw["interval_us"].clone();
@@ -218,7 +219,12 @@ fn decode_vmprof(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Ve
                 "attributes":{"clock":clock,"clock_alignment":"unmapped","source_format":"vmprof"}}));
         }
     }
-    Ok((records, vec!["vmprof timestamps use an unaligned process-CPU clock; inspect hotspots separately from the epoch timeline".into()]))
+    Ok((
+        records,
+        vec![format!(
+            "vmprof timestamps use an unaligned {clock} clock; inspect hotspots separately from the epoch timeline"
+        )],
+    ))
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ class VmprofCaptureTest(unittest.TestCase):
             self.assertTrue(profile.exists())
             self.assertTrue(profile.with_suffix(".vmprof.meta.json").exists())
 
-    def test_cpu_capture_preserves_source_and_process_cpu_clock(self):
+    def test_cpu_capture_preserves_source_and_declared_clock(self):
         with tempfile.TemporaryDirectory() as directory:
             profile = pathlib.Path(directory) / "cpu.vmprof"
             capture = subprocess.run(
@@ -40,7 +40,7 @@ class VmprofCaptureTest(unittest.TestCase):
             )
             decoded = json.loads(result.stdout)
             self.assertGreater(decoded["pid"], 0)
-            self.assertEqual(decoded["clock"], "process_cpu")
+            self.assertEqual(decoded["clock"], "runtime_monotonic" if sys.platform == "win32" else "process_cpu")
             self.assertEqual(decoded["clock_alignment"], "unmapped")
             self.assertTrue(decoded["samples"])
             frames = [frame for sample in decoded["samples"] for frame in sample["stack"]]
