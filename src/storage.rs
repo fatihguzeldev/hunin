@@ -128,6 +128,36 @@ impl Store {
         Ok(())
     }
 
+    /// Merge import diagnostics without replacing execution finalization or
+    /// recreating a recording that was removed while normalization was running.
+    pub fn finish_recording_import(
+        &self,
+        run_id: &str,
+        diagnostics: &[String],
+        complete_new_run: bool,
+    ) -> Result<Run> {
+        let mut c = self.connection()?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let text: String = tx
+            .query_row("SELECT manifest FROM runs WHERE id=?1", [run_id], |r| r.get(0))
+            .with_context(|| format!("run removed before import completion: {run_id}"))?;
+        let mut run: Run = serde_json::from_str(&text)?;
+        anyhow::ensure!(
+            run.status != "running",
+            "cannot import into a running recording"
+        );
+        if complete_new_run {
+            run.status = "completed".into();
+        }
+        run.diagnostics.extend_from_slice(diagnostics);
+        tx.execute(
+            "UPDATE runs SET manifest=?2 WHERE id=?1",
+            params![run_id, serde_json::to_string(&run)?],
+        )?;
+        tx.commit()?;
+        Ok(run)
+    }
+
     pub fn run(&self, id: &str) -> Result<Run> {
         let text: String = self
             .connection()?

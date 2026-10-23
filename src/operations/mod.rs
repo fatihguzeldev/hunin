@@ -215,7 +215,12 @@ impl Operations {
         anyhow::ensure!(path.is_file(), "recording import requires a regular file");
         let format = params["format"].as_str().unwrap();
         let run = if let Some(id) = params["run_id"].as_str() {
-            store.run(id)?
+            let run = store.run(id)?;
+            anyhow::ensure!(
+                run.status != "running",
+                "cannot import into a running recording"
+            );
+            run
         } else {
             let run=Run{id:uuid::Uuid::new_v4().to_string(),name:params["name"].as_str().unwrap_or("Imported recording").into(),status:"failed".into(),command:vec![],cwd:path.parent().unwrap().display().to_string(),runtime:"imported".into(),started_at_us:now_us(),finished_at_us:Some(now_us()),exit_code:None,diagnostics:vec!["Imported data retains its original collection limits; execution correctness is unknown".into()],source:json!({"fingerprint":"unknown","build_source_verified":false}),correctness:json!({"passed":null,"reason":"imported"})};
             store.save_run(&run)?;
@@ -230,22 +235,19 @@ impl Operations {
             Ok(publication) => publication,
             Err(error) => {
                 if params["run_id"].is_null() {
-                    let mut failed = run;
-                    failed.status = "failed".into();
-                    failed.diagnostics.push(format!(
+                    let diagnostic = format!(
                         "Import failed; any preserved inputs remain available: {error:#}"
-                    ));
-                    store.save_run(&failed)?;
+                    );
+                    store.finish_recording_import(&run.id, &[diagnostic], false)?;
                 }
                 return Err(error);
             }
         };
-        let mut run = run;
-        if params["run_id"].is_null() {
-            run.status = "completed".into();
-        }
-        run.diagnostics.extend(publication.diagnostics);
-        store.save_run(&run)?;
+        let run = store.finish_recording_import(
+            &run.id,
+            &publication.diagnostics,
+            params["run_id"].is_null(),
+        )?;
         Ok(
             json!({"run":run,"accepted":publication.accepted,"summary":query::summary(&store.records(&run.id)?)}),
         )
