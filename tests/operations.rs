@@ -314,6 +314,13 @@ async fn recorded_source_survives_edits_and_project_removal_without_claiming_bui
     assert_eq!(result["build_mapping_verified"], false);
     project.close().unwrap();
     let reopened = Operations::new(Store::open(data.path()).unwrap());
+    // Runtime URLs use ordinary DOS paths while canonical recording roots may
+    // use Win32 extended-length prefixes. Removed sources must still match.
+    #[cfg(windows)]
+    let source = source
+        .to_string_lossy()
+        .trim_start_matches("\\\\?\\")
+        .to_owned();
     assert_eq!(
         reopened
             .call("source.read", json!({"run_id":id,"path":source}))

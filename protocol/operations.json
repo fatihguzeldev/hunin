@@ -430,6 +430,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 5000
+        },
+        "code_id": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -715,6 +719,28 @@
       },
       "required": [
         "execution_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "recordings.reanalyze",
+    "description": "Reanalyze a managed raw recording using retained sidecars and image identities without rerunning the target",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id",
+        "artifact_id"
       ],
       "additionalProperties": false
     }

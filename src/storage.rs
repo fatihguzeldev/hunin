@@ -359,37 +359,67 @@ impl Store {
     }
 
     pub fn add_artifact(&self, run_id: &str, source: &Path, format: &str) -> Result<Artifact> {
-        self.run(run_id)?;
         let bytes =
             fs::read(source).with_context(|| format!("read artifact {}", source.display()))?;
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let name = source
+            .file_name()
+            .context("artifact filename missing")?
+            .to_string_lossy();
+        self.add_artifact_bytes(run_id, &name, format, &bytes)
+    }
+
+    pub fn add_artifact_bytes(
+        &self,
+        run_id: &str,
+        name: &str,
+        format: &str,
+        bytes: &[u8],
+    ) -> Result<Artifact> {
+        anyhow::ensure!(
+            !name.is_empty() && !matches!(name, "." | "..") && !name.contains(['/', '\\', '\0']),
+            "artifact name must be a filename"
+        );
+        self.run(run_id)?;
+        let sha256 = format!("{:x}", Sha256::digest(bytes));
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1)",
+            [run_id],
+            |r| r.get(0),
+        )?;
+        anyhow::ensure!(exists, "run was removed before artifact publication");
+        if format == "resolved-source" {
+            anyhow::ensure!(
+                bytes.len() <= 2 * 1024 * 1024,
+                "resolved source exceeds the 2 MiB file limit"
+            );
+            let (retained, duplicate): (u64, bool) = tx.query_row(
+                "SELECT COALESCE(SUM(size),0),COALESCE(MAX(sha256=?2),0) FROM (SELECT sha256,MAX(CAST(json_extract(metadata,'$.size') AS INTEGER)) AS size FROM artifacts WHERE run_id=?1 AND json_extract(metadata,'$.format')='resolved-source' GROUP BY sha256)",
+                params![run_id, sha256],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            anyhow::ensure!(
+                duplicate || retained.saturating_add(bytes.len() as u64) <= 32 * 1024 * 1024,
+                "resolved source snapshots exceed the 32 MiB recording limit"
+            );
+        }
         let dest = self.root.join("artifacts").join(&sha256);
         // An atomic rename publishes complete bytes; identical concurrent writers agree.
         if !dest.exists() {
             let temp = dest.with_extension(uuid::Uuid::new_v4().to_string());
-            fs::write(&temp, &bytes)?;
+            fs::write(&temp, bytes)?;
             fs::rename(&temp, &dest)?;
         } else if fs::read(&dest)? != bytes {
             bail!("artifact identity mismatch");
         }
-        let name = source
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
         let reference_id = format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&(&sha256, &name, format))?)
         );
         let artifact = Artifact {
             id: reference_id,
-            name: source
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+            name: name.to_owned(),
             size: bytes.len() as u64,
             sha256,
             format: format.into(),
@@ -474,7 +504,10 @@ impl Store {
 }
 
 fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Value) -> Result<()> {
-    let owner = if matches!(namespace, "analysis-results" | "cancellations") {
+    let owner = if matches!(
+        namespace,
+        "analysis-results" | "cancellations" | "profile-inputs"
+    ) {
         Some(
             value["run_id"]
                 .as_str()

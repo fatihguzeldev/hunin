@@ -136,7 +136,21 @@ impl Operations {
                 )
             }
             "source.read" => crate::source::read(store, &params),
-            "recordings.import" => self.import(&params),
+            "recordings.import" => {
+                let operations = self.clone();
+                tokio::task::spawn_blocking(move || operations.import(&params))
+                    .await
+                    .context("recording import task failed")?
+            }
+            "recordings.reanalyze" => {
+                let store = store.clone();
+                let run_id = id()?.to_owned();
+                let artifact_id = params["artifact_id"].as_str().unwrap().to_owned();
+                tokio::task::spawn_blocking(move || {
+                    let publication = crate::recordings::reanalyze(&store, &run_id, &artifact_id)?;
+                    Ok(json!({"accepted":publication.accepted,"diagnostics":publication.diagnostics,"summary":query::summary(&store.records(&run_id)?)}))
+                }).await.context("recording reanalysis task failed")?
+            }
             "comparisons.create" => comparison::compare(
                 store,
                 params["before"].as_str().unwrap(),
@@ -196,30 +210,42 @@ impl Operations {
     fn import(&self, params: &Value) -> Result<Value> {
         let store = self.engine.store();
         let path = PathBuf::from(params["path"].as_str().unwrap()).canonicalize()?;
+        anyhow::ensure!(path.is_file(), "recording import requires a regular file");
         let format = params["format"].as_str().unwrap();
         let run = if let Some(id) = params["run_id"].as_str() {
             store.run(id)?
         } else {
-            let run=Run{id:uuid::Uuid::new_v4().to_string(),name:params["name"].as_str().unwrap_or("Imported recording").into(),status:"completed".into(),command:vec![],cwd:path.parent().unwrap().display().to_string(),runtime:"imported".into(),started_at_us:now_us(),finished_at_us:Some(now_us()),exit_code:None,diagnostics:vec!["Imported data retains its original collection limits; execution correctness is unknown".into()],source:json!({"fingerprint":"unknown","build_source_verified":false}),correctness:json!({"passed":null,"reason":"imported"})};
+            let run=Run{id:uuid::Uuid::new_v4().to_string(),name:params["name"].as_str().unwrap_or("Imported recording").into(),status:"failed".into(),command:vec![],cwd:path.parent().unwrap().display().to_string(),runtime:"imported".into(),started_at_us:now_us(),finished_at_us:Some(now_us()),exit_code:None,diagnostics:vec!["Imported data retains its original collection limits; execution correctness is unknown".into()],source:json!({"fingerprint":"unknown","build_source_verified":false}),correctness:json!({"passed":null,"reason":"imported"})};
             store.save_run(&run)?;
             run
         };
-        let profile = crate::importers::import(&path, format, &run.id)?;
-        let raw = store.add_artifact(&run.id, &path, format)?;
-        for sidecar in &profile.sidecars {
-            store.add_artifact(&run.id, sidecar, "profile-metadata")?;
-        }
-        let accepted = store.accept_import(
-            &run.id,
-            &format!("import-v1:{}", raw.sha256),
-            &profile.input_fingerprint,
-            &profile.records,
-        )?;
+        let imported = (|| {
+            store.add_artifact(&run.id, &path, format)?;
+            let profile = crate::importers::import(&path, format, &run.id)?;
+            crate::recordings::publish(store, &run.id, profile)
+        })();
+        let publication = match imported {
+            Ok(publication) => publication,
+            Err(error) => {
+                if params["run_id"].is_null() {
+                    let mut failed = run;
+                    failed.status = "failed".into();
+                    failed.diagnostics.push(format!(
+                        "Import failed; any preserved inputs remain available: {error:#}"
+                    ));
+                    store.save_run(&failed)?;
+                }
+                return Err(error);
+            }
+        };
         let mut run = run;
-        run.diagnostics.extend(profile.diagnostics);
+        if params["run_id"].is_null() {
+            run.status = "completed".into();
+        }
+        run.diagnostics.extend(publication.diagnostics);
         store.save_run(&run)?;
         Ok(
-            json!({"run":run,"accepted":accepted,"summary":query::summary(&store.records(&run.id)?)}),
+            json!({"run":run,"accepted":publication.accepted,"summary":query::summary(&store.records(&run.id)?)}),
         )
     }
 }

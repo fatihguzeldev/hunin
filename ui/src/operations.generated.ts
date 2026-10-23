@@ -82,6 +82,7 @@ export type OperationInputs = {
   "path": string;
   "line"?: number;
   "count"?: number;
+  "code_id"?: string;
 };
   "recordings.import": {
   "path": string;
@@ -135,5 +136,9 @@ export type OperationInputs = {
 };
   "analyses.cancel": {
   "execution_id": string;
+};
+  "recordings.reanalyze": {
+  "run_id": string;
+  "artifact_id": string;
 };
 };

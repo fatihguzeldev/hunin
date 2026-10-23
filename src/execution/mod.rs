@@ -380,20 +380,9 @@ impl Engine {
             match collection::collect(&capture) {
                 Ok(profiles) => {
                     for profile in profiles {
-                        let raw =
-                            self.store
-                                .add_artifact(&run.id, &profile.source, &profile.format)?;
-                        for sidecar in &profile.sidecars {
-                            self.store
-                                .add_artifact(&run.id, sidecar, "profile-sidecar")?;
-                        }
-                        self.store.accept_import(
-                            &run.id,
-                            &format!("import-v1:{}", raw.sha256),
-                            &profile.input_fingerprint,
-                            &profile.records,
-                        )?;
-                        run.diagnostics.extend(profile.diagnostics);
+                        let publication =
+                            crate::recordings::publish(&self.store, &run.id, profile)?;
+                        run.diagnostics.extend(publication.diagnostics);
                     }
                     run.source["collection_status"] = json!("completed");
                 }

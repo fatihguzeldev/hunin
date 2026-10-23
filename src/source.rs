@@ -55,8 +55,49 @@ pub(crate) fn retain(store: &Store, run: &mut Run) -> Result<()> {
 
 pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
     let run = store.run(params["run_id"].as_str().unwrap())?;
+    let requested_uri = params["path"].as_str().unwrap();
+    let mut mapped = crate::recordings::source_snapshots(store, &run.id)?
+        .into_iter()
+        .filter(|s| source_key(s["uri"].as_str().unwrap_or("")) == source_key(requested_uri))
+        .collect::<Vec<_>>();
+    if !mapped.is_empty() {
+        if let Some(code) = params["code_id"].as_str() {
+            mapped.retain(|s| s["provenance"]["code_id"] == code || s["sha256"] == code);
+            anyhow::ensure!(
+                !mapped.is_empty(),
+                "no retained source matches the requested code identity; current source is not substituted"
+            );
+        }
+        let identities = mapped
+            .iter()
+            .filter_map(|s| s["sha256"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        anyhow::ensure!(
+            identities.len() == 1,
+            "multiple measured source versions exist for this URI; supply code_id"
+        );
+        let snapshot = &mapped[0];
+        let content = fs::read(
+            store.artifact_path(
+                &run.id,
+                snapshot["artifact_id"]
+                    .as_str()
+                    .context("retained source artifact missing")?,
+            )?,
+        )?;
+        anyhow::ensure!(
+            snapshot["sha256"].as_str() == Some(format!("{:x}", Sha256::digest(&content)).as_str()),
+            "retained source integrity check failed"
+        );
+        let text = String::from_utf8(content)?;
+        let line = params["line"].as_u64().unwrap_or(1) as usize;
+        let count = params["count"].as_u64().unwrap_or(80).min(500) as usize;
+        return Ok(
+            json!({"path":requested_uri,"start_line":line,"content":text.lines().skip(line.saturating_sub(1)).take(count).collect::<Vec<_>>().join("\n"),"identity_verified":true,"source_kind":"recorded_source_map","build_mapping_verified":false,"provenance":snapshot["provenance"],"diagnostic":"Showing immutable source retained with the measured script and its runtime-linked mapping. Mapping provenance is retained; compiler semantic correctness is not independently proven."}),
+        );
+    }
     let root = PathBuf::from(&run.cwd);
-    let root = root.canonicalize().unwrap_or_else(|_| normalize(&root));
+    let root = normalize(&root.canonicalize().unwrap_or(root));
     let requested = params["path"].as_str().unwrap();
     let requested = if requested.starts_with("file:") {
         url::Url::parse(requested)?
@@ -66,7 +107,7 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
         PathBuf::from(requested)
     };
     let joined = root.join(requested);
-    let path = joined.canonicalize().unwrap_or_else(|_| normalize(&joined));
+    let path = normalize(&joined.canonicalize().unwrap_or(joined));
     let relative = path
         .strip_prefix(&root)
         .context("source path is outside the measured project")?;
@@ -119,10 +160,47 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
     )
 }
 
+fn source_key(uri: &str) -> String {
+    let path = if uri.starts_with("file:") {
+        url::Url::parse(uri)
+            .ok()
+            .and_then(|u| u.to_file_path().ok())
+    } else if !uri.contains("://") {
+        Some(PathBuf::from(uri))
+    } else {
+        None
+    };
+    path.map(|p| {
+        normalize(&p)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches("//?/")
+            .to_owned()
+    })
+    .unwrap_or_else(|| uri.to_owned())
+}
+
 fn normalize(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
+            #[cfg(windows)]
+            Component::Prefix(prefix) => {
+                use std::path::Prefix;
+                match prefix.kind() {
+                    Prefix::VerbatimDisk(drive) | Prefix::Disk(drive) => {
+                        result.push(format!("{}:", drive.to_ascii_uppercase() as char));
+                    }
+                    Prefix::VerbatimUNC(server, share) => {
+                        result.push(format!(
+                            "\\\\{}\\{}",
+                            server.to_string_lossy(),
+                            share.to_string_lossy()
+                        ));
+                    }
+                    _ => result.push(prefix.as_os_str()),
+                }
+            }
             Component::CurDir => {}
             Component::ParentDir => {
                 result.pop();
