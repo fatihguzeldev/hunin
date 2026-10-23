@@ -98,8 +98,15 @@ int main(void) {
         evidence = call("evidence.get", {"run_id": run["id"], "ids": [context["id"], span["id"]]})
         if len(evidence["records"]) != 2:
             raise RuntimeError("Native context/span evidence did not survive query resolution")
-        artifacts = call("artifacts.list", {"run_id": run["id"]})["artifacts"]
-        if not any(row["format"] == "hunin-jsonl" for row in artifacts):
+        cursor = None
+        sdk_raw_found = False
+        while True:
+            page = call("artifacts.list", {"run_id": run["id"], "limit": 100, **({"cursor": cursor} if cursor else {})})
+            sdk_raw_found = any(row["format"] == "hunin-jsonl" for row in page["artifacts"])
+            cursor = page.get("next_cursor")
+            if sdk_raw_found or not cursor:
+                break
+        if not sdk_raw_found:
             raise RuntimeError("Native SDK raw evidence was not retained")
         reopened = json.loads(execute([binary, "--data-dir", data, "inspect", run["id"]], output))
         if reopened["summary"] != recording["summary"]:

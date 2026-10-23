@@ -81,8 +81,14 @@ def verify(binary,output,sampler=None):
         threads=[r for r in spans if r.get("name")=="thread.observed_lifetime"]
         assert len(threads)>=4,threads
         # Remove original code and binaries; replay must use managed profile, sidecar and image blobs.
-        artifacts=call("artifacts.list",{"run_id":run["id"]})["artifacts"]
-        raw=next(r for r in artifacts if r["name"]=="cpu.samply.json")
+        cursor=None
+        raw=None
+        while True:
+            page=call("artifacts.list",{"run_id":run["id"],"limit":100,**({"cursor":cursor} if cursor else {})})
+            raw=next((r for r in page["artifacts"] if r["name"]=="cpu.samply.json"),None)
+            cursor=page.get("next_cursor")
+            if raw or not cursor:break
+        assert raw is not None,'Retained raw profile missing from artifact pages'
         shutil.rmtree(source);shutil.rmtree(build)
         replay=call("recordings.reanalyze",{"run_id":run["id"],"artifact_id":raw["id"]})
         after={r["id"] for r in rows("span") if r.get("name")=="module.observed_lifetime"}
