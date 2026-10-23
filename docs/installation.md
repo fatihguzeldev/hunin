@@ -2,7 +2,7 @@
 
 Hunin bundles contain a native executable, its local UI, collector adapters, SDK sources, the observation protocol, and documentation. Start with a bundle built for the machine you will profile. The candidate host set is Windows x64, macOS x64/ARM64, and glibc Linux x64/ARM64. A successful bundle build establishes compilation and packaging; it does not establish every collector/runtime combination.
 
-The [collection paths](../collectors/collection-paths.md) describe the available automatic collection routes, prerequisites, and actual execution evidence. Runtime detection and `capabilities` report missing tools and permissions on the current machine. Windows ARM64 and musl Linux are outside the current candidate set.
+The [support evidence](support.md) distinguishes observed runtime/host cells from CI candidates, including the current GraalPy Intel Mac exclusion. The [collection paths](../collectors/collection-paths.md) describe collection routes, prerequisites, and actual execution evidence. Runtime detection and `capabilities` report missing tools and permissions on the current machine. Windows ARM64 and musl Linux are outside the current candidate set.
 
 ## Build from source
 

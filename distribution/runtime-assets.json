@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "runtimes": {
+    "bun": {
+      "version": "1.4.4",
+      "source": "https://github.com/oven-sh/bun/releases/tag/bun-v1.4.4",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip",
+          "sha256": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
+          "executable": "bun"
+        },
+        "linux-arm64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip",
+          "sha256": "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
+          "executable": "bun"
+        },
+        "macos-x64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-x64.zip",
+          "sha256": "50a3491f73abc2fe81673171a85762d3bc2cc1680ccecadd983de99adf77977e",
+          "executable": "bun"
+        },
+        "macos-arm64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip",
+          "sha256": "c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510",
+          "executable": "bun"
+        },
+        "windows-x64": {
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip",
+          "sha256": "cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5",
+          "executable": "bun.exe"
+        }
+      }
+    },
+    "deno": {
+      "version": "2.9.8",
+      "source": "https://github.com/denoland/deno/releases/tag/v2.9.8",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-unknown-linux-gnu.zip",
+          "sha256": "e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609",
+          "executable": "deno"
+        },
+        "linux-arm64": {
+          "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-unknown-linux-gnu.zip",
+          "sha256": "d49596c20b9788cf8f5d8ddf644103d4bde56ed239753f0bdb92ba9361d51905",
+          "executable": "deno"
+        },
+        "macos-x64": {
+          "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-apple-darwin.zip",
+          "sha256": "4b2f5edd2639b7470f034238b321d7002d8dfb4726d8558f52c17afac370eb2c",
+          "executable": "deno"
+        },
+        "macos-arm64": {
+          "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-apple-darwin.zip",
+          "sha256": "9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e",
+          "executable": "deno"
+        },
+        "windows-x64": {
+          "url": "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-pc-windows-msvc.zip",
+          "sha256": "cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf",
+          "executable": "deno.exe"
+        }
+      }
+    },
+    "pypy": {
+      "version": "8.0.1 (Python3.12.15)",
+      "source": "https://pypy.org/checksums.html",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://downloads.python.org/pypy/pypy3.12-v8.0.1-linux64.tar.gz",
+          "sha256": "aeed27797777296d9c94e53bdfa608804696dbd4ff9f2213003cce064ee46ef8",
+          "executable": "pypy3.12"
+        },
+        "linux-arm64": {
+          "url": "https://downloads.python.org/pypy/pypy3.12-v8.0.1-aarch64.tar.gz",
+          "sha256": "4dd9611f782f0974ffd25b521120b4297049daec05a3cec5698dbc6022c74fb9",
+          "executable": "pypy3.12"
+        },
+        "macos-x64": {
+          "url": "https://downloads.python.org/pypy/pypy3.12-v8.0.1-macos_x86_64.tar.gz",
+          "sha256": "b0b9c68d6a8318957186cd69dd2f4020fc4184c9a844619aa7747e1cc5a700a5",
+          "executable": "pypy3.12"
+        },
+        "macos-arm64": {
+          "url": "https://downloads.python.org/pypy/pypy3.12-v8.0.1-macos_arm64.tar.gz",
+          "sha256": "c10baeae4a61063a1183c4ee4e8324765ba736a3980323654efb31e79f1514db",
+          "executable": "pypy3.12"
+        },
+        "windows-x64": {
+          "url": "https://downloads.python.org/pypy/pypy3.12-v8.0.1-win64.zip",
+          "sha256": "225aa62deed1a624c86d5ffd03cc34615ff927b095d8508ad82593ee23ddce91",
+          "executable": "pypy3.12.exe"
+        }
+      }
+    },
+    "graalpy": {
+      "version": "25.4.4 (Python3.13.14)",
+      "source": "https://github.com/oracle/graalpython/releases/tag/graal-25.4.4",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://github.com/oracle/graalpython/releases/download/graal-25.4.4/graalpy3.13-community-25.4.4-linux-amd64.tar.gz",
+          "sha256": "a038c8fa650f3bd17046f3cb8609b271e07b0e21fdb8527f10726beee442b93d",
+          "executable": "graalpy"
+        },
+        "linux-arm64": {
+          "url": "https://github.com/oracle/graalpython/releases/download/graal-25.4.4/graalpy3.13-community-25.4.4-linux-aarch64.tar.gz",
+          "sha256": "5d0fab1a2f541b387dbf3fbf6b123a5836a0bc99937076f34aeb29282ee246c1",
+          "executable": "graalpy"
+        },
+        "macos-arm64": {
+          "url": "https://github.com/oracle/graalpython/releases/download/graal-25.4.4/graalpy3.13-community-25.4.4-macos-aarch64.tar.gz",
+          "sha256": "dce08327e8ccb48423cc50f72a5137d4ff8c9da8ff7319525a69e2e68ac637cd",
+          "executable": "graalpy"
+        },
+        "windows-x64": {
+          "url": "https://github.com/oracle/graalpython/releases/download/graal-25.4.4/graalpy3.13-community-25.4.4-windows-amd64.zip",
+          "sha256": "8639dcbc10ec27dce7619a5e80e2f7cfba5f2eba7c1476b1381eebc2fee898b7",
+          "executable": "graalpy.exe"
+        }
+      },
+      "unavailable": {
+        "macos-x64": {
+          "reason": "Current GraalPy native releases omit macOS x64; JVM standalone distributions are no longer supported. The unsupported Java fallback lacks native libraries and does not satisfy the complete runtime floor.",
+          "source": "https://www.graalvm.org/release-notes/JDK_25/"
+        }
+      }
+    }
+  }
+}

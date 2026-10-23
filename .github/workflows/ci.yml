@@ -15,6 +15,7 @@ concurrency:
 jobs:
   host:
     name: ${{ matrix.platform }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +106,7 @@ jobs:
         id: samply
         run: python distribution/fetch_samply.py --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/samply" --github-env
       - name: Enable process profiling in the ephemeral Linux runner
-        if: runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && steps.build.outcome == 'success'
         run: sudo sysctl kernel.perf_event_paranoid=1
       - name: Verify automatic native collection
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
@@ -126,10 +127,83 @@ jobs:
       - name: Verify automatic CPython collection
         if: always() && steps.build.outcome == 'success' && steps.vmprof.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime cpython --executable python --output collector-evidence/cpython
+      - name: Install checksum-pinned Bun
+        id: bun
+        if: always() && steps.build.outcome == 'success'
+        run: python distribution/fetch_runtime.py bun --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/bun" --github-env
+      - name: Verify automatic Bun collection
+        if: always() && steps.bun.outcome == 'success'
+        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime bun --executable "${{ env.HUNIN_TEST_BUN }}" --output collector-evidence/bun
+      - name: Verify Bun SDK public API
+        if: always() && steps.bun.outcome == 'success'
+        env:
+          HUNIN_SDK_TEST_RUNTIME: ${{ env.HUNIN_TEST_BUN }}
+        run: node --test sdk/javascript/sdk.test.mjs
+      - name: Verify Bun SDK bridge into canonical storage
+        if: always() && steps.bun.outcome == 'success'
+        run: cargo +stable test --locked --test sdk_contract bun_runtime_sdk_conforms -- --ignored --exact --nocapture
+      - name: Install checksum-pinned Deno
+        id: deno
+        if: always() && steps.build.outcome == 'success'
+        run: python distribution/fetch_runtime.py deno --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/deno" --github-env
+      - name: Verify automatic Deno collection
+        if: always() && steps.deno.outcome == 'success'
+        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime deno --executable "${{ env.HUNIN_TEST_DENO }}" --output collector-evidence/deno
+      - name: Verify Deno SDK public API
+        if: always() && steps.deno.outcome == 'success'
+        env:
+          HUNIN_SDK_TEST_RUNTIME: ${{ env.HUNIN_TEST_DENO }}
+          HUNIN_SDK_TEST_DENO: '1'
+        run: node --test sdk/javascript/sdk.test.mjs
+      - name: Verify Deno SDK bridge into canonical storage
+        if: always() && steps.deno.outcome == 'success'
+        run: cargo +stable test --locked --test sdk_contract deno_runtime_sdk_conforms -- --ignored --exact --nocapture
+      - name: Verify installed JavaScript runtime worker collection
+        if: always() && steps.build.outcome == 'success'
+        run: node --test collectors/javascript/plan.test.mjs
+      - name: Install checksum-pinned PyPy
+        id: pypy
+        if: always() && steps.build.outcome == 'success'
+        run: python distribution/fetch_runtime.py pypy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/pypy" --github-env
+      - name: Prepare PyPy sampling dependency
+        id: pypy-vmprof
+        if: always() && steps.pypy.outcome == 'success'
+        run: |
+          python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','ensurepip'],check=True)"
+          python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','pip','install','vmprof==0.6.0'],check=True)"
+      - name: Verify automatic PyPy collection
+        if: always() && steps.pypy-vmprof.outcome == 'success'
+        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime pypy --executable "${{ env.HUNIN_TEST_PYPY }}" --output collector-evidence/pypy
+      - name: Verify PyPy SDK public API
+        if: always() && steps.pypy.outcome == 'success'
+        run: python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','unittest','discover','-s','sdk/python'],check=True)"
+      - name: Verify PyPy SDK bridge into canonical storage
+        if: always() && steps.pypy.outcome == 'success'
+        run: cargo +stable test --locked --test sdk_contract pypy_runtime_sdk_conforms -- --ignored --exact --nocapture
+      - name: Record GraalPy Intel Mac distribution exclusion
+        if: always() && matrix.platform == 'macos-x64'
+        run: |
+          python -c "import os; open(os.environ['GITHUB_STEP_SUMMARY'],'a').write('GraalPy macOS x64: current upstream native distributions are unavailable; the Hunin app still targets Intel Macs. No GraalPy support is claimed for this cell. See docs/support.md.\n')"
+      - name: Install checksum-pinned GraalPy Community
+        id: graalpy
+        if: always() && steps.build.outcome == 'success' && matrix.platform != 'macos-x64'
+        run: python distribution/fetch_runtime.py graalpy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/graalpy" --github-env
+      - name: Verify automatic GraalPy collection
+        if: always() && steps.graalpy.outcome == 'success'
+        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime graalpy --executable "${{ env.HUNIN_TEST_GRAALPY }}" --output collector-evidence/graalpy
+      - name: Verify GraalPy SDK public API
+        if: always() && steps.graalpy.outcome == 'success'
+        run: python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_GRAALPY'],'-m','unittest','discover','-s','sdk/python'],check=True)"
+      - name: Verify GraalPy SDK bridge into canonical storage
+        if: always() && steps.graalpy.outcome == 'success'
+        run: cargo +stable test --locked --test sdk_contract graalpy_runtime_sdk_conforms -- --ignored --exact --nocapture
       - name: Assemble host bundle
         id: bundle
         if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success'
         run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist
+      - name: Verify extracted bundle installation, SDK recording, retained source and adjacent UI
+        if: always() && steps.bundle.outcome == 'success'
+        run: python -c "from pathlib import Path; import subprocess,sys; archives=[p for p in Path('dist').iterdir() if p.name.endswith(('.tar.gz','.zip'))]; assert len(archives)==1,archives; subprocess.run([sys.executable,'distribution/verify_install.py','--archive',str(archives[0]),'--output','collector-evidence/installed-bundle'],check=True)"
       - uses: actions/cache/save@v4
         if: always() && steps.build.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
         with:

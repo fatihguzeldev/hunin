@@ -37,6 +37,8 @@ def contents(root, binary):
         raise ValueError("Build the UI before packaging (cd ui && npm ci && npm run build)")
     files["install.py"] = (root / "distribution/install.py").read_bytes()
     files["fetch_samply.py"] = (root / "distribution/fetch_samply.py").read_bytes()
+    for name in ("fetch_runtime.py", "runtime-assets.json"):
+        files[name] = (root / "distribution" / name).read_bytes()
     return files
 
 
