@@ -102,6 +102,13 @@ pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Resul
         .join("reanalysis")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&directory)?;
+    struct RestoreDirectory(std::path::PathBuf);
+    impl Drop for RestoreDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RestoreDirectory(directory.clone());
     let path = restore(store, run_id, &raw, &directory)?;
     for sidecar in inputs["sidecars"]
         .as_array()
