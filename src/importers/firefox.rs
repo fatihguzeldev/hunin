@@ -44,6 +44,7 @@ fn decode_process(
 ) -> Result<()> {
     let epoch_ms = raw["meta"]["startTime"].as_f64();
     let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
+    let mut process_lifetimes = HashSet::new();
     for thread in raw["threads"]
         .as_array()
         .context("Firefox processed profile has no threads")?
@@ -53,6 +54,33 @@ fn decode_process(
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| thread["tid"].to_string());
+        let relative_start = thread["processStartupTime"].as_f64();
+        let lifetime = relative_start
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".into());
+        let producer = format!("profile:{key}:{pid}:{lifetime}");
+        if let (Some(start), Some(end)) = (relative_start, thread["processShutdownTime"].as_f64()) {
+            if end < start {
+                bail!("Firefox process interval ends before it starts");
+            }
+            if process_lifetimes.insert((pid, lifetime.clone())) {
+                let timestamp = checked_us(
+                    (epoch_ms.unwrap_or(0.0) + start) * 1000.0,
+                    "Firefox process start",
+                )?;
+                let duration =
+                    checked_us((end - start) * 1000.0, "Firefox process observed duration")?;
+                let mut attrs = json!({"source_format":"firefox","scope":"process","process_name":thread["processName"],"lifetime_scope":"collector-observed process interval"});
+                if epoch_ms.is_some() {
+                    attrs["clock"] = json!("unix_epoch");
+                    attrs["clock_alignment"] = json!("profile_start_epoch_plus_relative_time");
+                } else {
+                    attrs["clock"] = json!("profile_relative");
+                    attrs["clock_alignment"] = json!("unmapped");
+                }
+                records.push(json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:process:{pid}:{lifetime}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":timestamp,"duration_us":duration,"basis":"observed","name":"process.observed_lifetime","attributes":attrs}));
+            }
+        }
         let table = &thread["samples"];
         if table["weightType"].as_str().is_some_and(|t| t != "samples") {
             bail!(
@@ -140,6 +168,7 @@ fn decode_process(
                 "samples",
                 attributes,
             );
+            record["producer_id"] = json!(producer);
             if let Some(interval) = interval_us {
                 record["interval_us"] = json!(interval);
             }

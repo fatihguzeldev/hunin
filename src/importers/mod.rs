@@ -220,7 +220,7 @@ mod recorded_controls {
             profile
                 .records
                 .iter()
-                .flat_map(|r| r["stack"].as_array().unwrap())
+                .flat_map(|r| r["stack"].as_array().into_iter().flatten())
                 .any(|f| f["function"] == "hunin_cpu_hotspot"
                     && f["file"]
                         .as_str()
@@ -293,10 +293,10 @@ mod recorded_controls {
         assert_ne!(before.input_fingerprint, after.input_fingerprint);
         assert_ne!(before.records[0]["id"], after.records[0]["id"]);
         assert!(
-            after.records[0]["stack"]
-                .as_array()
-                .unwrap()
+            after
+                .records
                 .iter()
+                .flat_map(|r| r["stack"].as_array().into_iter().flatten())
                 .any(|f| f["function"] == "hunin_cpu_hotspot")
         );
         assert_eq!(after.sidecars.len(), 1);
