@@ -105,6 +105,24 @@ fn binary_sha256(binary: &Path) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// Mirrors the pinned collector's discovery exactly; no unsupported override.
+#[cfg(windows)]
+pub(crate) fn xperf_path() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|directory| directory.join("xperf.exe"))
+            .find(|candidate| candidate.is_file())
+    });
+    path.or_else(|| {
+        std::env::var_os("ProgramFiles(x86)")
+            .map(std::path::PathBuf::from)
+            .map(|directory| {
+                directory.join("Windows Kits/10/Windows Performance Toolkit/xperf.exe")
+            })
+            .filter(|candidate| candidate.is_file())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

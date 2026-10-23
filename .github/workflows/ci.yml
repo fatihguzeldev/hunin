@@ -131,6 +131,9 @@ jobs:
       - name: Verify native load reuse, concurrent instances and offline evidence
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python collectors/native/verify_lifetimes.py --binary ${{ matrix.binary }} --output collector-evidence/native-lifetimes
+      - name: Verify Windows ETW session ownership and cancellation cleanup
+        if: always() && runner.os == 'Windows' && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
+        run: python collectors/native/verify_windows_sessions.py --binary ${{ matrix.binary }} --output collector-evidence/windows-sessions
       - name: Verify automatic Node collection
         if: always() && steps.build.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node

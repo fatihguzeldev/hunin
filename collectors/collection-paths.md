@@ -11,8 +11,8 @@ silently rewriting old evidence or counting both versions as current.
 
 | Runtime selection | Automatic route | Prerequisites and limits |
 | --- | --- | --- |
-| `native`, `rust`, `c`, `cpp`, `go` | samply OS stack sampling; processed Firefox profile plus symbol sidecar | samply 0.13+; preserve measured binaries and debug information. Linux uses perf permissions, Windows uses ETW/elevation, macOS restricts protected system-signed targets. CPU/off-CPU sampling differs by OS. |
-| `cpython`, `python`, `pypy` | vmprof statistical Python/native sampling in the requested interpreter | Install vmprof 0.6+ in that exact interpreter. Python threads are sampled; a subprocess needs its own collection route. No interpreter is silently substituted. |
+| `native`, `rust`, `c`, `cpp`, `go` | Hunin-patched samply OS stack sampling; processed Firefox profile with symbol and native lifetime sidecars | Bundled `samply 0.13.1-hunin-native1` with verified provenance; stock samply is rejected. Preserve measured binaries and debug information. Linux uses perf permissions, Windows needs WPT/xperf and elevation, macOS restricts protected system-signed targets. CPU/off-CPU sampling differs by OS. |
+| `cpython`, `python`, `pypy` | Unix: vmprof statistical Python/native sampling. Windows: OS-thread CPU progress attributed to bounded Python stack observations. | Unix requires vmprof 0.6.x in the selected interpreter. Windows uses the standard library and native thread CPU counters; delayed observations remain unattributed. Native-only threads, GIL-holding native calls and short-lived threads limit Python stack coverage. No interpreter is substituted. |
 | `graalpy` | Truffle CPUSampler with JSON self-hit timestamps | The chosen distribution/mode must include the profiler. The exercised Native Image distribution supports it; JVM-hosted builds are a separate compatibility case. Guest thread labels differ from OS thread IDs. |
 | `go-test` | `go test -cpuprofile=...` for one package | Uses Go's built-in profiler without application measurement points. Requires a Go toolchain and an ordinary test workload. CPU and trace modes remain separate. |
 | `go-trace` | `go test -trace=...`, decoded with the compatible `go tool trace` | Emits scheduler/runtime/GC events, metrics and completed observed ranges. Raw Go M/G identities are retained; they are not invented OS PIDs or causal request links. |
@@ -31,13 +31,30 @@ Source-map resolution and runtime-specific telemetry remain distinct capabilitie
 
 ## Installing prerequisites
 
-Install [samply's official release](https://github.com/mstange/samply/releases) for
-the host, or use `cargo install --locked samply`. Put it on `PATH` or set
-`HUNIN_SAMPLY` to its executable. Hunin also finds a previously installed binary
-under the platform's local data directory at `hunin/tools/`. No elevated install
-or profiler permission change is performed implicitly by capability detection.
+Packaged installations include Hunin's source-pinned native collector beside the
+executable, at `collectors/native/bin/samply` (`samply.exe` on Windows), with its
+SHA256 provenance receipt and licenses. End users do not need a Rust compiler.
+Stock samply does not provide the required module lifetime extension and is
+rejected. Developers can build the pinned source and patches with:
 
-For Python, use the interpreter or its virtual environment that runs the workload:
+```sh
+python collectors/native/build.py --output collectors/native/bin/samply --cache /path/to/native-build-cache
+```
+
+Use an `.exe` output on Windows. `HUNIN_SAMPLY` explicitly selects a compatible
+patched executable; its version, flags and any accompanying receipt are checked.
+Otherwise Hunin prefers the bundled executable, then PATH and the platform's
+local `hunin/tools/` directory. No permission change is performed by discovery.
+
+Windows additionally requires the [Windows Performance Toolkit](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/)
+from the Windows ADK and an elevated token. Hunin discovers `xperf.exe` on PATH
+or in the standard `ProgramFiles(x86)` WPT directory. Native Windows recordings
+serialize through a Hunin-owned kernel logger lease and refuse an already active
+NT Kernel Logger before starting the target. Finish that recording with its
+owning tool, then retry. Hunin never issues an unnamed global xperf stop.
+
+On Unix, install vmprof in the exact Python interpreter or virtual environment
+that runs the workload; Windows CPython/PyPy CPU collection needs no vmprof:
 
 ```sh
 python -m pip install 'vmprof>=0.6,<0.7'
@@ -68,6 +85,9 @@ root, and `HUNIN_GO` selects a compatible Go trace decoder where needed.
   start/end bracket cannot turn CPU progress into a
   per-sample wall timeline. Every actual recorded stack weighs one sample;
   vmprof's estimated missed timer periods are retained as separate attributes.
+- Python CPU-progress samples weigh measured OS thread CPU microseconds, not
+  wall time or call duration. CPU windows above 100 ms or stack/counter capture
+  latency above 10 ms remain unattributed raw evidence.
 - Graal self-hit timestamps are epoch milliseconds. Inclusive node hit counts
   are not summed as self cost; only self hits create samples.
 - V8 profile times require the adapter's verified epoch anchor. Raw imports with
@@ -94,6 +114,10 @@ resumes the primary thread; Windows behavior still requires its host tests.
 Original partial/malformed profiles, metadata and diagnostics are preserved even
 when normalization fails. Target exit/correctness and collection outcome remain
 separate, and the recorded supervised elapsed interval labels sampler overhead.
+Windows native collection also waits up to 8 seconds for the elevated helper's
+owned-session cleanup report after the supervised tree exits. Retained
+`*.xperf-session.json` evidence distinguishes stopped, refused, failed and
+unconfirmed cleanup. An unknown cleanup state is not a claim that ETW stopped.
 Native imported process spans retain the collector's observed process interval
 and distinguish process lifetimes when the raw recording supplies their starts.
 

@@ -54,9 +54,12 @@ fn permission() -> Value {
     }
     #[cfg(windows)]
     {
+        let Some(xperf) = crate::collection::native_tool::xperf_path() else {
+            return json!({"state":"native_prerequisite_missing","prerequisite":"xperf.exe","error":"Install Windows Performance Toolkit (WPT) from the Windows ADK; xperf.exe was absent from PATH and the standard ProgramFiles(x86) installation","setup_url":"https://learn.microsoft.com/en-us/windows-hardware/test/wpt/"});
+        };
         return match checked(Command::new("whoami.exe").arg("/groups")) {
             Ok(groups) => {
-                json!({"state":if groups.contains("S-1-16-12288")||groups.contains("S-1-16-16384"){"elevated_token_observed"}else{"elevation_required"},"probe":"current token integrity group; actual ETW session not started"})
+                json!({"state":if groups.contains("S-1-16-12288")||groups.contains("S-1-16-16384"){"elevated_token_observed"}else{"elevation_required"},"xperf_executable":xperf,"probe":"bounded current-token check and WPT executable discovery; actual ETW session not started; occupied NT Kernel Logger causes actionable refusal"})
             }
             Err(error) => json!({"state":"permission_unverified","error":format!("{error:#}")}),
         };
@@ -205,13 +208,10 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                     Some("basic_permission_observed" | "elevated_token_observed")
                 )
             {
-                availability = if matches!(
-                    permissions["state"].as_str(),
-                    Some("permission_unavailable" | "elevation_required")
-                ) {
-                    "permission_required"
-                } else {
-                    "target_permission_unverified"
+                availability = match permissions["state"].as_str() {
+                    Some("native_prerequisite_missing") => "native_prerequisite_missing",
+                    Some("permission_unavailable" | "elevation_required") => "permission_required",
+                    _ => "target_permission_unverified",
                 };
             }
             if runtime == "go" {

@@ -1,5 +1,7 @@
 mod correctness;
 mod identity;
+#[cfg(any(windows, test))]
+mod native_cleanup;
 mod native_outcome;
 pub(crate) mod ownership;
 pub(crate) mod process;
@@ -326,6 +328,17 @@ impl Engine {
         }
         while let Ok(rows) = observations.try_recv() {
             metrics.extend(rows);
+        }
+        #[cfg(windows)]
+        if matches!(
+            run.runtime.to_ascii_lowercase().as_str(),
+            "go" | "rust" | "c" | "cpp" | "c++" | "native"
+        ) {
+            let cleanup = native_cleanup::wait(&directory, Duration::from_secs(8)).await;
+            if cleanup["acknowledged"] != true {
+                run.diagnostics.push(format!("Native ETW helper cleanup was not confirmed: {}; inspect retained xperf-session evidence before retrying", cleanup["reason"]));
+            }
+            run.source["native_session_cleanup"] = cleanup;
         }
         run.source["resource_observation"] = json!({"scope":"observed processes in supervised tree","requested_interval_us":100000,"implementation":"CPU/memory-only process discovery on a blocking worker, bracketed by native process birth identities","limitations":"observer work can perturb the target; refresh duration and actual point intervals are recorded; missing or changing birth identities are omitted; newly discovered children need a subsequent stable observation; short-lived processes or final cumulative values may be missed"});
         run.source["process_elapsed_limitation"] = json!(if collector_wrapper {
