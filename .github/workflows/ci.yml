@@ -23,18 +23,23 @@ jobs:
           - os: ubuntu-24.04
             platform: linux-x64
             binary: target/release/hunin
+            rust_target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             binary: target/release/hunin
+            rust_target: aarch64-unknown-linux-gnu
           - os: macos-14
             platform: macos-arm64
             binary: target/release/hunin
+            rust_target: aarch64-apple-darwin
           - os: macos-15-intel
             platform: macos-x64
             binary: target/release/hunin
+            rust_target: x86_64-apple-darwin
           - os: windows-2025
             platform: windows-x64
             binary: target/release/hunin.exe
+            rust_target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -206,7 +211,7 @@ jobs:
       - name: Assemble host bundle
         id: bundle
         if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success'
-        run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist
+        run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist --rust-toolchain stable --rust-target ${{ matrix.rust_target }}
       - name: Verify installed CLI, MCP, SDK, durable analyzer, comparison and adjacent UI
         id: installed
         if: always() && steps.bundle.outcome == 'success'

@@ -5,8 +5,10 @@ import gzip
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import platform
+import subprocess
 import tarfile
 import tomllib
 import zipfile
@@ -17,6 +19,41 @@ SKIP = {"node_modules", "target", "__pycache__", ".venv", ".git", ".DS_Store", "
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def command_output(command):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def build_metadata(root, rust_toolchain=None, rust_target=None):
+    distribution = {}
+    if platform.system() == "Linux":
+        try:
+            distribution = platform.freedesktop_os_release()
+        except OSError:
+            pass
+    libc_name, libc_version = platform.libc_ver()
+    revision = command_output(["git", "-C", str(root), "rev-parse", "HEAD"])
+    changes = command_output(["git", "-C", str(root), "status", "--porcelain"])
+    verbose = command_output(["rustc", f"+{rust_toolchain}", "--version", "--verbose"]) if rust_toolchain else None
+    rust = dict(line.split(": ", 1) for line in (verbose or "").splitlines() if ": " in line)
+    server, repository, run = (os.environ.get(name) for name in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
+    run_url = f"{server.rstrip('/')}/{repository}/actions/runs/{run}" if all((server, repository, run)) else "unknown"
+    return {
+        "built_on": {"os": platform.system(), "arch": platform.machine(), "release": platform.release() or "unknown",
+                     "version": platform.version() or "unknown", "distribution": distribution.get("PRETTY_NAME", "unknown"),
+                     "libc": {"name": libc_name or "unknown", "version": libc_version or "unknown"}},
+        "build_provenance": {"source_revision": revision or "unknown", "source_dirty": changes != "" if changes is not None else "unknown",
+                             "github_sha": os.environ.get("GITHUB_SHA") or "unknown", "workflow_run_url": run_url,
+                             "rust": {"toolchain": rust_toolchain or "unknown", "version": rust.get("release", "unknown"),
+                                      "host": rust.get("host", "unknown"), "target": rust_target or "unknown"}},
+        "compatibility": {"minimum_os": "not_established", "runtime_cells": "docs/support.md", "permissions": "docs/installation.md",
+                          "validation": "Consult workflow evidence; packaging alone does not establish collector support."},
+    }
 
 
 def contents(root, binary):
@@ -42,13 +79,13 @@ def contents(root, binary):
     return files
 
 
-def assemble(root, binary, output, target):
+def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None):
     version = tomllib.loads((root / "Cargo.toml").read_text())["package"]["version"]
     if (target.startswith("windows")) != (binary.suffix == ".exe"):
         raise ValueError("Windows packages require a .exe; Unix packages require a native binary")
     files = contents(root, binary)
     manifest = {"schema_version": 1, "version": version, "platform": target,
-                "built_on": {"os": platform.system(), "arch": platform.machine()},
+                **build_metadata(root, rust_toolchain, rust_target),
                 "files": {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())}}
     files["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     name = f"hunin-{version}-{target}"
@@ -78,5 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
     parser.add_argument("--output", type=Path, default=Path("dist"))
+    parser.add_argument("--rust-toolchain", help="The Rust toolchain used for this build; omitted provenance stays unknown")
+    parser.add_argument("--rust-target", help="The target triple used for this build; do not infer it from the bundle name")
     args = parser.parse_args()
-    print(assemble(Path(__file__).resolve().parents[1], args.binary.resolve(), args.output.resolve(), args.platform))
+    print(assemble(Path(__file__).resolve().parents[1], args.binary.resolve(), args.output.resolve(), args.platform, args.rust_toolchain, args.rust_target))

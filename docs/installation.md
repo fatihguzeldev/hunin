@@ -24,6 +24,8 @@ python3 distribution/package.py --binary target/release/hunin --platform macos-a
 
 The other platform values are `macos-x64`, `linux-x64`, `linux-arm64`, and `windows-x64`. On Windows pass `target/release/hunin.exe`. The output archive and its `.sha256` file are written to `dist/`. CI builds native bundles for the five candidate hosts and retains them as workflow artifacts. A workflow artifact is an unsigned development build, not a signed release.
 
+Each manifest retains the packaging host's actual OS release, kernel/build version, Linux distribution and libc where available. It also records the source revision and dirty state, GitHub commit/run URL when present, and the explicitly supplied Rust build provenance. For example, add `--rust-toolchain stable --rust-target aarch64-apple-darwin` only when that toolchain and target produced the executable. Omitted or unavailable provenance stays `unknown`; packaging does not infer the compiler from the filename. The tested runner baseline and its linked workflow evidence do not certify an older minimum OS or a successful collection cell. The manifest links the bundled runtime matrix and permission requirements.
+
 ## Use an extracted bundle
 
 Check the archive digest against its accompanying checksum, then extract it into a user-owned directory. On Unix, `shasum -a 256 archive.tar.gz` or `sha256sum archive.tar.gz` prints the digest. On PowerShell, use `Get-FileHash archive.zip -Algorithm SHA256`. Checksums detect corruption; authenticity depends on obtaining both files from a trusted build.
@@ -37,7 +39,7 @@ cd hunin-<version>-<platform>
 python3 install.py --bin-dir "$HOME/.local/bin"
 ```
 
-Unix installs default to `~/.local/share/hunin/<version>-<platform>` and the optional bin directory receives a symlink to the installed executable. Choose `--prefix /your/path` to use another location. Existing version directories and unrelated executables are preserved.
+Unix installs default to `~/.local/share/hunin/<version>-<platform>` and the optional bin directory receives a symlink to the installed executable. Choose `--prefix /your/path` to use another location. Existing version directories and unrelated executables or dangling links are preserved. An existing `hunin` symlink is updated only when it points to an intact, verified prior Hunin installation under that same prefix.
 
 On Windows, run `py install.py`. The default is `%LOCALAPPDATA%\hunin\<version>-windows-x64`; add the printed directory to your user PATH or invoke `hunin.exe` directly. The installer does not request administrator privileges.
 
