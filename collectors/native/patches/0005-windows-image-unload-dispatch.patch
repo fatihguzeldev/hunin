@@ -1,0 +1,25 @@
+--- a/samply/src/windows/etw_gecko.rs
++++ b/samply/src/windows/etw_gecko.rs
+@@ -214,9 +214,8 @@
+                 context.handle_process_dcend(timestamp_raw, pid);
+             }
+             "MSNT_SystemTrace/Process/Terminate" => {
+-                let pid: u32 = parser.parse("ProcessId");
+-                let image_base: u64 = parser.parse("ImageBase");
+-                context.hunin_image_unload(timestamp_raw, pid, image_base);
++                // Process termination has no ImageBase property. Process/End
++                // already closes its lifetime; this is not an image event.
+             }
+             "MSNT_SystemTrace/StackWalk/Stack" => {
+                 if !context.is_in_time_range(timestamp_raw) {
+@@ -371,7 +370,9 @@
+                 context.handle_image_load(timestamp_raw, pid, image_base, path, info);
+             }
+             "MSNT_SystemTrace/Image/UnLoad" => {
+-                // nothing, but we don't want a marker for it
++                let pid: u32 = parser.parse("ProcessId");
++                let image_base: u64 = parser.parse("ImageBase");
++                context.hunin_image_unload(timestamp_raw, pid, image_base);
+             }
+             "MSNT_SystemTrace/Image/DCEnd" => {
+                 let pid: u32 = parser.parse("ProcessId");
