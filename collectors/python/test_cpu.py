@@ -1,0 +1,94 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+HERE = Path(__file__).resolve().parent
+
+
+class CpuProgressTest(unittest.TestCase):
+    def capture(self, source):
+        with tempfile.TemporaryDirectory(prefix="hunin-cpu-progress-") as directory:
+            work = Path(directory)
+            script = work / "work.py"
+            script.write_text(source)
+            raw = work / "cpu.pythoncpu.jsonl"
+            result = subprocess.run([sys.executable, str(HERE / "cpu.py"), str(raw), "--", str(script)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "expected\n")
+            rows = [json.loads(line) for line in raw.read_text().splitlines()]
+            metadata = json.loads(raw.with_suffix(raw.suffix + ".meta.json").read_text())
+            self.assertFalse(metadata["errors"])
+            return rows, metadata
+
+    def test_measured_cpu_progress_distinguishes_hot_work_idle_and_thread_identity(self):
+        rows, metadata = self.capture("""
+import threading,time
+def cpu_hot():
+    end=time.perf_counter()+0.45
+    value=1
+    while time.perf_counter()<end:
+        for n in range(10000): value=(value+n)%10000007
+def idle_wait(): time.sleep(0.5)
+hot=threading.Thread(target=cpu_hot)
+idle=threading.Thread(target=idle_wait)
+hot.start(); idle.start(); cpu_hot(); hot.join(); idle.join()
+print('expected')
+""")
+        samples = [row for row in rows if row["attribution"] == "sample"]
+        self.assertTrue(samples)
+        cpu = sum(row["cpu_delta_ns"] for row in samples if any(frame["function"] == "cpu_hot" for frame in row["stack"]))
+        idle = sum(row["cpu_delta_ns"] for row in samples if any(frame["function"] == "idle_wait" for frame in row["stack"]))
+        self.assertGreater(cpu, 0)
+        self.assertLess(idle, cpu * 0.1)
+        hot_threads = {row["native_tid"] for row in samples if any(frame["function"] == "cpu_hot" for frame in row["stack"])}
+        self.assertGreaterEqual(len(hot_threads), 2)
+        self.assertTrue(all(row["thread_ident"] and row["thread_lifetime"] for row in samples))
+        self.assertGreaterEqual(metadata["observed_cpu_ns"], metadata["attributed_cpu_ns"])
+        self.assertGreater(metadata["attributed_cpu_ns"], 0)
+
+    def test_long_gil_holding_native_call_is_not_attributed_to_a_later_idle_frame(self):
+        with tempfile.TemporaryDirectory(prefix="hunin-native-gil-") as directory:
+            library = Path(directory) / ("hold.dll" if os.name == "nt" else "libhold.dylib" if sys.platform == "darwin" else "libhold.so")
+            build = subprocess.run(["rustc", "--crate-type", "cdylib", "-C", "opt-level=1", str(HERE / "fixtures" / "cpu_native.rs"), "-o", str(library)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            source = """
+import ctypes,time
+library=ctypes.PyDLL(%r)
+library.cpu_hold.restype=ctypes.c_uint64
+def long_native_hold(): library.cpu_hold()
+def later_idle(): time.sleep(0.15)
+long_native_hold(); later_idle()
+print('expected')
+""" % str(library)
+            if sys.implementation.name == "pypy":
+                # PyPy ctypes releases the GIL for native calls and has no
+                # PyDLL. Exercise the same delayed-observation boundary with
+                # a deliberately extended interpreter scheduling interval.
+                source = """
+import sys,time
+sys.setswitchinterval(1.0)
+def long_interpreter_hold():
+    end=time.perf_counter()+0.4
+    value=1
+    while time.perf_counter()<end:
+        for n in range(10000): value=(value+n)%10000007
+def later_idle(): time.sleep(0.15)
+long_interpreter_hold(); later_idle()
+print('expected')
+"""
+            rows, metadata = self.capture(source)
+        gaps = [row for row in rows if row["attribution"] == "unattributed_gap" and row["cpu_delta_ns"] > 0]
+        self.assertTrue(gaps, "long GIL hold must leave unassigned CPU evidence")
+        self.assertGreater(metadata["unattributed_cpu_ns"], 100_000_000)
+        late = sum(row["cpu_delta_ns"] for row in rows if row["attribution"] == "sample" and any(frame["function"] == "later_idle" for frame in row["stack"]))
+        self.assertLess(late, metadata["unattributed_cpu_ns"] * 0.1)
+
+
+if __name__ == "__main__":
+    unittest.main()

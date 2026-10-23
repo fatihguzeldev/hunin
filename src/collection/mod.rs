@@ -38,7 +38,14 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
     let runtime = request.runtime.to_lowercase();
     match runtime.as_str() {
         "node" | "nodejs" | "bun" | "deno" | "javascript" | "typescript" => javascript(request),
-        "python" | "python3" | "cpython" | "pypy" | "pypy3" => python(request),
+        "python" | "python3" | "cpython" | "pypy" | "pypy3" => {
+            if cfg!(windows) {
+                python_cpu(request)
+            } else {
+                python(request)
+            }
+        }
+        "python-cpu" => python_cpu(request),
         "graalpy" | "graalpython" => graal(request),
         "go-test" => go_test(request, false),
         "go-trace" => go_test(request, true),
@@ -71,7 +78,9 @@ pub fn collect(request: &CaptureRequest) -> Result<Vec<ImportedProfile>> {
 
 pub(crate) fn profile_format(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_string_lossy();
-    if name.ends_with(".cpuprofile") {
+    if name.ends_with(".pythoncpu.jsonl") {
+        Some("python-cpu-progress")
+    } else if name.ends_with(".cpuprofile") {
         Some("v8-cpuprofile")
     } else if name.ends_with(".vmprof") {
         Some("vmprof")
@@ -164,6 +173,33 @@ fn python(request: &CaptureRequest) -> Result<CapturePlan> {
     command.extend(target);
     Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_owned()),
         diagnostics:vec!["vmprof captures Python threads in one process; child processes require separate collection".into(), "CPU-clock sample times are retained without an invented wall-clock mapping".into()] })
+}
+
+fn python_cpu(request: &CaptureRequest) -> Result<CapturePlan> {
+    let check=probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).args(["-c","import sys,threading; assert hasattr(threading.current_thread(),'native_id'), 'Python native thread IDs required'; print(sys.version)"])).context("inspect Python CPU sampling prerequisites")?;
+    if !check.status.success() {
+        bail!(
+            "Python CPU progress sampling unavailable in requested interpreter: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+    let (flags, target) = python_arguments(&request.command[1..])?;
+    let mut command = vec![request.command[0].clone()];
+    command.extend(flags);
+    command.extend([
+        assets()
+            .join("collectors/python/cpu.py")
+            .display()
+            .to_string(),
+        request
+            .artifact_dir
+            .join("cpu.pythoncpu.jsonl")
+            .display()
+            .to_string(),
+        "--".into(),
+    ]);
+    command.extend(target);
+    Ok(CapturePlan{command,env:BTreeMap::new(),runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_string()),diagnostics:vec!["Python stacks are gated and weighted by measured OS thread CPU progress across bounded observation windows; weights are statistical attribution, not individual call durations. Delayed observations remain unattributed CPU evidence.".into(),"GIL scheduling, native-only threads and short-lived undiscovered threads limit CPU attribution coverage; raw counters, frame snapshots and timing uncertainty are retained.".into()]})
 }
 
 fn graal(request: &CaptureRequest) -> Result<CapturePlan> {

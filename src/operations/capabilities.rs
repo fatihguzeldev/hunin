@@ -1,8 +1,254 @@
+use crate::collection::{probe, tool};
 use serde_json::{Value, json};
-use std::{env, process::Command};
+use std::{env, process::Command, sync::Arc, time::Duration};
+
+fn checked(command: &mut Command) -> anyhow::Result<String> {
+    let output = probe::output(command, None, Duration::from_secs(2), 32 * 1024)?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "probe exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn permission() -> Value {
+    #[cfg(target_os = "linux")]
+    {
+        // Test one inactive user-only CPU counter, without sampling any target.
+        #[repr(C)]
+        struct Attr {
+            kind: u32,
+            size: u32,
+            config: u64,
+            period: u64,
+            sample_type: u64,
+            read_format: u64,
+            flags: u64,
+            wakeup: u32,
+            bp_type: u32,
+            config1: u64,
+        }
+        let attr = Attr {
+            kind: 1,
+            size: std::mem::size_of::<Attr>() as u32,
+            config: 0,
+            period: 0,
+            sample_type: 0,
+            read_format: 0,
+            flags: 1 | (1 << 5) | (1 << 6),
+            wakeup: 0,
+            bp_type: 0,
+            config1: 0,
+        };
+        let fd = unsafe { libc::syscall(libc::SYS_perf_event_open, &attr, 0, -1, -1, 0) };
+        if fd >= 0 {
+            unsafe {
+                libc::close(fd as i32);
+            };
+            return json!({"state":"basic_permission_observed","probe":"inactive self-process perf software CPU counter; complete samply recording remains unverified"});
+        }
+        return json!({"state":"permission_unavailable","error":std::io::Error::last_os_error().to_string(),"perf_event_paranoid":std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid").ok().map(|s|s.trim().to_owned())});
+    }
+    #[cfg(windows)]
+    {
+        return match checked(Command::new("whoami.exe").arg("/groups")) {
+            Ok(groups) => {
+                json!({"state":if groups.contains("S-1-16-12288")||groups.contains("S-1-16-16384"){"elevated_token_observed"}else{"elevation_required"},"probe":"current token integrity group; actual ETW session not started"})
+            }
+            Err(error) => json!({"state":"permission_unverified","error":format!("{error:#}")}),
+        };
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    json!({"state":"target_permission_unverified","probe":"macOS task access/signing depends on the measured executable; discovery does not attach or request permission"})
+}
+
+fn version_pair(text: &str) -> Option<(u32, u32)> {
+    let mut numbers = text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok());
+    Some((numbers.next()?, numbers.next()?))
+}
+
+fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
+    let found = names.iter().find_map(|name| tool(name));
+    let mut diagnostics = Vec::new();
+    let mut modes = Vec::new();
+    let mut version = None;
+    let mut probe_status = "missing";
+    if let Some(executable) = found.as_ref() {
+        match checked(Command::new(executable).arg(if runtime == "go" {
+            "version"
+        } else {
+            "--version"
+        })) {
+            Ok(text) => {
+                version = Some(text);
+                probe_status = "ok";
+            }
+            Err(error) => {
+                probe_status = "failed_or_timed_out";
+                diagnostics.push(format!("bounded version probe failed: {error:#}"));
+            }
+        }
+    }
+    let mut availability = if found.is_none() {
+        "executable_missing"
+    } else if version.is_none() {
+        "runtime_probe_failed"
+    } else {
+        "prerequisites_ready"
+    };
+    let mechanism;
+    let mut basis = "statistical stack samples";
+    match runtime {
+        "cpython" | "pypy" => {
+            if cfg!(windows) {
+                mechanism = "os-thread-cpu-progress";
+                basis = "measured OS thread CPU counter progress statistically attributed to bounded Python stack snapshots";
+                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
+                    let directory = crate::collection::assets().join("collectors/python");
+                    let code = format!(
+                        "import sys,threading;sys.path.insert(0,{:?});from cpu_clock import clock;c=clock();tid=threading.current_thread().native_id;assert c.snapshot({{tid}}), 'OS thread CPU counter unavailable';c.close();print('CPU counter prerequisite verified')",
+                        directory.to_string_lossy()
+                    );
+                    if let Err(error) = checked(Command::new(executable).args(["-c", &code])) {
+                        availability = "cpu_counter_prerequisite_failed";
+                        diagnostics.push(format!("{error:#}"));
+                    }
+                }
+                diagnostics.push("Standard library route; CPU gaps above100ms and capture latency above10ms remain unattributed. GIL-holding native calls, native-only threads and undiscovered short-lived threads limit coverage. No vmprof installation is required.".into());
+            } else {
+                mechanism = "vmprof-cpu-timer";
+                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
+                    if let Err(error)=checked(Command::new(executable).args(["-c","import vmprof,importlib.metadata as m;assert tuple(map(int,m.version('vmprof').split('.')[:2]))==(0,6);print(m.version('vmprof'))"])) {availability="dependency_missing_or_incompatible";diagnostics.push(format!("Selected interpreter requires vmprof0.6.x: {error:#}"));}
+                }
+                diagnostics.push("CPU-clock samples remain outside an epoch timeline unless a verified mapping exists. The selected interpreter is never replaced.".into());
+            }
+        }
+        "node" | "bun" | "deno" => {
+            mechanism = "runtime-cpu-profiler";
+            let required = match runtime {
+                "node" => (20, 0),
+                "bun" => (1, 4),
+                _ => (2, 8),
+            };
+            if version
+                .as_deref()
+                .and_then(version_pair)
+                .is_some_and(|v| v < required)
+            {
+                availability = "runtime_version_unsupported";
+            }
+            if version.is_some() && tool("node").is_none() {
+                availability = "control_adapter_missing";
+                diagnostics.push(
+                    "Node.js is required for the JavaScript collection control adapter".into(),
+                );
+            }
+            if runtime == "node" {
+                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
+                    match checked(Command::new(executable).args(["-p","process.allowedNodeEnvironmentFlags.has('--cpu-prof')&&process.allowedNodeEnvironmentFlags.has('--import')"])) {
+                        Ok(answer) if answer=="true"=>{},
+                        Ok(_)=>{availability="runtime_flags_unsupported";diagnostics.push("This Node runtime cannot accept the required CPU profiler/preload flags in NODE_OPTIONS".into());},
+                        Err(error)=>{availability="runtime_flag_probe_failed";diagnostics.push(format!("{error:#}"));}
+                    }
+                }
+            }
+            diagnostics.push("Version/flag prerequisites are checked; discovery does not record the target or its workers. Explicit Deno permission denial can leave CPU samples unaligned.".into());
+        }
+        "graalpy" => {
+            mechanism = "truffle-cpusampler";
+            if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
+                match checked(Command::new(executable).arg("--help:tools")) {
+                    Ok(help) if help.to_lowercase().contains("cpusampler") => {}
+                    Ok(_) => {
+                        availability = "cpusampler_not_exposed";
+                    }
+                    Err(error) => {
+                        availability = "tool_probe_failed";
+                        diagnostics.push(format!("{error:#}"));
+                    }
+                }
+            }
+            diagnostics.push("Availability applies to the probed GraalPy mode; native-image and JVM-hosted distributions can expose different tools.".into());
+        }
+        _ => {
+            mechanism = "samply-os-sampling";
+            basis = "OS stack sample weight; CPU/off-CPU semantics and permissions differ by host";
+            let sampler = if runtime == "native" {
+                found.clone()
+            } else {
+                tool("samply")
+            };
+            if sampler.is_none() {
+                availability = "samply_missing";
+            } else if runtime == "go" && version.is_some() {
+                match checked(Command::new(sampler.as_ref().unwrap()).arg("--version")) {
+                    Ok(sampler_version)
+                        if version_pair(&sampler_version).is_some_and(|v| v >= (0, 13)) => {}
+                    Ok(_) => {
+                        availability = "sampler_version_unsupported";
+                    }
+                    Err(error) => {
+                        availability = "sampler_probe_failed";
+                        diagnostics.push(format!("{error:#}"));
+                    }
+                }
+            }
+            if runtime == "native"
+                && version
+                    .as_deref()
+                    .and_then(version_pair)
+                    .is_some_and(|v| v < (0, 13))
+            {
+                availability = "sampler_version_unsupported";
+            }
+            if availability == "prerequisites_ready"
+                && !matches!(
+                    permissions["state"].as_str(),
+                    Some("basic_permission_observed" | "elevated_token_observed")
+                )
+            {
+                availability = if matches!(
+                    permissions["state"].as_str(),
+                    Some("permission_unavailable" | "elevation_required")
+                ) {
+                    "permission_required"
+                } else {
+                    "target_permission_unverified"
+                };
+            }
+            if runtime == "go" {
+                modes.push(json!({"mode":"go-test","mechanism":"Go runtime pprof","availability":if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"},"basis":"aggregated sampled CPU time; one test package per recording","recording_verified":false}));
+                modes.push(json!({"mode":"go-trace","mechanism":"Go execution tracer","availability":if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"},"basis":"runtime scheduler/GC events; not a CPU stack profile","recording_verified":false}));
+            }
+            diagnostics.push("Basic permissions and prerequisites do not establish that an actual sampling session can attach to the selected target.".into());
+        }
+    }
+    let mut capabilities = Vec::new();
+    if version.is_some() {
+        capabilities.extend(["sdk-records", "process-resources"]);
+    }
+    if availability == "prerequisites_ready" {
+        capabilities.push("cpu-sampling-prerequisites");
+    }
+    modes.insert(0,json!({"mode":"automatic-cpu","mechanism":mechanism,"availability":availability,"basis":basis,"recording_verified":false}));
+    if found.is_none() {
+        diagnostics.push(format!(
+            "No {} executable found; install it on PATH or select an explicit executable",
+            names[0]
+        ));
+    }
+    json!({"runtime":runtime,"available":version.is_some(),"executable":found,"version":version,"probe_status":probe_status,"capabilities":capabilities,"modes":modes,"diagnostics":diagnostics,"verification":"bounded prerequisite checks only; actual recording not exercised"})
+}
 
 pub fn discover() -> Value {
-    let mut runtimes = Vec::new();
+    let permission = Arc::new(permission());
+    let mut workers = Vec::new();
     for (runtime, names) in [
         ("node", vec!["node"]),
         ("bun", vec!["bun"]),
@@ -13,63 +259,15 @@ pub fn discover() -> Value {
         ("go", vec!["go"]),
         ("native", vec!["samply"]),
     ] {
-        let found = names.iter().find_map(|name| crate::collection::tool(name));
-        let version = found
-            .as_ref()
-            .and_then(|p| {
-                Command::new(p)
-                    .arg(if runtime == "go" {
-                        "version"
-                    } else {
-                        "--version"
-                    })
-                    .output()
-                    .ok()
-            })
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-        let mut diagnostics = Vec::new();
-        let mut capabilities = Vec::new();
-        if let Some(ref executable) = found {
-            if ["cpython", "pypy"].contains(&runtime) {
-                let vmprof = Command::new(executable)
-                    .args(["-c", "import vmprof"])
-                    .output()
-                    .is_ok_and(|o| o.status.success());
-                if vmprof {
-                    capabilities.push("cpu-sampling");
-                } else {
-                    diagnostics.push("Install vmprof 0.6+ in the selected interpreter for automatic CPU collection".to_owned());
-                }
-            } else if runtime == "go" {
-                if crate::collection::tool("samply").is_some() {
-                    capabilities.push("cpu-sampling");
-                } else {
-                    diagnostics.push("Install samply for automatic Go binary sampling; runtime-enabled go-test/go-trace are separate collection modes".into());
-                }
-            } else if runtime == "graalpy" {
-                let tools = Command::new(executable).arg("--help:tools").output().ok();
-                if tools
-                    .as_ref()
-                    .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains("cpusampler"))
-                {
-                    capabilities.push("cpu-sampling");
-                } else {
-                    diagnostics.push("This GraalPy distribution has not exposed Truffle CPUSampler; select a supported execution mode".into());
-                }
-            } else {
-                capabilities.push("cpu-sampling");
-            }
-            capabilities.extend(["sdk-records", "process-resources"]);
-            diagnostics.push("Installed prerequisites are detected; actual recording may require OS permissions or runtime-specific activation".into());
-        } else {
-            diagnostics.push(format!(
-                "No {} executable found; set HUNIN_{} or install it on PATH",
-                names[0],
-                names[0].to_uppercase()
-            ));
-        }
-        runtimes.push(json!({"runtime":runtime,"available":found.is_some(),"version":version,"executable":found,"capabilities":capabilities,"diagnostics":diagnostics,"verification":"prerequisites-only"}));
+        let permission = permission.clone();
+        workers.push((
+            runtime,
+            std::thread::spawn(move || self::runtime(runtime, &names, &permission)),
+        ));
     }
-    json!({"host":{"os":env::consts::OS,"arch":env::consts::ARCH},"runtimes":runtimes,"schema_version":1})
+    let runtimes = workers
+        .into_iter()
+        .map(|(runtime,worker)|worker.join().unwrap_or_else(|_|json!({"runtime":runtime,"available":false,"probe_status":"internal_probe_failure","diagnostics":["Capability worker failed; availability is unknown"]})))
+        .collect::<Vec<_>>();
+    json!({"host":{"os":env::consts::OS,"arch":env::consts::ARCH},"native_sampling_permission":*permission,"runtimes":runtimes,"schema_version":1,"probe_limits":{"timeout_seconds_per_command":2,"output_bytes_per_stream":32768},"verification":"Discovery never labels executable presence as a verified CPU recording."})
 }

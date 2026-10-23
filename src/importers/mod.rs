@@ -4,6 +4,7 @@ mod graal;
 mod javascript_sources;
 mod native_identity;
 mod pprof;
+mod python_cpu;
 mod v8;
 
 use anyhow::{Context, Result, bail};
@@ -143,6 +144,7 @@ fn import_inner(
             graal::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
         }
         "pprof" | "go-pprof" => pprof::decode(&raw, run_id, &key)?,
+        "python-cpu-progress" => python_cpu::decode(path, run_id, &key)?,
         "go-trace" => go_trace::decode(path, run_id, &key)?,
         "vmprof" => decode_vmprof(path, run_id, &key)?,
         "hunin-jsonl" | "jsonl" => {
@@ -192,6 +194,7 @@ fn sidecars(path: &Path, format: &str) -> Vec<PathBuf> {
             .collect(),
         "graal" | "graal-cpusampler" => vec![path.with_extension("meta.json")],
         "vmprof" => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
+        "python-cpu-progress" => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
         "go-trace" => vec![
             path.parent()
                 .unwrap_or_else(|| Path::new("."))

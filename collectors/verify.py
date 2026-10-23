@@ -37,12 +37,12 @@ def execute(command, *, cwd=None, env=None, timeout=120):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
-    parser.add_argument("--runtime", required=True, choices=["native", "node", "bun", "deno", "cpython", "pypy", "graalpy", "go", "go-test", "go-trace"])
+    parser.add_argument("--runtime", required=True, choices=["native", "node", "bun", "deno", "cpython", "pypy", "python-cpu", "graalpy", "go", "go-test", "go-trace"])
     parser.add_argument("--executable", help="runtime executable, or rustc for the native control")
     parser.add_argument("--output", help="retain workload, store, raw artifacts and evidence in this directory")
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
-    default = {"native": "rustc", "cpython": sys.executable, "pypy": "pypy3", "graalpy": "graalpy", "go-test": "go", "go-trace": "go"}.get(args.runtime, args.runtime)
+    default = {"native": "rustc", "cpython": sys.executable, "python-cpu": sys.executable, "pypy": "pypy3", "graalpy": "graalpy", "go-test": "go", "go-trace": "go"}.get(args.runtime, args.runtime)
     executable = shutil.which(args.executable or default)
     with workspace(args.output) as directory:
         work = Path(directory)
@@ -58,7 +58,7 @@ def main():
             target = work / ("cpu.exe" if os.name == "nt" else "cpu")
             execute([executable, "-C", "opt-level=1", "-C", "debuginfo=2", "-C", "force-frame-pointers=yes", str(source), "-o", str(target)])
             command = [str(target)]
-        elif runtime in ("cpython", "pypy", "graalpy"):
+        elif runtime in ("cpython", "pypy", "python-cpu", "graalpy"):
             source = work / "cpu.py"
             source.write_text("def huninSmokeHotspot():\n    x=1\n    for n in range(10_000_000):\n        x=((x^n)*1664525+1013904223)&0xffffffff\n    return x\nprint(huninSmokeHotspot())\n")
             command = [executable, str(source)]
