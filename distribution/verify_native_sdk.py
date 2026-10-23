@@ -19,6 +19,21 @@ def execute(command, work):
     return result.stdout
 
 
+def paged_records(call, operation, params, keys):
+    cursor = None
+    seen = set()
+    while True:
+        page = call(operation, {**params, "limit": 100, **({"cursor": cursor} if cursor else {})})
+        for key in keys:
+            yield from page.get(key, [])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            return
+        if cursor in seen:
+            raise RuntimeError(f"{operation} returned a repeated cursor: {cursor}")
+        seen.add(cursor)
+
+
 def verify(installed, output):
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"Preserving existing native evidence directory: {output}")
@@ -89,24 +104,17 @@ int main(void) {
         hot = next((row for row in hotspots["hotspots"] if "installedNativeHotspot" in row["function"]), None)
         if not hot:
             raise RuntimeError("Installed native profile does not contain its known C function")
-        contexts = call("contexts.query", {"run_id": run["id"]})["contexts"]
+        contexts = paged_records(call, "contexts.query", {"run_id": run["id"]}, ("contexts",))
         context = next((row for row in contexts if row.get("name") == "installed native context"), None)
-        spans = call("timeline.query", {"run_id": run["id"], "kind": "span", "alignment": "all"})
-        span = next((row for row in [*spans["records"], *spans.get("unaligned_records", [])] if row.get("name") == "installed native work"), None)
+        spans = paged_records(call, "timeline.query", {"run_id": run["id"], "kind": "span", "alignment": "all"}, ("records", "unaligned_records"))
+        span = next((row for row in spans if row.get("name") == "installed native work"), None)
         if not context or not span or span.get("context_id") != context["id"]:
             raise RuntimeError("Native SDK context and span did not join the automatic recording")
         evidence = call("evidence.get", {"run_id": run["id"], "ids": [context["id"], span["id"]]})
         if len(evidence["records"]) != 2:
             raise RuntimeError("Native context/span evidence did not survive query resolution")
-        cursor = None
-        sdk_raw_found = False
-        while True:
-            page = call("artifacts.list", {"run_id": run["id"], "limit": 100, **({"cursor": cursor} if cursor else {})})
-            sdk_raw_found = any(row["format"] == "hunin-jsonl" for row in page["artifacts"])
-            cursor = page.get("next_cursor")
-            if sdk_raw_found or not cursor:
-                break
-        if not sdk_raw_found:
+        artifacts = paged_records(call, "artifacts.list", {"run_id": run["id"]}, ("artifacts",))
+        if not any(row["format"] == "hunin-jsonl" for row in artifacts):
             raise RuntimeError("Native SDK raw evidence was not retained")
         reopened = json.loads(execute([binary, "--data-dir", data, "inspect", run["id"]], output))
         if reopened["summary"] != recording["summary"]:
