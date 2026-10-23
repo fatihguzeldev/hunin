@@ -27,6 +27,48 @@ pub(super) struct Timeline {
     complete: bool,
     diagnostics: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_move_and_resize_close_old_ranges_before_linking_boundary_sample() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = json!({"meta":{"startTime":1700000000000u64}});
+        let raw_sha = format!("{:x}", Sha256::digest(serde_json::to_vec(&raw).unwrap()));
+        let process = json!({"key":"p0","pid":"7","start_time_ms":0,"end_time_ms":40});
+        let add = |time, id, name, start, end| json!({"kind":"mapping","op":"add","time_ms":time,"process":process,"load_id":id,"library":{"name":name},"start_avma":start,"end_avma":end,"relative_address_at_start":0});
+        let movement = |time, old, start, end| json!({"kind":"mapping","op":"move","time_ms":time,"process":process,"old_start_avma":old,"start_avma":start,"end_avma":end});
+        let input = json!({"schema_version":1,"raw_profile_sha256":raw_sha,"epoch_start_ms":1700000000000u64,"truncated":false,"collector":{"upstream_commit":UPSTREAM,"revision":"hunin-native1","os":"linux"},"events":[
+            add(10,"1","A","0x1000","0x1800"),add(11,"2","B","0x2000","0x2800"),
+            movement(20,"0x1000","0x2000","0x2800"),movement(30,"0x2000","0x2000","0x2900"),
+            {"kind":"sample","thread":{"process":process,"tid":"8"},"time_ms":30,"mapping_time_ms":30,"frames":[{"load_id":"1","lookup_address":"0x2100","relative_address":256}]}
+        ]});
+        let path = directory.path().join("profile.lifetimes.json");
+        let bytes = serde_json::to_vec(&input).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let timeline = Timeline::load(&path, &raw_sha, Some(&sha), &raw)
+            .unwrap()
+            .unwrap();
+        let mut sample = json!({"id":"sample","run_id":"run","producer_id":"target","pid":7,"tid":"8","timestamp_us":1700000000030000u64,"attributes":{}});
+        let links = timeline
+            .link_sample(&json!({"pid":"7","tid":"8"}), 30.0, &mut sample, "key")
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert!(links[0]["to"].as_str().unwrap().ends_with(":g2"));
+        let scopes = timeline.records("run", "key").unwrap();
+        let displaced = scopes
+            .iter()
+            .find(|r| r["attributes"]["module"] == "B")
+            .unwrap();
+        assert_eq!(
+            displaced["duration_us"], 9000,
+            "move must close the mapping displaced at its new address"
+        );
+    }
+}
 #[derive(Clone)]
 struct Instance {
     process: Value,
@@ -336,6 +378,26 @@ impl Timeline {
                         next.end_avma > next.start_avma,
                         "moved mapping has invalid range"
                     );
+                    let displaced: Vec<_> = active
+                        .iter()
+                        .filter(|((p, a), i)| {
+                            p == &process_key
+                                && *a < next.end_avma
+                                && next.start_avma < result.instances[**i].end_avma
+                        })
+                        .map(|(key, _)| key.clone())
+                        .collect();
+                    for key in displaced {
+                        let i = active.remove(&key).unwrap();
+                        result.close(
+                            i,
+                            time,
+                            "address_replaced",
+                            "collector_mapping_move",
+                            json!([null, time]),
+                            true,
+                        )?;
+                    }
                     next.start_basis = "collector_mapping_move".into();
                     next.start_window = json!([time, time]);
                     next.start_censored = false;
@@ -591,7 +653,7 @@ impl Timeline {
                     lookup >= i.start_avma
                         && lookup < i.end_avma
                         && mapping_time + 0.001 >= i.start
-                        && i.end.is_none_or(|end| mapping_time <= end + 0.001)
+                        && i.end.is_none_or(|end| mapping_time < end)
                 })
                 .collect();
             ensure!(
@@ -610,7 +672,7 @@ impl Timeline {
             );
             ensure!(
                 mapping_time + 0.001 >= instance.start
-                    && instance.end.is_none_or(|end| mapping_time <= end + 0.001),
+                    && instance.end.is_none_or(|end| mapping_time < end),
                 "sample mapping lies outside its load lifetime"
             );
             let id = Self::id(instance, key);
