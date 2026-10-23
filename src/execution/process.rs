@@ -23,12 +23,13 @@ pub async fn spawn(command: &mut Command) -> Result<(Child, ProcessTree)> {
     #[cfg(windows)]
     {
         let mut child = child;
-        match windows::attach(
-            child
+        let attached = {
+            let handle = child
                 .raw_handle()
-                .context("suspended child process handle missing")?,
-            pid,
-        ) {
+                .context("suspended child process handle missing")?;
+            windows::attach(handle, pid)
+        };
+        match attached {
             Ok(job) => {
                 return Ok((
                     child,
