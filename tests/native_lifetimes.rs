@@ -177,3 +177,50 @@ fn unrelated_or_tampered_sample_mapping_cannot_be_accepted() {
         format!("{:x}", Sha256::digest(fs::read(&sidecar).unwrap()))
     );
 }
+
+#[test]
+fn root_exit_two_survives_normalization_and_unknown_outcome_stays_unknown() {
+    let (_directory, path) = fixture();
+    let sidecar = path.with_extension("lifetimes.json");
+    let mut input: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    let pid = input["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "mapping")
+        .unwrap()["process"]["pid"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    input["target_outcome"] = json!({"state":"exited","pid":pid,"exit_code":2,"signal":null,"launch_observed_at_us":1792777622000000u64,"wait_observed_at_us":1792777625000000u64,"source":"root_target_os_wait_status"});
+    fs::write(&sidecar, serde_json::to_vec(&input).unwrap()).unwrap();
+    let profile = importers::import(&path, "samply", "outcome").unwrap();
+    let event = profile
+        .records
+        .iter()
+        .find(|r| r["name"] == "process.wait_outcome")
+        .unwrap();
+    assert_eq!(event["pid"], pid);
+    assert_eq!(event["timestamp_us"], 1792777625000000u64);
+    assert_eq!(event["attributes"]["target_outcome"]["exit_code"], 2);
+    assert_eq!(event["basis"], "observed");
+    hunin::ingestion::validate(
+        "outcome",
+        &profile.records,
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+    input["target_outcome"]["signal"] = json!(9);
+    fs::write(&sidecar, serde_json::to_vec(&input).unwrap()).unwrap();
+    assert!(importers::import(&path, "samply", "outcome").is_err());
+    input["target_outcome"] = json!({"state":"unknown","source":"root_target_os_wait_status"});
+    fs::write(&sidecar, serde_json::to_vec(&input).unwrap()).unwrap();
+    let unknown = importers::import(&path, "samply", "outcome").unwrap();
+    assert!(
+        unknown
+            .records
+            .iter()
+            .all(|r| r["name"] != "process.wait_outcome")
+    );
+}

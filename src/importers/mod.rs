@@ -72,7 +72,7 @@ fn import_inner(
     let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let sidecars = sidecars(path, format);
     let mut digest = Sha256::new();
-    digest.update(b"hunin-import-v5\0");
+    digest.update(b"hunin-import-v6\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);

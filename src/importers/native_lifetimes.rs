@@ -16,6 +16,7 @@ const MAX_SIDECAR: u64 = 160 * 1024 * 1024;
 #[derive(Default)]
 pub(super) struct Timeline {
     collector: Value,
+    target_outcome: Option<Value>,
     epoch_ms: f64,
     instances: Vec<Instance>,
     samples: HashMap<String, Value>,
@@ -135,6 +136,51 @@ impl Timeline {
             complete: input["truncated"] == false,
             ..Self::default()
         };
+        if let Some(outcome) = input.get("target_outcome").filter(|v| !v.is_null()) {
+            let state = outcome["state"]
+                .as_str()
+                .context("native target outcome state missing")?;
+            ensure!(
+                ["exited", "signaled", "running", "unknown", "not_launched"].contains(&state),
+                "invalid native target outcome state"
+            );
+            ensure!(
+                outcome["source"] == "root_target_os_wait_status",
+                "unsupported native target outcome source"
+            );
+            if matches!(state, "exited" | "signaled") {
+                ensure!(
+                    outcome["pid"].as_u64().is_some_and(|pid| pid > 0),
+                    "native target outcome pid missing"
+                );
+                let wait = outcome["wait_observed_at_us"]
+                    .as_u64()
+                    .context("native wait observation time missing")?;
+                ensure!(
+                    wait <= 9_007_199_254_740_991,
+                    "native wait timestamp exceeds safe integer range"
+                );
+                if let Some(launch) = outcome["launch_observed_at_us"].as_u64() {
+                    ensure!(launch <= wait, "native wait precedes launch observation");
+                }
+                if state == "exited" {
+                    ensure!(
+                        outcome["exit_code"]
+                            .as_i64()
+                            .is_some_and(|v| i32::try_from(v).is_ok())
+                            && outcome["signal"].is_null(),
+                        "invalid native exit status"
+                    );
+                } else {
+                    ensure!(
+                        outcome["signal"].as_u64().is_some_and(|v| v > 0)
+                            && outcome["exit_code"].is_null(),
+                        "invalid native signal status"
+                    );
+                }
+            }
+            result.target_outcome = Some(outcome.clone());
+        }
         for event in events {
             if event["kind"] == "loss" || event["event"] == "events_lost" {
                 result.complete = false;
@@ -464,7 +510,7 @@ impl Timeline {
         )
     }
     pub fn records(&self, run: &str, key: &str) -> Result<Vec<Value>> {
-        self.instances.iter().map(|i| {
+        let records = self.instances.iter().map(|i| {
             let pid=os_pid(&i.process["pid"])?;
             let process_start=ms(&i.process["start_time_ms"])?;
             if i.end.is_some_and(|end|end<process_start) { return Ok(None); }
@@ -475,7 +521,25 @@ impl Timeline {
             }});
             if let Some(end)=i.end { record["duration_us"]=json!(checked_us((end-start)*1000.0,"native module duration")?); }
             Ok(Some(record))
-        }).collect::<Result<Vec<_>>>().map(|records|records.into_iter().flatten().collect())
+        }).collect::<Result<Vec<_>>>()?;
+        let mut records: Vec<_> = records.into_iter().flatten().collect();
+        if let Some(outcome) = &self.target_outcome {
+            if outcome["state"] == "exited" || outcome["state"] == "signaled" {
+                let pid = outcome["pid"].as_u64().unwrap();
+                let process = self
+                    .instances
+                    .iter()
+                    .find(|i| i.process["pid"].as_str() == Some(pid.to_string().as_str()))
+                    .map(|i| &i.process);
+                let producer = if let Some(process) = process {
+                    format!("profile:{key}:{pid}:{}", ms(&process["start_time_ms"])?)
+                } else {
+                    format!("profile:{key}:root-target:{pid}")
+                };
+                records.push(json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:root-target-outcome"),"run_id":run,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":outcome["wait_observed_at_us"],"basis":"observed","name":"process.wait_outcome","attributes":{"scope":"process","source_format":"samply-native-lifetimes","process_id_source":"root_target_os_wait_status","process_instance_id":process.map(|p|&p["key"]),"target_outcome":outcome,"clock":"unix_epoch","clock_alignment":"os_wait_wall_clock_observation","timestamp_semantics":"time the collector observed OS wait status; not exact process death time"}}));
+            }
+        }
+        Ok(records)
     }
 
     pub fn link_sample(
