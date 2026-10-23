@@ -51,9 +51,11 @@ fn decode_process(
     let epoch_ms = raw["meta"]["startTime"].as_f64();
     let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
     let mut process_lifetimes = HashSet::new();
-    for thread in raw["threads"]
+    for (thread_index, thread) in raw["threads"]
         .as_array()
         .context("Firefox processed profile has no threads")?
+        .iter()
+        .enumerate()
     {
         let pid = integer(&thread["pid"]).unwrap_or(0);
         let tid = thread["tid"]
@@ -65,6 +67,15 @@ fn decode_process(
             .map(|v| v.to_string())
             .unwrap_or_else(|| "unknown".into());
         let producer = format!("profile:{key}:{pid}:{lifetime}");
+        let thread_lifetime = thread_lifetime(
+            thread,
+            epoch_ms,
+            run_id,
+            &producer,
+            &format!("profile:{key}:thread:{pid}:{lifetime}:{tid}:{thread_index}"),
+        )?;
+        let thread_instance_id = thread_lifetime.as_ref().map(|r| r["id"].clone());
+        records.extend(thread_lifetime);
         if let (Some(start), Some(end)) = (relative_start, thread["processShutdownTime"].as_f64()) {
             if end < start {
                 bail!("Firefox process interval ends before it starts");
@@ -146,6 +157,9 @@ fn decode_process(
                 "Firefox sample time",
             )?;
             let mut attributes = json!({"source_format":"firefox","thread_name":thread["name"],"sampling_semantics":"OS stack samples; on/off CPU behavior depends on collector OS"});
+            if let Some(instance) = &thread_instance_id {
+                attributes["thread_instance_id"] = instance.clone();
+            }
             attributes["native_image_checks"] =
                 json!(image_checks.into_values().collect::<Vec<_>>());
             if epoch_ms.is_none() {
@@ -188,6 +202,46 @@ fn decode_process(
         decode_process(child, symbols, run_id, key, records, unresolved, images)?;
     }
     Ok(())
+}
+
+fn thread_lifetime(
+    thread: &Value,
+    epoch_ms: Option<f64>,
+    run_id: &str,
+    producer: &str,
+    id: &str,
+) -> Result<Option<Value>> {
+    let Some(start) = thread["registerTime"].as_f64() else {
+        return Ok(None);
+    };
+    let end = thread["unregisterTime"].as_f64();
+    if end.is_some_and(|end| end < start) {
+        bail!("Firefox thread interval ends before it starts");
+    }
+    let timestamp = checked_us(
+        (epoch_ms.unwrap_or(0.0) + start) * 1000.0,
+        "Firefox thread start",
+    )?;
+    let pid = integer(&thread["pid"]).unwrap_or(0);
+    let tid = thread["tid"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| thread["tid"].to_string());
+    let mut record = json!({"schema_version":1,"kind":if end.is_some() {"span"} else {"event"},"id":id,"run_id":run_id,"producer_id":producer,"pid":pid,"tid":tid,"timestamp_us":timestamp,"basis":"observed","name":"thread.observed_lifetime","attributes":{
+        "source_format":"firefox","scope":"thread","thread_name":thread["name"],
+        "boundary_basis":"profile_reported_observation","exact_event_timestamps":false,
+        "start_censoring":"unknown_from_processed_profile","end_censored":end.is_none(),
+        "register_time_ms":start,"unregister_time_ms":end,
+        "clock":if epoch_ms.is_some() {"unix_epoch"} else {"profile_relative"},
+        "clock_alignment":if epoch_ms.is_some() {"profile_start_epoch_plus_relative_time"} else {"unmapped"}
+    }});
+    if let Some(end) = end {
+        record["duration_us"] = json!(checked_us(
+            (end - start) * 1000.0,
+            "Firefox thread observed duration"
+        )?);
+    }
+    Ok(Some(record))
 }
 
 fn frame_info(
@@ -326,6 +380,48 @@ fn string_at<'a>(thread: &'a Value, index: &Value) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thread_lifetimes_preserve_reuse_and_censored_ends() {
+        let thread = |start, end| json!({"pid":"2","tid":"3","name":"worker","processStartupTime":1,"registerTime":start,"unregisterTime":end,"samples":{"stack":[],"time":[]}});
+        let raw = json!({"meta":{"startTime":1700000000000u64,"oscpu":"macOS"},"threads":[thread(json!(2),json!(5)),thread(json!(7),Value::Null)]});
+        let (records, _) = decode(
+            Path::new("missing.json"),
+            &raw,
+            "run",
+            "key",
+            &Images::default(),
+        )
+        .unwrap();
+        let scopes: Vec<_> = records
+            .iter()
+            .filter(|r| r["name"] == "thread.observed_lifetime")
+            .collect();
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0]["kind"], "span");
+        assert_eq!(scopes[0]["timestamp_us"], 1700000000002000u64);
+        assert_eq!(scopes[0]["duration_us"], 3000);
+        assert_eq!(
+            scopes[0]["attributes"]["boundary_basis"],
+            "profile_reported_observation"
+        );
+        assert_eq!(scopes[1]["kind"], "event");
+        assert!(scopes[1].get("duration_us").is_none());
+        assert_eq!(scopes[1]["attributes"]["end_censored"], true);
+        assert_ne!(scopes[0]["id"], scopes[1]["id"]);
+        crate::ingestion::validate("run", &records, &HashSet::new()).unwrap();
+        let mut invalid = raw.clone();
+        invalid["threads"][0]["unregisterTime"] = json!(1);
+        assert!(
+            decode(
+                Path::new("missing.json"),
+                &invalid,
+                "run",
+                "key",
+                &Images::default()
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn rejects_cyclic_stack_instead_of_looping() {
         let raw = json!({"meta":{"startTime":1},"threads":[{"pid":"2","tid":"3","samples":{"stack":[0],"time":[1]},"stackTable":{"frame":[0],"prefix":[0]}}]});
