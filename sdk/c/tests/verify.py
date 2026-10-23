@@ -1,0 +1,31 @@
+"""Check real C/C++ recording behavior without writing into the repository."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+with tempfile.TemporaryDirectory(prefix="hunin-sdk-c-") as directory:
+    result = subprocess.run([sys.argv[1]], env=dict(os.environ, HUNIN_RUN_ID="sdk-contract", HUNIN_RECORD_DIR=directory),
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for path in Path(directory).glob("*.jsonl") for line in path.read_text().splitlines()]
+    contexts = [row for row in rows if row["kind"] == "context"]
+    parents = {row["id"]: row for row in rows if row["kind"] == "span" and row["name"] == "parent"}
+    children = [row for row in rows if row["kind"] == "span" and row["name"] == "child"]
+    assert len(contexts) == 1 and len(parents) == len(children) == 4, rows
+    identifiers = {row["id"] for row in rows}
+    assert len(identifiers) == len(rows), "duplicate record IDs"
+    for child in children:
+        parent = parents[child["parent_id"]]
+        assert child["context_id"] == parent["context_id"] == contexts[0]["id"]
+        assert child["duration_us"] <= parent["duration_us"]
+    for row in rows:
+        assert row["run_id"] == "sdk-contract"
+        for key in ("parent_id", "context_id", "from", "to"):
+            if key in row:
+                assert row[key] in identifiers, (key, row)
+    assert len([row for row in rows if row["kind"] == "metric"]) == 4
+    assert len([row for row in rows if row["kind"] == "relation"]) == 4
+    print("C/C++ contexts, spans, counters, relations and threaded flush verified")
