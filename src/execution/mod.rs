@@ -209,7 +209,10 @@ impl Engine {
         fs::create_dir_all(directory.join("sdk"))?;
         crate::source::retain(&self.store, &mut run)?;
         let mut capture_command = run.command.clone();
-        if let Some(path) = run.source["executable"].as_str() {
+        if let Some(path) = run.source["launch_executable"]
+            .as_str()
+            .or_else(|| run.source["executable"].as_str())
+        {
             capture_command[0] = path.to_owned();
         }
         let capture = CaptureRequest {

@@ -50,6 +50,9 @@ pub fn source(cwd: &Path, command: &[String], data_root: Option<&Path>) -> Value
             }
         }
     }
+    let launch_executable = command
+        .first()
+        .and_then(|s| resolve_with_environment(s, cwd, &BTreeMap::new()));
     let executable = command.first().and_then(|s| resolve(s, cwd));
     let executable_hash = executable.as_ref().and_then(|p| file_hash(p).ok());
     let mut snapshot_complete = true;
@@ -62,7 +65,7 @@ pub fn source(cwd: &Path, command: &[String], data_root: Option<&Path>) -> Value
         hash = Sha256::new();
         hash.update(serde_json::to_vec(&files).unwrap());
     }
-    json!({"revision":revision,"dirty":status.as_ref().map(|s|!s.is_empty()),"fingerprint":if complete{format!("{:x}",hash.finalize())}else{"unknown".into()},"source_snapshot_complete":snapshot_complete,"source_snapshot_scope":"bounded project source/config files; dependency/build/cache and Hunin data directories excluded","source_files":files,"executable":executable,"executable_sha256":executable_hash,"build_source_verified":false,"diagnostic":"Source snapshot identity and launched executable identity are recorded separately; their build relationship and dynamically loaded code are not assumed. Incomplete/absent source snapshots remain unknown."})
+    json!({"revision":revision,"dirty":status.as_ref().map(|s|!s.is_empty()),"fingerprint":if complete{format!("{:x}",hash.finalize())}else{"unknown".into()},"source_snapshot_complete":snapshot_complete,"source_snapshot_scope":"bounded project source/config files; dependency/build/cache and Hunin data directories excluded","source_files":files,"launch_executable":launch_executable,"executable":executable,"executable_sha256":executable_hash,"build_source_verified":false,"diagnostic":"Source snapshot identity and launched executable identity are recorded separately; their build relationship and dynamically loaded code are not assumed. Incomplete/absent source snapshots remain unknown."})
 }
 
 fn file_hash(path: &Path) -> std::io::Result<String> {
@@ -161,9 +164,12 @@ fn snapshot(
 }
 
 pub fn resolve(name: &str, cwd: &Path) -> Option<PathBuf> {
-    resolve_with_environment(name, cwd, &BTreeMap::new())
+    resolve_with_environment(name, cwd, &BTreeMap::new()).and_then(|path| path.canonicalize().ok())
 }
 
+/// Resolve the path used to launch a program. Following its final symlink can
+/// change interpreter semantics, including Python virtual-environment discovery.
+/// Physical executable identity is resolved separately by `resolve`.
 pub fn resolve_with_environment(
     name: &str,
     cwd: &Path,
@@ -171,7 +177,8 @@ pub fn resolve_with_environment(
 ) -> Option<PathBuf> {
     let p = Path::new(name);
     if p.is_absolute() || p.components().count() > 1 {
-        return cwd.join(p).canonicalize().ok();
+        let path = cwd.join(p);
+        return path.is_file().then_some(path);
     }
     let names = if cfg!(windows) && p.extension().is_none() {
         overrides
@@ -208,7 +215,6 @@ pub fn resolve_with_environment(
         })
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|p| p.is_file())
-        .and_then(|p| p.canonicalize().ok())
 }
 
 pub fn environment(overrides: &BTreeMap<String, String>) -> anyhow::Result<Value> {
@@ -329,6 +335,28 @@ pub fn workload_inputs(cwd: &Path, paths: &[PathBuf]) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn launch_resolution_rejects_directories_and_keeps_relative_path_search() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("programs")).unwrap();
+        let binary = if cfg!(windows) { "work.EXE" } else { "work" };
+        let launch = root.path().join("programs").join(binary);
+        fs::write(&launch, "controlled executable bytes").unwrap();
+        let overrides = BTreeMap::from([
+            ("PATH".into(), "programs".into()),
+            ("PATHEXT".into(), ".EXE;.COM".into()),
+        ]);
+        assert_eq!(
+            resolve_with_environment("work", root.path(), &overrides),
+            Some(launch)
+        );
+        assert!(resolve_with_environment("./programs", root.path(), &overrides).is_none());
+        assert!(
+            resolve_with_environment(root.path().to_str().unwrap(), root.path(), &overrides)
+                .is_none()
+        );
+    }
+
     #[test]
     fn non_git_source_changes_have_distinct_snapshot_identity() {
         let root = tempfile::tempdir().unwrap();
