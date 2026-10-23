@@ -21,6 +21,7 @@ class VmprofCaptureTest(unittest.TestCase):
                 cwd=root, capture_output=True, text=True,
             )
             self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(result.stdout, "", "collector setup must not add output to the workload")
             self.assertTrue(profile.exists())
             self.assertTrue(profile.with_suffix(".vmprof.meta.json").exists())
 

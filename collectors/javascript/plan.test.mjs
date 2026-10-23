@@ -21,13 +21,14 @@ test('capture planning runs when the installed collector is reached through a di
 });
 
 test('target environment composes with profiling and selects the requested runtime through PATH', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'hunin-plan-env-'));
+  const directory = mkdtempSync(join(tmpdir(), 'hunin plan env '));
   try {
     const executableDirectory = join(directory, 'runtime');
     symlinkSync(dirname(process.execPath), executableDirectory, process.platform === 'win32' ? 'junction' : 'dir');
     const capture = plan({ command: ['node', '-e', 'console.log(JSON.stringify([process.env.HUNIN_ENV_TEST,process.execArgv,process.env.NODE_OPTIONS]))'], cwd: directory, artifact_dir: directory, run_id: 'target-env', runtime: 'node', env: { PATH: executableDirectory, HUNIN_ENV_TEST: 'requested-value', NODE_OPTIONS: '--stack-trace-limit=42' } });
     assert.ok(capture.env.NODE_OPTIONS.startsWith('--stack-trace-limit=42 '));
     assert.match(capture.env.NODE_OPTIONS, /--cpu-prof/);
+    assert.match(capture.env.NODE_OPTIONS, /--import="file:\/\//, 'ESM preloads require file URLs on Windows');
     assert.equal(capture.env.PATH, executableDirectory);
     const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);

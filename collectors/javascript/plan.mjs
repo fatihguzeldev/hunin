@@ -33,7 +33,7 @@ export function plan(request) {
     diagnostics.push('Bun workers are sampled through Inspector preloads; worker termination waits up to 100ms for a profiling flush. Forced process termination can leave the current segment incomplete.');
   } else if (runtime === 'node') {
     const preload = fileURLToPath(new URL('./clock-preload.mjs', import.meta.url));
-    env.NODE_OPTIONS = `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(preload)}`.trim();
+    env.NODE_OPTIONS = `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(pathToFileURL(preload).href)}`.trim();
     launched = [...command];
   } else {
     const preload = fileURLToPath(new URL('./clock-preload.mjs', import.meta.url));
