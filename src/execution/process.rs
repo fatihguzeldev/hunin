@@ -23,7 +23,12 @@ pub async fn spawn(command: &mut Command) -> Result<(Child, ProcessTree)> {
     #[cfg(windows)]
     {
         let mut child = child;
-        match windows::attach(&child, pid) {
+        match windows::attach(
+            child
+                .raw_handle()
+                .context("suspended child process handle missing")?,
+            pid,
+        ) {
             Ok(job) => {
                 return Ok((
                     child,
@@ -38,6 +43,52 @@ pub async fn spawn(command: &mut Command) -> Result<(Child, ProcessTree)> {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 return Err(error.context("assign suspended recording process to its Windows Job"));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    Ok((child, ProcessTree { pid, active: true }))
+}
+
+pub(crate) fn spawn_std(
+    command: &mut std::process::Command,
+) -> Result<(std::process::Child, ProcessTree)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(
+            windows_sys::Win32::System::Threading::CREATE_SUSPENDED
+                | windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
+        );
+    }
+    let child = command.spawn().context("launch bounded collector probe")?;
+    let pid = child.id();
+    #[cfg(windows)]
+    {
+        let mut child = child;
+        use std::os::windows::io::AsRawHandle;
+        match windows::attach(child.as_raw_handle(), pid) {
+            Ok(job) => {
+                return Ok((
+                    child,
+                    ProcessTree {
+                        pid,
+                        job,
+                        active: true,
+                    },
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Err(error.context("assign suspended collector probe to Windows Job"));
             }
         }
     }
@@ -108,14 +159,13 @@ impl Drop for ProcessTree {
 
 #[cfg(windows)]
 mod windows {
-    use anyhow::{Context, Result, bail};
+    use anyhow::{Result, bail};
     use std::{
         io,
         mem::{size_of, zeroed},
         os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
         ptr,
     };
-    use tokio::process::Child;
     use windows_sys::Win32::{
         Foundation::{HANDLE, INVALID_HANDLE_VALUE},
         System::{
@@ -139,7 +189,7 @@ mod windows {
         Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
     }
 
-    pub fn attach(child: &Child, pid: u32) -> Result<OwnedHandle> {
+    pub fn attach(process: HANDLE, pid: u32) -> Result<OwnedHandle> {
         unsafe {
             let job = owned(CreateJobObjectW(ptr::null(), ptr::null()))?;
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
@@ -153,9 +203,6 @@ mod windows {
             {
                 return Err(io::Error::last_os_error().into());
             }
-            let process = child
-                .raw_handle()
-                .context("suspended child process handle missing")?;
             if AssignProcessToJobObject(job.as_raw_handle(), process) == 0 {
                 return Err(io::Error::last_os_error().into());
             }

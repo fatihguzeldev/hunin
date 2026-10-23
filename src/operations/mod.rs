@@ -60,7 +60,9 @@ impl Operations {
             .transpose()?
             .unwrap_or(0);
         match name {
-            "capabilities" => Ok(capabilities::discover()),
+            "capabilities" => tokio::task::spawn_blocking(capabilities::discover)
+                .await
+                .context("capability discovery task failed"),
             "runs.list" => {
                 let mut runs = store.runs(limit + 1, cursor)?;
                 let more = runs.len() > limit;

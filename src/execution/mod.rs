@@ -226,7 +226,10 @@ impl Engine {
                 runtime_version: None,
             }
         } else {
-            collection::prepare(&capture)?
+            let planning = capture.clone();
+            tokio::task::spawn_blocking(move || collection::prepare(&planning))
+                .await
+                .context("collector planning task failed")??
         };
         let normalize = |value: &str| {
             value
