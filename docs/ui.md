@@ -28,6 +28,8 @@ The recording views cover these tasks:
 
 Source locations are tied to the measured recording and carry their measured code identity when available. The inspector distinguishes retained project snapshots, retained source-map content, and current files; verified source bytes remain distinct from an unverified relationship to the loaded build. Mapping provenance and backend diagnostics remain visible even when snapshot bytes are verified. Retained virtual source URIs can be inspected without treating them as filesystem paths or fetching a remote URL. The current editor source is not silently presented as the measured build. Missing samples, unavailable observations, failed collection, and derived relationships remain distinct states.
 
+Native module observations show the module, process instance and load instance in their labels, so unloading and reloading the same library remain distinct. Their inspector retains observed boundary windows, censored endpoints, address ranges and library identity; a recorded mapping interval does not measure execution time in that module. Sample inspectors expose accepted code-instance references and unresolved mapping reasons. Evidence relationships link samples to their recorded module instances without converting missing bounds into exact loader timestamps.
+
 ## Navigation and access
 
 Run and view selection live in the URL, so browser Back/Forward restores navigation. Interactive controls are native buttons, inputs, and selects, with visible focus states. The layout uses a horizontal recording rail on narrow screens and scrollable data tables instead of squeezing evidence into unreadable columns. Loading, empty, and operation failure states retain useful explanations and retry controls.

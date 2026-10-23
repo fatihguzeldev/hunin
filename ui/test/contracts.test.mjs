@@ -105,3 +105,19 @@ test('profile reanalysis actions exclude SDK spools and analyzer output artifact
   for (const format of ['samply', 'v8-cpuprofile', 'vmprof', 'go-pprof', 'go-trace', 'graal-cpusampler']) assert.equal(canReanalyze(format), true);
   for (const format of ['hunin-jsonl', 'jsonl', 'stdout', 'analysis-output', 'source', 'native-image', 'profile-sidecar']) assert.equal(canReanalyze(format), false);
 });
+
+test('native lifetime labels retain instance identity and unknown mapping evidence', async () => {
+  const { observationLabel, referenceIds, nativeEvidenceRows } = await moduleFrom('../src/observation.ts');
+  const first = { name: 'module.observed_lifetime', pid: 7, attributes: { scope: 'module', module: '/tmp/libA.dylib', process_instance_id: 'p1', mapping_instance_id: 'load1', start_censored: true, end_censored: false, start_window_ms: [null, 3], exact_event_timestamps: false } };
+  const again = { ...first, attributes: { ...first.attributes, mapping_instance_id: 'load3' } };
+  assert.equal(observationLabel(first), 'libA.dylib · p1/load1');
+  assert.notEqual(observationLabel(first), observationLabel(again));
+  assert.ok(nativeEvidenceRows(first).some(([name, value]) => name.startsWith('Start window') && value === '[null,3]'));
+  assert.ok(nativeEvidenceRows(first).some(([name, value]) => name === 'Exact event timestamps' && value === 'false'));
+  const sample = { evidence: ['raw'], attributes: { native_load_instances: [
+    { record_id: 'module-1', load_id: 'load1' }, { record_id: null, reason: 'mapping_unresolved' }, { record_id: 'module-1' },
+  ] } };
+  assert.deepEqual(referenceIds(sample), ['raw', 'module-1']);
+  assert.ok(nativeEvidenceRows(sample).some(([, value]) => value.includes('mapping_unresolved')));
+  assert.deepEqual(nativeEvidenceRows({ attributes: { native_mapping_status: 'sample_link_unavailable' } }), [['Native mapping status', 'sample_link_unavailable']]);
+});

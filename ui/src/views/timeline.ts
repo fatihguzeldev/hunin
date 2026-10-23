@@ -4,6 +4,8 @@ import { duration, numeric } from '../format';
 import type { Observation } from '../record.generated';
 import type { ViewContext } from '../workspace';
 import { hasInspectableSource } from '../source-path';
+import { isModuleLifetime, observationLabel, referenceIds } from '../observation';
+import { nativeEvidence } from '../native-evidence';
 
 export async function timeline(context: ViewContext): Promise<HTMLElement> {
   const canvas = el('div');
@@ -45,10 +47,11 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
   }
   function inspect(record: Observation): void {
     const source = record.stack?.find(frame => hasInspectableSource(frame.file, frame.code_id));
-    const references = [...new Set([record.context_id, record.parent_id, record.from, record.to, ...(record.evidence ?? [])].filter((id): id is string => Boolean(id)))];
+    const references = referenceIds(record);
     detail.replaceChildren(el('section', { class: 'panel' },
-      el('div', { class: 'panel-head' }, el('h2', {}, record.name ?? record.stack?.at(-1)?.function ?? record.kind), badge(record.basis), badge(record.kind)),
+      el('div', { class: 'panel-head' }, el('h2', {}, observationLabel(record)), badge(record.basis), badge(record.kind)),
       el('div', { class: 'panel-body stack' }, source ? button(`Open ${source.file}:${source.line ?? ''}`, () => context.source(source.file!, source.line, source.code_id), 'text-button mono') : null,
+        nativeEvidence(record),
         references.length ? el('div', { class: 'toolbar' }, ...references.map(id => button(`Open reference ${id}`, () => {
           void operation('evidence.get', { run_id: context.run.id, ids: [id] }).then(data => {
             if (data.records.length) inspect(data.records[0]);
@@ -56,6 +59,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
           }).catch(error => detail.append(errorView(error, () => inspect(record))));
         }, 'button small mono'))) : null,
         el('pre', {}, JSON.stringify(record, null, 2)))));
+    detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
   async function load(): Promise<void> {
     const version = ++epoch;
@@ -91,7 +95,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
           let row = ends.findIndex(end => end <= start);
           if (row < 0) row = ends.length;
           ends[row] = start + width;
-          const label = record.name ?? record.stack?.at(-1)?.function ?? record.kind;
+          const label = observationLabel(record);
           const mark = button(label, () => inspect(record), `timeline-event ${record.kind === 'context' || record.kind === 'span' ? 'context' : ''}`);
           mark.title = `${label} · ${record.kind} · ${record.basis}`;
           mark.style.left = `${start}%`;
@@ -103,7 +107,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
         graph.append(el('div', { class: 'timeline-track' }, el('div', { class: 'track-label mono' }, `PID / thread\n${name}`), lane));
       }
       const rows = el('tbody', {}, ...data.records.map(record => el('tr', {},
-        el('td', {}, button(record.name ?? record.stack?.at(-1)?.function ?? record.kind, () => inspect(record), 'text-button mono')),
+        el('td', {}, button(observationLabel(record), () => inspect(record), 'text-button mono'), isModuleLifetime(record) ? el('small', { class: 'source-label' }, 'Observed mapping bounds') : null),
         el('td', {}, badge(record.kind)), el('td', {}, badge(record.basis)),
         el('td', { class: 'numeric' }, unmappedView || record.attributes?.clock_alignment === 'unmapped' ? 'Unmapped clock' : duration((record.timestamp_us - origin) * 1_000)),
         el('td', { class: 'numeric' }, record.duration_us === undefined ? '—' : duration(record.duration_us * 1_000)))));

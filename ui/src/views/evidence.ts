@@ -5,6 +5,8 @@ import type { Observation } from '../record.generated';
 import type { ViewContext } from '../workspace';
 import { hasInspectableSource } from '../source-path';
 import { canReanalyze } from '../artifact';
+import { observationLabel, referenceIds } from '../observation';
+import { nativeEvidence } from '../native-evidence';
 
 export async function source(run: Run, path: string, line?: number, codeId?: string): Promise<HTMLElement> {
   const data = await operation('source.read', { run_id: run.id, path, line, code_id: codeId, count: 120 });
@@ -30,6 +32,11 @@ export async function evidence(context: ViewContext, cursor?: string): Promise<H
   const body = el('div', { class: 'stack' });
   const inspector = el('div');
   const names = new Map(relationships.contexts.map(record => [record.id, record.name ?? record.id]));
+  const moduleIds = [...new Set(relationships.relations.filter(record => record.relation === 'sampled_in_code_instance').map(record => record.to).filter((id): id is string => typeof id === 'string'))].slice(0, 100);
+  if (moduleIds.length) {
+    const modules = await operation('evidence.get', { run_id: context.run.id, ids: moduleIds });
+    modules.records.forEach(record => names.set(record.id, observationLabel(record)));
+  }
   function resolve(id: string): void {
     void operation('evidence.get', { run_id: context.run.id, ids: [id] }).then(data => {
       if (!data.records.length) inspector.append(el('p', { class: 'notice' }, `Evidence ${id} is unavailable in this recording.`));
@@ -37,10 +44,12 @@ export async function evidence(context: ViewContext, cursor?: string): Promise<H
     }).catch(error => inspector.append(errorView(error, () => resolve(id))));
   }
   function inspect(record: Observation): void {
-    const references = [...new Set([...(record.evidence ?? []), record.context_id, record.parent_id, record.from, record.to].filter((id): id is string => Boolean(id)))];
+    const references = referenceIds(record);
     const frame = record.stack?.find(value => hasInspectableSource(value.file, value.code_id));
-    inspector.replaceChildren(el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, record.name ?? record.id), badge(record.basis)),
+    const native = nativeEvidence(record);
+    inspector.replaceChildren(el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, observationLabel(record)), badge(record.basis)),
       frame ? el('div', { class: 'panel-body' }, button(`Open ${frame.file}:${frame.line ?? ''}`, () => context.source(frame.file!, frame.line, frame.code_id), 'text-button mono')) : null,
+      native ? el('div', { class: 'panel-body' }, native) : null,
       el('pre', { class: 'panel-body' }, JSON.stringify(record, null, 2)),
       references.length ? el('div', { class: 'panel-body toolbar' }, ...references.map(id => button(`Open evidence ${id}`, () => resolve(id), 'button small mono'))) : null));
     inspector.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
