@@ -45,7 +45,7 @@ On Windows, run `py install.py`. The default is `%LOCALAPPDATA%\hunin\<version>-
 
 - Native Rust/C/C++ and Go automatic stack collection uses `samply`; retain debug symbols and measured binaries. Linux additionally needs a usable perf configuration, Windows ETW collection may need elevation, and macOS restricts protected system targets.
 - Node.js and Deno use their V8 CPU profiling routes. Bun uses its own JavaScriptCore profile route. Their control and worker coverage differ; consult the collection path documentation before selecting a mode.
-- CPython and PyPy require the supported `vmprof` package in the target interpreter. Decoding uses the configured decoder interpreter or Hunin-managed environment; it does not replace the target interpreter.
+- On Unix, CPython and PyPy require the supported `vmprof` package in the target interpreter. Decoding uses the configured decoder interpreter or Hunin-managed environment; it does not replace the target interpreter. On Windows the CPU route uses OS-thread CPU progress and Python stack sampling without a vmprof dependency; verify the current host evidence and its native attribution gaps in the support guide. Imported Windows vmprof wall snapshots remain distinct from CPU samples.
 - GraalPy requires its CPU sampler tooling and a compatible distribution/execution mode. An interpreter name alone is not a capability guarantee.
 
 Always inspect capabilities before recording on a new host. Missing permissions and collectors must remain visible rather than producing an apparently successful empty CPU profile.

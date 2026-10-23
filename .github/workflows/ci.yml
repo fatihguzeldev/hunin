@@ -122,10 +122,13 @@ jobs:
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-trace --output collector-evidence/go-trace
       - name: Install target Python sampling dependency
         id: vmprof
-        if: always() && steps.build.outcome == 'success'
+        if: always() && steps.build.outcome == 'success' && runner.os != 'Windows'
         run: python -m pip install vmprof==0.6.0
+      - name: Verify CPU-progress Python stack sampling and native attribution gaps
+        if: always() && steps.build.outcome == 'success'
+        run: python -m unittest discover -s collectors/python -p test_cpu.py
       - name: Verify automatic CPython collection
-        if: always() && steps.build.outcome == 'success' && steps.vmprof.outcome == 'success'
+        if: always() && steps.build.outcome == 'success' && (runner.os == 'Windows' || steps.vmprof.outcome == 'success')
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime cpython --executable python --output collector-evidence/cpython
       - name: Install checksum-pinned Bun
         id: bun
@@ -167,13 +170,16 @@ jobs:
         run: python distribution/fetch_runtime.py pypy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/pypy" --github-env
       - name: Prepare PyPy sampling dependency
         id: pypy-vmprof
-        if: always() && steps.pypy.outcome == 'success'
+        if: always() && steps.pypy.outcome == 'success' && runner.os != 'Windows'
         run: |
           python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','ensurepip'],check=True)"
           python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','pip','install','vmprof==0.6.0'],check=True)"
       - name: Verify automatic PyPy collection
-        if: always() && steps.pypy-vmprof.outcome == 'success'
+        if: always() && steps.pypy.outcome == 'success' && (runner.os == 'Windows' || steps.pypy-vmprof.outcome == 'success')
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime pypy --executable "${{ env.HUNIN_TEST_PYPY }}" --output collector-evidence/pypy
+      - name: Verify CPU-progress stack sampling with the actual PyPy interpreter
+        if: always() && steps.pypy.outcome == 'success'
+        run: python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','unittest','discover','-s','collectors/python','-p','test_cpu.py'],check=True)"
       - name: Verify PyPy SDK public API
         if: always() && steps.pypy.outcome == 'success'
         run: python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','unittest','discover','-s','sdk/python'],check=True)"
@@ -201,9 +207,13 @@ jobs:
         id: bundle
         if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success'
         run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist
-      - name: Verify extracted bundle installation, SDK recording, retained source and adjacent UI
+      - name: Verify installed CLI, MCP, SDK, durable analyzer, comparison and adjacent UI
+        id: installed
         if: always() && steps.bundle.outcome == 'success'
         run: python -c "from pathlib import Path; import subprocess,sys; archives=[p for p in Path('dist').iterdir() if p.name.endswith(('.tar.gz','.zip'))]; assert len(archives)==1,archives; subprocess.run([sys.executable,'distribution/verify_install.py','--archive',str(archives[0]),'--output','collector-evidence/installed-bundle'],check=True)"
+      - name: Verify installed C SDK context around automatically sampled native work
+        if: always() && steps.installed.outcome == 'success' && steps.samply.outcome == 'success'
+        run: python -c "from pathlib import Path; import subprocess,sys; roots=list(Path('collector-evidence/installed-bundle/installed').iterdir()); assert len(roots)==1,roots; subprocess.run([sys.executable,'distribution/verify_native_sdk.py','--installed',str(roots[0]),'--output','collector-evidence/installed-native-sdk'],check=True)"
       - uses: actions/cache/save@v4
         if: always() && steps.build.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
         with:

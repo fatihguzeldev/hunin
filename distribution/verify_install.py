@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -15,7 +16,29 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import zipfile
+from mcp_control import verify_mcp
+
+
+def adjacent_import(options, installed):
+    """Compare parsed file identities, including percent-encoded file URLs."""
+    tokens = shlex.split(options)
+    imports = [value.split("=", 1)[1] for value in tokens if value.startswith("--import=")]
+    imports.extend(tokens[index + 1] for index, value in enumerate(tokens[:-1]) if value == "--import")
+    for value in imports:
+        uri = urllib.parse.urlsplit(value)
+        if uri.scheme == "file":
+            path = urllib.request.url2pathname(uri.path)
+            if uri.netloc and uri.netloc != "localhost":
+                path = f"//{uri.netloc}{path}"
+        elif not uri.scheme or Path(value).is_absolute():
+            path = value
+        else:
+            continue
+        if Path(path).resolve().is_relative_to(installed.resolve()):
+            return True
+    return False
 
 
 def execute(command, work, env):
@@ -77,7 +100,7 @@ def verify(archive, output):
         if run["status"] != "completed" or run["correctness"]["passed"] is not True or result["summary"]["sample_count"] == 0 or result["summary"]["span_count"] == 0:
             raise RuntimeError(f"Installed recording failed the profiling/SDK/output control: {result}")
         options = run["source"].get("collector_settings", {}).get("environment", {}).get("NODE_OPTIONS", "")
-        if str(installed).replace("\\", "/") not in options.replace("\\", "/"):
+        if not adjacent_import(options, installed):
             raise RuntimeError("Installed collector unexpectedly used assets outside its bundle")
         def call(operation, params):
             return json.loads(execute([binary, "--data-dir", data, "call", operation, json.dumps(params)], work, environment))
@@ -89,11 +112,15 @@ def verify(archive, output):
             raise RuntimeError("Bundled SDK context did not reach accepted storage")
         source.rename(work / "retained-original.mjs")
         retained = call("source.read", {"run_id": run["id"], "path": str(source), "line": 2, "count": 3})
-        if retained.get("source_kind") != "recorded_snapshot" or retained.get("identity_verified") is not True or "installedBundleHotspot" not in retained["content"]:
+        if retained.get("source_kind") not in ("recorded_snapshot", "recorded_source_map") or retained.get("identity_verified") is not True or "installedBundleHotspot" not in retained["content"]:
             raise RuntimeError("Installed recording lost the measured source snapshot")
         reopened = json.loads(execute([binary, "--data-dir", data, "inspect", run["id"]], work, environment))
         if reopened["summary"] != result["summary"]:
             raise RuntimeError("Installed recording summary changed after reopening")
+        mcp = verify_mcp(binary, data, work, environment, output, run["id"], source, hashlib.sha256(b"installed control ok\n").hexdigest())
+        mcp_reopened = json.loads(execute([binary, "--data-dir", data, "inspect", mcp["run_id"]], work, environment))
+        if mcp_reopened["summary"] != mcp["summary"]:
+            raise RuntimeError("MCP recording or accepted analyzer output changed after reopening through CLI")
         port = unused_port()
         with (output / "server.stdout.txt").open("wb") as stdout, (output / "server.stderr.txt").open("wb") as stderr:
             server = subprocess.Popen([str(binary), "--data-dir", str(data), "ui", "--bind", f"127.0.0.1:{port}"], cwd=work, env=environment, stdout=stdout, stderr=stderr)
@@ -131,6 +158,7 @@ def verify(archive, output):
         evidence = {"host": platform.platform(), "architecture": platform.machine(), "platform": manifest["platform"], "bundle_sha256": actual,
                     "run_id": run["id"], "summary": result["summary"], "correctness": run["correctness"], "source_snapshot_verified": True,
                     "adjacent_ui_assets": assets, "adjacent_collectors_and_sdk_verified": True}
+        evidence["mcp"] = mcp
         (output / "evidence.json").write_text(json.dumps(evidence, indent=2))
         (output / "run.json").write_text(json.dumps(result, indent=2))
         return evidence

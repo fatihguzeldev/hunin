@@ -280,7 +280,31 @@ async fn locked_python_dependencies_install_into_an_isolated_managed_environment
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(accepted["status"], "accepted", "{accepted}");
+    let setup_errors = fixture
+        .store
+        .artifacts("recording")
+        .unwrap()
+        .into_iter()
+        .filter(|artifact| {
+            artifact.name.starts_with("setup-") && artifact.name.ends_with(".stderr")
+        })
+        .map(|artifact| {
+            String::from_utf8_lossy(
+                &fs::read(
+                    fixture
+                        .store
+                        .artifact_path("recording", &artifact.id)
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .into_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        accepted["status"], "accepted",
+        "{accepted}; dependency stderr: {setup_errors:?}"
+    );
     assert_eq!(fixture.store.records("recording").unwrap().len(), 3);
 }
 
