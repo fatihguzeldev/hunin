@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 fn number(v: &Value, field: &str) -> f64 {
@@ -82,10 +83,15 @@ struct Tree {
     own: f64,
     total: f64,
     children: BTreeMap<String, Tree>,
+    depth_truncated: bool,
 }
 impl Tree {
-    fn add(&mut self, stack: &[Value], weight: f64) {
+    fn add(&mut self, stack: &[Value], weight: f64, remaining: usize) {
         self.total += weight;
+        if remaining == 0 && !stack.is_empty() {
+            self.depth_truncated = true;
+            return;
+        }
         if let Some((frame, rest)) = stack.split_first() {
             self.children
                 .entry(function_identity(frame))
@@ -93,28 +99,87 @@ impl Tree {
                     frame: frame.clone(),
                     ..Default::default()
                 })
-                .add(rest, weight);
+                .add(rest, weight, remaining - 1);
         } else {
             self.own += weight;
         }
     }
-    fn value(self) -> Value {
-        let mut children: Vec<Value> = self.children.into_values().map(Tree::value).collect();
-        children.sort_by(|a, b| number(b, "total_weight").total_cmp(&number(a, "total_weight")));
-        json!({"name":self.frame["function"],"file":self.frame["file"],"line":self.frame["line"],"module":self.frame["module"],"code_id":self.frame["code_id"],"source_position_basis":"first observed sampled position","self_weight":self.own,"total_weight":self.total,"children":children})
+    fn value(self, budget: &mut usize, depth: usize) -> Option<Value> {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let id = frame_id(&self.frame);
+        let count = self.children.len();
+        let mut candidates = self.children.into_values().collect::<Vec<_>>();
+        candidates.sort_by(|a, b| b.total.total_cmp(&a.total));
+        let mut children = Vec::new();
+        if depth > 0 {
+            for child in candidates {
+                if let Some(value) = child.value(budget, depth - 1) {
+                    children.push(value);
+                }
+                if *budget == 0 {
+                    break;
+                }
+            }
+        }
+        Some(
+            json!({"id":id,"name":self.frame["function"],"file":self.frame["file"],"line":self.frame["line"],"module":self.frame["module"],"code_id":self.frame["code_id"],"source_position_basis":"first observed sampled position","self_weight":self.own,"total_weight":self.total,"child_count":count,"children_truncated":children.len()<count||self.depth_truncated,"depth_truncated":self.depth_truncated,"children":children}),
+        )
     }
 }
+fn frame_id(frame: &Value) -> String {
+    format!(
+        "frame:{:x}",
+        Sha256::digest(function_identity(frame).as_bytes())
+    )
+}
+
 pub fn tree(records: &[Value], requested_unit: &str) -> Value {
-    let selected = unit(records, requested_unit);
+    tree_page(records, &json!({"weight_unit":requested_unit,"limit":5000}))
+}
+
+pub fn tree_page(records: &[Value], params: &Value) -> Value {
+    let selected = unit(records, params["weight_unit"].as_str().unwrap_or(""));
+    let path = params["path"].as_array().cloned().unwrap_or_default();
     let mut tree = Tree::default();
-    for r in records
+    for record in records
         .iter()
         .filter(|r| r["kind"] == "sample" && r["weight_unit"] == selected)
     {
-        if let Some(stack) = r["stack"].as_array() {
-            tree.add(stack, number(r, "weight"));
+        if let Some(stack) = record["stack"].as_array() {
+            if stack.len() >= path.len()
+                && path
+                    .iter()
+                    .zip(stack)
+                    .all(|(id, frame)| id.as_str() == Some(frame_id(frame).as_str()))
+            {
+                tree.add(&stack[path.len()..], number(record, "weight"), 128);
+            }
         }
     }
-    let v = tree.value();
-    json!({"roots":v["children"],"weight_unit":selected})
+    let total = tree.total;
+    let own = tree.own;
+    let mut roots = tree.children.into_values().collect::<Vec<_>>();
+    roots.sort_by(|a, b| b.total.total_cmp(&a.total));
+    let available = roots.len();
+    let offset = params["cursor"]
+        .as_str()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let limit = params["limit"].as_u64().unwrap_or(1000).clamp(1, 5000) as usize;
+    let depth = params["depth_limit"].as_u64().unwrap_or(32).clamp(1, 128) as usize;
+    let mut budget = limit;
+    let mut values = Vec::new();
+    for root in roots.into_iter().skip(offset) {
+        if let Some(value) = root.value(&mut budget, depth - 1) {
+            values.push(value);
+        }
+        if budget == 0 {
+            break;
+        }
+    }
+    let next = offset.saturating_add(values.len());
+    json!({"roots":values,"weight_unit":selected,"total_weight":total,"scope_self_weight":own,"path":path,"returned_nodes":limit-budget,"root_count":available,"next_cursor":if next<available{Some(next.to_string())}else{None},"node_limit":limit,"depth_limit":depth,"diagnostics":["Bounded tree: follow node IDs in path to inspect omitted children; cursor pages root siblings. Sampled weights are not exact call durations."]})
 }

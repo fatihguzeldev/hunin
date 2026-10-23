@@ -92,10 +92,7 @@ impl Operations {
                 params["weight_unit"].as_str().unwrap_or(""),
                 limit,
             )),
-            "profiles.tree" => Ok(query::tree(
-                &store.records(id()?)?,
-                params["weight_unit"].as_str().unwrap_or(""),
-            )),
+            "profiles.tree" => Ok(query::tree_page(&store.records(id()?)?, &params)),
             "timeline.query" => Ok(query::timeline(&store.records(id()?)?, &params)),
             "resources.query" => Ok(query::resources_page(&store.records(id()?)?, &params)),
             "contexts.query" => {

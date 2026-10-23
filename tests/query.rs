@@ -143,3 +143,25 @@ fn resource_points_page_within_series_and_apply_epoch_window() {
     assert_eq!(second["series"][0]["points"][0]["timestamp_us"], 103);
     assert_eq!(second["series"][0]["clock_alignment"], "aligned");
 }
+
+#[test]
+fn bounded_trees_expose_navigation_to_omitted_children_and_root_siblings() {
+    let records = vec![
+        json!({"kind":"sample","weight":3,"weight_unit":"samples","stack":[{"function":"root"},{"function":"hot"},{"function":"leaf"}]}),
+        json!({"kind":"sample","weight":1,"weight_unit":"samples","stack":[{"function":"other"}]}),
+    ];
+    let first = query::tree_page(&records, &json!({"limit":1}));
+    assert_eq!(first["returned_nodes"], 1);
+    assert_eq!(first["roots"][0]["name"], "root");
+    assert_eq!(first["roots"][0]["children_truncated"], true);
+    assert_eq!(first["next_cursor"], "1");
+    let second = query::tree_page(&records, &json!({"limit":1,"cursor":"1"}));
+    assert_eq!(second["roots"][0]["name"], "other");
+    let focused = query::tree_page(
+        &records,
+        &json!({"limit":1,"path":[first["roots"][0]["id"]]}),
+    );
+    assert_eq!(focused["roots"][0]["name"], "hot");
+    assert_eq!(focused["total_weight"], 3.0);
+    assert_eq!(focused["roots"][0]["children_truncated"], true);
+}
