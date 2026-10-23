@@ -15,7 +15,7 @@ concurrency:
 jobs:
   host:
     name: ${{ matrix.platform }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -106,16 +106,31 @@ jobs:
         if: always()
         id: build
         run: cargo +stable build --locked --release
-      - name: Install verified native profiler
+      - name: Native collector build integrity tests
+        if: always()
+        run: python -m unittest discover -s collectors/native -p test_build.py
+      - uses: actions/cache/restore@v4
+        if: always() && steps.build.outcome == 'success'
+        id: native-cache
+        with:
+          path: ${{ runner.temp }}/hunin-native-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-samply-${{ hashFiles('collectors/native/manifest.json', 'collectors/native/patches/*.patch') }}
+      - name: Build pinned native lifetime collector
         if: always() && steps.build.outcome == 'success'
         id: samply
-        run: python distribution/fetch_samply.py --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/samply" --github-env
+        run: python collectors/native/build.py --output "collectors/native/bin/samply${{ runner.os == 'Windows' && '.exe' || '' }}" --cache "${{ runner.temp }}/hunin-native-cache" --github-env
       - name: Enable process profiling in the ephemeral Linux runner
         if: always() && runner.os == 'Linux' && steps.build.outcome == 'success'
         run: sudo sysctl kernel.perf_event_paranoid=1
       - name: Verify automatic native collection
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime native --output collector-evidence/native
+      - name: Verify native target correctness separately from collector exit
+        if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
+        run: python collectors/native/verify_outcome.py --binary ${{ matrix.binary }} --output collector-evidence/native-outcome
+      - name: Verify native load reuse, concurrent instances and offline evidence
+        if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
+        run: python collectors/native/verify_lifetimes.py --binary ${{ matrix.binary }} --output collector-evidence/native-lifetimes
       - name: Verify automatic Node collection
         if: always() && steps.build.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node
@@ -210,7 +225,7 @@ jobs:
         run: cargo +stable test --locked --test sdk_contract graalpy_runtime_sdk_conforms -- --ignored --exact --nocapture
       - name: Assemble host bundle
         id: bundle
-        if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success'
+        if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist --rust-toolchain stable --rust-target ${{ matrix.rust_target }}
       - name: Verify installed CLI, MCP, SDK, durable analyzer, comparison and adjacent UI
         id: installed
@@ -219,6 +234,11 @@ jobs:
       - name: Verify installed C SDK context around automatically sampled native work
         if: always() && steps.installed.outcome == 'success' && steps.samply.outcome == 'success'
         run: python -c "from pathlib import Path; import subprocess,sys; roots=list(Path('collector-evidence/installed-bundle/installed').iterdir()); assert len(roots)==1,roots; subprocess.run([sys.executable,'distribution/verify_native_sdk.py','--installed',str(roots[0]),'--output','collector-evidence/installed-native-sdk'],check=True)"
+      - uses: actions/cache/save@v4
+        if: always() && steps.samply.outcome == 'success' && steps.native-cache.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/hunin-native-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-samply-${{ hashFiles('collectors/native/manifest.json', 'collectors/native/patches/*.patch') }}
       - uses: actions/cache/save@v4
         if: always() && steps.build.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
         with:

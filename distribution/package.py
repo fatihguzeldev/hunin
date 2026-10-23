@@ -14,6 +14,8 @@ import tomllib
 import zipfile
 
 PLATFORMS = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64")
+RUST_TARGETS = {"linux-x64": "x86_64-unknown-linux-gnu", "linux-arm64": "aarch64-unknown-linux-gnu",
+                "macos-x64": "x86_64-apple-darwin", "macos-arm64": "aarch64-apple-darwin", "windows-x64": "x86_64-pc-windows-msvc"}
 SKIP = {"node_modules", "target", "__pycache__", ".venv", ".git", ".DS_Store", ".pytest_cache"}
 
 
@@ -56,7 +58,24 @@ def build_metadata(root, rust_toolchain=None, rust_target=None):
     }
 
 
-def contents(root, binary):
+def verify_native_collector(files, target):
+    base = "collectors/native/"
+    executable = base + "bin/" + ("samply.exe" if target.startswith("windows") else "samply")
+    required = (executable, executable + ".provenance.json", base + "manifest.json", base + "bin/LICENSE-MIT", base + "bin/LICENSE-APACHE")
+    if any(name not in files for name in required):
+        raise ValueError("Build the native collector before packaging: python collectors/native/build.py --output collectors/native/bin/samply[.exe] --cache /your/build-cache")
+    receipt = json.loads(files[executable + ".provenance.json"])
+    manifest = json.loads(files[base + "manifest.json"])
+    patches = [{"name": name.removeprefix(base + "patches/"), "sha256": sha256(data.replace(b"\r\n", b"\n"))}
+               for name, data in sorted(files.items()) if name.startswith(base + "patches/") and name.endswith(".patch")]
+    if (not patches or receipt.get("binary_sha256") != sha256(files[executable]) or receipt.get("target") != RUST_TARGETS[target]
+            or receipt.get("version") != manifest["version"] or receipt.get("extension") != manifest["extension"]
+            or receipt.get("patch_sha256") != sha256(json.dumps(patches, sort_keys=True, separators=(",", ":")).encode())
+            or receipt.get("identity") != {"upstream": manifest["upstream"], "patches": patches}):
+        raise ValueError("Bundled native collector does not match its build provenance, platform, or pinned patches")
+
+
+def contents(root, binary, target):
     files = {"hunin.exe" if binary.suffix == ".exe" else "hunin": binary.read_bytes()}
     for source, destination in ((root / "ui/dist", "ui"), (root / "sdk", "sdk"),
                                 (root / "collectors", "collectors"), (root / "protocol", "protocol"),
@@ -72,6 +91,7 @@ def contents(root, binary):
                 files[f"{destination}/{path.relative_to(source).as_posix()}"] = path.read_bytes()
     if "ui/index.html" not in files:
         raise ValueError("Build the UI before packaging (cd ui && npm ci && npm run build)")
+    verify_native_collector(files, target)
     files["install.py"] = (root / "distribution/install.py").read_bytes()
     files["fetch_samply.py"] = (root / "distribution/fetch_samply.py").read_bytes()
     for name in ("fetch_runtime.py", "runtime-assets.json"):
@@ -83,7 +103,7 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
     version = tomllib.loads((root / "Cargo.toml").read_text())["package"]["version"]
     if (target.startswith("windows")) != (binary.suffix == ".exe"):
         raise ValueError("Windows packages require a .exe; Unix packages require a native binary")
-    files = contents(root, binary)
+    files = contents(root, binary, target)
     manifest = {"schema_version": 1, "version": version, "platform": target,
                 **build_metadata(root, rust_toolchain, rust_target),
                 "files": {name: {"sha256": sha256(data), "size": len(data)} for name, data in sorted(files.items())}}
@@ -102,7 +122,7 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
             for path, data in sorted(files.items()):
                 entry = tarfile.TarInfo(f"{name}/{path}")
                 entry.size = len(data)
-                entry.mode = 0o755 if path in ("hunin", "install.py") else 0o644
+                entry.mode = 0o755 if path in ("hunin", "install.py", "collectors/native/bin/samply") else 0o644
                 entry.mtime = 0
                 bundle.addfile(entry, io.BytesIO(data))
     checksum = sha256(archive.read_bytes())

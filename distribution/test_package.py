@@ -19,6 +19,24 @@ installer = load("install")
 
 
 class PackageTests(unittest.TestCase):
+    def native_files(self):
+        base = "collectors/native/"
+        upstream = {"revision": "test-pin", "archive_sha256": "test-archive"}
+        extension = {"flag": "--lifetime-output", "schema_version": 1}
+        patch = b"test patch\n"
+        patches = [{"name": "0001.patch", "sha256": package.sha256(patch)}]
+        binary = b"test-profiler"
+        return {
+            base + "manifest.json": json.dumps({"upstream": upstream, "version": "test-version", "extension": extension}).encode(),
+            base + "patches/0001.patch": patch,
+            base + "bin/samply": binary,
+            base + "bin/LICENSE-MIT": b"MIT test license",
+            base + "bin/LICENSE-APACHE": b"Apache test license",
+            base + "bin/samply.provenance.json": json.dumps({"target": "x86_64-unknown-linux-gnu", "binary_sha256": package.sha256(binary),
+                "version": "test-version", "extension": extension, "patch_sha256": package.sha256(json.dumps(patches, sort_keys=True, separators=(",", ":")).encode()),
+                "identity": {"upstream": upstream, "patches": patches}}).encode(),
+        }
+
     def bundle(self, root, version):
         root.mkdir(parents=True)
         files = {"hunin": b"test-binary", "ui/index.html": b"test-ui"}
@@ -40,6 +58,10 @@ class PackageTests(unittest.TestCase):
                 target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(path)
+            for path, data in self.native_files().items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
             binary = root / "hunin"
             binary.write_bytes(b"test-binary")
             archive = package.assemble(root, binary, root / "output", "linux-x64")
@@ -52,9 +74,29 @@ class PackageTests(unittest.TestCase):
             installed = installer.install(extracted, root / "installed")
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
+            if os.name != "nt":
+                self.assertTrue(os.access(installed.parent / "collectors/native/bin/samply", os.X_OK))
             (extracted / "hunin").write_bytes(b"modified")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 installer.verify(extracted)
+
+    def test_native_collector_must_match_the_shipped_platform_binary_and_patches(self):
+        files = self.native_files()
+        package.verify_native_collector(files, "linux-x64")
+        for change in ("binary", "patch", "platform", "missing"):
+            with self.subTest(change=change):
+                changed = dict(files)
+                target = "linux-x64"
+                if change == "binary":
+                    changed["collectors/native/bin/samply"] = b"different binary"
+                elif change == "patch":
+                    changed["collectors/native/patches/0001.patch"] = b"different patch"
+                elif change == "platform":
+                    target = "macos-arm64"
+                else:
+                    del changed["collectors/native/bin/samply"]
+                with self.assertRaises(ValueError):
+                    package.verify_native_collector(changed, target)
 
     def test_manifest_rejects_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:

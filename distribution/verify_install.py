@@ -83,7 +83,7 @@ def verify(archive, output):
         work = output / "workload"
         work.mkdir()
         environment = dict(os.environ)
-        for variable in ("HUNIN_ASSETS_DIR", "HUNIN_UI_DIR", "HUNIN_DATA_DIR"):
+        for variable in ("HUNIN_ASSETS_DIR", "HUNIN_UI_DIR", "HUNIN_DATA_DIR", "HUNIN_SAMPLY"):
             environment.pop(variable, None)
         execute([sys.executable, package / "install.py", "--prefix", output / "installed"], work, environment)
         installed = output / "installed" / f"{manifest['version']}-{manifest['platform']}"

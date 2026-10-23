@@ -6,12 +6,12 @@ Hunin's native application targets Windows x64, macOS ARM64/x64, and glibc Linux
 
 | Runtime or language | Automatic collection | Candidate hosts |
 | --- | --- | --- |
-| Rust, C, C++, compiled Go | samply 0.13.1 native stacks and symbols | All five hosts, subject to OS permissions and debug information |
+| Rust, C, C++, compiled Go | Pinned samply with Hunin's native lifetime extension, stacks and symbols | All five hosts, subject to OS permissions and debug information |
 | Go tests / Go execution trace | Go CPU profile / runtime trace | All five hosts |
 | Node.js | V8 CPU profile and worker collection | All five hosts |
 | Bun | JavaScriptCore CPU profile | All five hosts |
 | Deno | V8 inspector CPU profile | All five hosts |
-| CPython | vmprof 0.6.0 on Unix; OS-thread CPU-progress gated Python stack sampling on Windows | All five host candidates; the new Windows CPU route requires actual CI evidence |
+| CPython | vmprof 0.6.0 on Unix; OS-thread CPU-progress gated Python stack sampling on Windows | All five host candidates; Windows CPU sampling and its SDK bridge have passed actual CI controls |
 | PyPy | vmprof 0.6.0 / PyPy sampling on Unix; OS-thread CPU-progress gated Python stacks on Windows | All five host candidates; interpreter and sampler controls must pass |
 | GraalPy Community | Graal CPU sampler with guest Python frames | Windows x64, macOS ARM64, glibc Linux ARM64/x64 |
 
@@ -35,9 +35,13 @@ The helper verifies the complete archive before extraction, retains bundled lice
 
 Pinned versions establish repeatable controls. They do not establish a broad minimum-version promise. Similarly, Ubuntu 24.04 or a current macOS CI runner cannot prove an older glibc/macOS/Windows floor. Minimum OS versions remain candidates until verified on those actual systems.
 
+The native profiler's [source manifest](../collectors/native/manifest.json) pins upstream revision `da75c28f367454c621e690eeb4e44ec2ebb29a78` and the source archive checksum. The build helper applies the included patches, checks the native target and lifetime CLI extension, and retains the compiler, combined patch identity and binary checksum beside the ready executable. Host bundles require a matching binary and provenance. Older successful recordings with the unmodified upstream profiler establish that earlier sampling path; they do not establish the patched lifetime export on a host. That extension requires fresh per-host recording evidence.
+
 ## What has been observed
 
 Local macOS ARM64 executions have exercised native samply, Node, Bun, Deno, CPython, PyPy, GraalPy, Go CPU profiles and Go traces, with language-visible samples or observed runtime ranges and retained raw inputs. The SDK contract control has exercised Node, Bun, Deno, CPython, PyPy, GraalPy, Go, Rust, C, and C++ on that same host. This is local execution evidence, not evidence for the other four hosts.
+
+The Windows job at revision `1515748` passed both CPython and PyPy automatic CPU-progress collection, their SDK bridges, and the three CPU attribution controls for each interpreter. Its independent analyzer environment, Bun preload, and installed native SDK checks still failed, so that result does not establish completion of the Windows host acceptance set. The fixes and the patched native collector require the next complete host workflow.
 
 An actual macOS ARM64 debug bundle was extracted and installed into a versioned user directory. The installed executable found its adjacent collector assets and UI, recorded a Node workload and a symbolized native workload, and reopened their summaries. A debug install does not certify signed release delivery or a clean install on another host.
 

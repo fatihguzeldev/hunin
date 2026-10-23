@@ -10,7 +10,10 @@ import subprocess
 
 
 def execute(command, work):
-    result = subprocess.run([str(value) for value in command], cwd=work, capture_output=True, text=True, timeout=90)
+    environment = dict(os.environ)
+    for variable in ("HUNIN_SAMPLY", "HUNIN_ASSETS_DIR", "HUNIN_UI_DIR", "HUNIN_DATA_DIR"):
+        environment.pop(variable, None)
+    result = subprocess.run([str(value) for value in command], cwd=work, env=environment, capture_output=True, text=True, timeout=90)
     if result.returncode:
         raise RuntimeError(f"Command failed ({result.returncode}): {command}\n{result.stdout}\n{result.stderr}")
     return result.stdout
@@ -28,6 +31,7 @@ def verify(installed, output):
         (source / "main.c").write_text(r'''#include "hunin.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #if defined(_MSC_VER)
 __declspec(noinline)
 #else
@@ -47,7 +51,11 @@ int main(void) {
   hunin_context_t active = hunin_span_context(&span);
   hunin_counter(&active, "completed", 1, "count");
   hunin_span_end(&span);
-  if (hunin_flush()) return 2;
+  if (hunin_flush()) {
+    int error = hunin_last_error();
+    fprintf(stderr, "Hunin SDK flush failed: %d (%s)\n", error, strerror(error));
+    return 2;
+  }
   printf("native SDK control ok\n");
   return 0;
 }
@@ -69,6 +77,10 @@ int main(void) {
         recording = json.loads(execute([binary, "--data-dir", data, "run", "--runtime", "native", "--cwd", source, "--timeout", "30",
                                         "--expected-stdout-sha256", hashlib.sha256(expected).hexdigest(), "--", target], output))
         run = recording["run"]
+        collector_command = run["source"].get("collector_settings", {}).get("command", [])
+        if (not collector_command or not Path(collector_command[0]).resolve().is_relative_to(installed.resolve())
+                or "--lifetime-output" not in collector_command):
+            raise RuntimeError("Installed native recording did not use its bundled lifetime collector")
         if run["status"] != "completed" or run["correctness"]["passed"] is not True or recording["summary"]["sample_count"] == 0:
             raise RuntimeError(f"Installed native control did not complete with an automatic profile: {recording}")
         def call(operation, params):
