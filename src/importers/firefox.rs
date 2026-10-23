@@ -388,18 +388,29 @@ fn integer(value: &Value) -> Option<u64> {
 fn same_library(lib: &Value, symbols: &Value) -> bool {
     if let (Some(a), Some(b)) = (lib["codeId"].as_str(), symbols["code_id"].as_str()) {
         if !a.is_empty() && !b.is_empty() {
-            return a.eq_ignore_ascii_case(b);
+            // PE timestamp/image-size code IDs can collide across different builds.
+            // An available debug identity must agree as well.
+            return a.eq_ignore_ascii_case(b)
+                && same_debug_identifier(lib, symbols).unwrap_or(true);
         }
     }
+    same_debug_identifier(lib, symbols) == Some(true)
+        && lib["debugName"].as_str() == symbols["debug_name"].as_str()
+}
+
+fn same_debug_identifier(lib: &Value, symbols: &Value) -> Option<bool> {
     if let (Some(a), Some(b)) = (lib["breakpadId"].as_str(), symbols["debug_id"].as_str()) {
+        if a.is_empty() || b.is_empty() {
+            return None;
+        }
         let a = a.replace('-', "").to_ascii_lowercase();
         let mut b = b.replace('-', "").to_ascii_lowercase();
         if b.len() == 32 {
             b.push('0');
         }
-        return a == b && lib["debugName"].as_str() == symbols["debug_name"].as_str();
+        return Some(a == b);
     }
-    false
+    None
 }
 fn string_at<'a>(thread: &'a Value, index: &Value) -> Option<&'a str> {
     thread["stringArray"]
@@ -471,6 +482,13 @@ mod tests {
         assert!(!same_library(
             &json!({"codeId":"A","breakpadId":"abcd0","debugName":"same"}),
             &json!({"code_id":"B","debug_id":"abcd","debug_name":"same"})
+        ));
+    }
+    #[test]
+    fn matching_pe_timestamp_size_cannot_override_conflicting_debug_identity() {
+        assert!(!same_library(
+            &json!({"codeId":"678901234000","breakpadId":"0123456789ABCDEF0123456789ABCDEF1","debugName":"a.pdb"}),
+            &json!({"code_id":"678901234000","debug_id":"FEDCBA9876543210FEDCBA98765432101","debug_name":"b.pdb"})
         ));
     }
     #[test]
