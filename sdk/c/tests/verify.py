@@ -6,10 +6,10 @@ import subprocess
 import sys
 import tempfile
 
-with tempfile.TemporaryDirectory(prefix="hunin-sdk-c-") as directory:
-    result = subprocess.run([sys.argv[1]], env=dict(os.environ, HUNIN_RUN_ID="sdk-contract", HUNIN_RECORD_DIR=directory),
+def verify(directory):
+    result = subprocess.run([sys.argv[1]], env=dict(os.environ, HUNIN_RUN_ID="sdk-contract", HUNIN_RECORD_DIR=str(directory)),
                             capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, f"exit={result.returncode} (0x{result.returncode & 0xffffffff:08x}): {result.stderr}"
     rows = [json.loads(line) for path in Path(directory).glob("*.jsonl") for line in path.read_text().splitlines()]
     contexts = [row for row in rows if row["kind"] == "context"]
     parents = {row["id"]: row for row in rows if row["kind"] == "span" and row["name"] == "parent"}
@@ -28,4 +28,9 @@ with tempfile.TemporaryDirectory(prefix="hunin-sdk-c-") as directory:
                 assert row[key] in identifiers, (key, row)
     assert len([row for row in rows if row["kind"] == "metric"]) == 4
     assert len([row for row in rows if row["kind"] == "relation"]) == 4
-    print("C/C++ contexts, spans, counters, relations and threaded flush verified")
+
+
+with tempfile.TemporaryDirectory(prefix="hunin-sdk-c-") as directory:
+    verify(Path(directory))
+    verify(Path(directory) / "missing" / "nested")
+    print("C/C++ contexts, spans, counters, relations and threaded flush verified for existing and nested spool directories")

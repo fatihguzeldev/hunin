@@ -99,11 +99,38 @@ static void string(FILE *file, const char *text) {
 static int make_directories(const char *path) {
   size_t length = strlen(path);
   char *copy = (char *)malloc(length + 1);
-  size_t i;
+  size_t i, start = 1;
   if (!copy)
     return ENOMEM;
   memcpy(copy, path, length + 1);
-  for (i = 1; i < length; i++) {
+#ifdef _WIN32
+  DWORD attributes = GetFileAttributesA(path);
+  if (attributes != INVALID_FILE_ATTRIBUTES &&
+      (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    free(copy);
+    return 0;
+  }
+  if (length >= 2 && copy[1] == ':') {
+    start = 2;
+    if (length > 2 && (copy[2] == '/' || copy[2] == '\\'))
+      start = 3;
+  } else if (length > 1 && (copy[0] == '/' || copy[0] == '\\') &&
+             (copy[1] == '/' || copy[1] == '\\')) {
+    start = 2;
+    if (length >= 8 && copy[2] == '?' && copy[3] == '\\' &&
+        (copy[4] == 'U' || copy[4] == 'u') &&
+        (copy[5] == 'N' || copy[5] == 'n') &&
+        (copy[6] == 'C' || copy[6] == 'c') && copy[7] == '\\')
+      start = 8;
+    for (int component = 0; component < 2 && start < length; component++) {
+      while (start < length && copy[start] != '/' && copy[start] != '\\')
+        start++;
+      if (start < length)
+        start++;
+    }
+  }
+#endif
+  for (i = start; i < length; i++) {
     if (copy[i] == '/' || copy[i] == '\\') {
       char separator = copy[i];
       copy[i] = 0;

@@ -1,4 +1,6 @@
 #include "hunin.hpp"
+#include <cstdio>
+#include <cstring>
 #include <thread>
 #include <vector>
 int main() {
@@ -16,5 +18,9 @@ int main() {
     });
   for (auto &thread : threads)
     thread.join();
-  return hunin::flush();
+  const int error = hunin::flush();
+  if (error)
+    std::fprintf(stderr, "hunin_flush failed: errno %d (%s)\n", error,
+                 std::strerror(error));
+  return error;
 }
