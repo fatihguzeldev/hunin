@@ -43,6 +43,7 @@ def _emit(kind, **fields):
         if ambient.get("context_id"):
             row["context_id"] = ambient["context_id"]
         row.update(fields)
+        row["attributes"] = {"thread_id_source": "threading.get_ident", "clock": "time.time_ns", **row.get("attributes", {})}
         payload = (json.dumps(row, allow_nan=False, separators=(",", ":")) + "\n").encode()
         with _lock:
             if _fd is None:
@@ -74,6 +75,7 @@ class Span:
         self.timestamp_us = time.time_ns() // 1000
         self.parent = _ambient.get().copy()
         self.ended = False
+        self.owner_pid = os.getpid()
         self._token = None
 
     def __enter__(self):
@@ -93,12 +95,12 @@ class Span:
         return self.__exit__(*args)
 
     def end(self, attributes=None):
-        if self.ended or self.id is None:
+        if self.ended or self.id is None or self.owner_pid != os.getpid():
             return
         self.ended = True
         fields = dict(id=self.id, name=self.name, timestamp_us=self.timestamp_us,
                       duration_us=max(0, (time.perf_counter_ns() - self.started) // 1000),
-                      attributes=dict(self.attributes, **(attributes or {}), clock="time.time_ns/perf_counter_ns"))
+                      attributes={**self.attributes, **(attributes or {}), "clock": "time.time_ns/perf_counter_ns"})
         for key in ("parent_id", "context_id"):
             if self.parent.get(key):
                 fields[key] = self.parent[key]
@@ -128,7 +130,10 @@ def context(name, attributes=None):
         yield identifier
 
 def counter(name, value, unit="count", attributes=None):
-    if not isinstance(value, (float, int)) or not math.isfinite(value):
+    try:
+        if not isinstance(value, (float, int)) or not math.isfinite(value):
+            return None
+    except (OverflowError, ValueError):
         return None
     return _emit("metric", name=name, value=value, unit=unit,
                  scope="context" if _ambient.get().get("context_id") else "thread",

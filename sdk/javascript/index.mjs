@@ -7,8 +7,8 @@ import { threadId } from 'node:worker_threads';
 
 const ambient = new AsyncLocalStorage();
 const producer = randomUUID();
-const run = process.env.HUNIN_RUN_ID;
-const directory = process.env.HUNIN_RECORD_DIR;
+let run, directory;
+try { run = process.env.HUNIN_RUN_ID; directory = process.env.HUNIN_RECORD_DIR; } catch {} // Deno permission denial disables optional instrumentation.
 const active = Boolean(run && directory);
 let fd;
 let failure;
@@ -25,6 +25,7 @@ function append(kind, fields) {
       schema_version: 1, kind, id: identity(), run_id: run, producer_id: producer,
       pid: process.pid, tid: String(threadId), timestamp_us: now(), basis: 'explicit',
       ...(state.context_id ? { context_id: state.context_id } : {}), ...fields,
+      attributes: { thread_id_source: 'node:worker_threads.threadId', clock: 'performance.timeOrigin+performance.now', ...fields.attributes },
     };
     pending += JSON.stringify(row) + '\n';
     if (pending.length >= 65536) flush();

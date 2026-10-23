@@ -16,6 +16,25 @@ class SdkTest(unittest.TestCase):
         result = self.run_target("import hunin\nassert not hunin.enabled()\nwith hunin.span('work'): hunin.counter('items',1)\n")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(hasattr(os, "fork"), "runtime has no fork")
+    def test_fork_reuses_parent_context_without_duplicating_parent_span(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_target("""import os, hunin
+with hunin.span('parent'):
+    pid = os.fork()
+    if pid == 0:
+        with hunin.span('child'): pass
+    else:
+        os.waitpid(pid, 0)
+hunin.flush()
+""", directory)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = [json.loads(line) for path in Path(directory).glob('*.jsonl') for line in path.read_text().splitlines()]
+            spans = {row['name']: row for row in rows if row['kind'] == 'span'}
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(spans['child']['parent_id'], spans['parent']['id'])
+            self.assertNotEqual(spans['child']['producer_id'], spans['parent']['producer_id'])
+
     def test_async_siblings_have_independent_parents(self):
         with tempfile.TemporaryDirectory() as directory:
             result = self.run_target('''import asyncio, hunin
