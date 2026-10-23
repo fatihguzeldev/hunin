@@ -77,6 +77,8 @@ jobs:
         run: npm test
       - name: Core and SDK Rust tests
         if: always()
+        env:
+          HUNIN_EXECUTABLE_LAUNCH_EVIDENCE: collector-evidence/executable-launch
         run: cargo +stable test --locked --all
       - name: JavaScript SDK tests
         if: always()
