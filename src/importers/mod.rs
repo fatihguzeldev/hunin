@@ -1,6 +1,7 @@
 mod firefox;
 mod go_trace;
 mod graal;
+mod native_identity;
 mod pprof;
 mod v8;
 
@@ -52,7 +53,6 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
         );
         digest.update(fs::read(sidecar)?);
     }
-    let key = format!("{:x}", digest.finalize());
     let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
         let mut decoded = Vec::new();
         GzDecoder::new(bytes.as_slice())
@@ -65,10 +65,25 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
     } else {
         bytes
     };
+    let native_raw = if matches!(format, "firefox" | "firefox-profile" | "samply") {
+        Some(serde_json::from_slice::<Value>(&raw)?)
+    } else {
+        None
+    };
+    let images = native_raw.as_ref().map(native_identity::Images::inspect);
+    if let Some(images) = &images {
+        digest.update(b"native-image-identifiers-v1\0");
+        digest.update(serde_json::to_vec(&images.fingerprint())?);
+    }
+    let key = format!("{:x}", digest.finalize());
     let (records, diagnostics) = match format {
-        "firefox" | "firefox-profile" | "samply" => {
-            firefox::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
-        }
+        "firefox" | "firefox-profile" | "samply" => firefox::decode(
+            path,
+            native_raw.as_ref().unwrap(),
+            run_id,
+            &key,
+            images.as_ref().unwrap(),
+        )?,
         "v8" | "v8-cpuprofile" | "cpuprofile" => {
             v8::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
         }

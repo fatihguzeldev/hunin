@@ -1,13 +1,18 @@
-use super::{checked_us, sample};
+use super::{checked_us, native_identity::Images, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::Path,
+};
 
 pub(super) fn decode(
     path: &Path,
     raw: &Value,
     run_id: &str,
     key: &str,
+    images: &Images,
 ) -> Result<(Vec<Value>, Vec<String>)> {
     let sidecar = path.with_extension("syms.json");
     let symbols: Option<Value> = fs::read(&sidecar)
@@ -23,14 +28,14 @@ pub(super) fn decode(
         key,
         &mut records,
         &mut unresolved,
+        images,
     )?;
-    let diagnostics = if unresolved > 0 {
-        vec![format!(
+    let mut diagnostics = images.diagnostics();
+    if unresolved > 0 {
+        diagnostics.push(format!(
             "{unresolved} sampled native frames remain unresolved; retain measured binaries/debug data or the samply symbol sidecar"
-        )]
-    } else {
-        Vec::new()
-    };
+        ));
+    }
     Ok((records, diagnostics))
 }
 
@@ -41,6 +46,7 @@ fn decode_process(
     key: &str,
     records: &mut Vec<Value>,
     unresolved: &mut usize,
+    images: &Images,
 ) -> Result<()> {
     let epoch_ms = raw["meta"]["startTime"].as_f64();
     let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
@@ -102,6 +108,7 @@ fn decode_process(
             }
             let mut stack = Vec::new();
             let mut chain = Vec::new();
+            let mut image_checks = BTreeMap::new();
             let mut seen = HashSet::new();
             let mut cursor = Some(leaf.as_u64().context("invalid Firefox stack index")? as usize);
             while let Some(current) = cursor {
@@ -120,13 +127,13 @@ fn decode_process(
                     .map(|v| v as usize);
             }
             for frame in chain.into_iter().rev() {
-                let resolved = frame_info(raw, thread, frame, symbols)?;
+                let resolved = frame_info(raw, thread, frame, symbols, images, &mut image_checks)?;
                 *unresolved += resolved
                     .iter()
                     .filter(|f| {
                         f["function"]
                             .as_str()
-                            .is_some_and(|n| n.starts_with("0x") || n == "[unresolved]")
+                            .is_some_and(|n| n.starts_with("0x") || n.starts_with("[unresolved"))
                     })
                     .count();
                 stack.extend(resolved);
@@ -139,6 +146,8 @@ fn decode_process(
                 "Firefox sample time",
             )?;
             let mut attributes = json!({"source_format":"firefox","thread_name":thread["name"],"sampling_semantics":"OS stack samples; on/off CPU behavior depends on collector OS"});
+            attributes["native_image_checks"] =
+                json!(image_checks.into_values().collect::<Vec<_>>());
             if epoch_ms.is_none() {
                 attributes["clock"] = json!("profile_relative");
                 attributes["clock_alignment"] = json!("unmapped");
@@ -176,7 +185,7 @@ fn decode_process(
         }
     }
     for child in raw["processes"].as_array().into_iter().flatten() {
-        decode_process(child, symbols, run_id, key, records, unresolved)?;
+        decode_process(child, symbols, run_id, key, records, unresolved, images)?;
     }
     Ok(())
 }
@@ -186,6 +195,8 @@ fn frame_info(
     thread: &Value,
     frame: usize,
     sidecar: Option<&Value>,
+    images: &Images,
+    checks: &mut BTreeMap<String, Value>,
 ) -> Result<Vec<Value>> {
     let function = thread["frameTable"]["func"]
         .get(frame)
@@ -228,6 +239,17 @@ fn frame_info(
         }
         if let Some(code) = lib["codeId"].as_str() {
             result["code_id"] = json!(code);
+        }
+        if let Some(check) = images.get(lib) {
+            checks.insert(lib.to_string(), check.clone());
+            if check["status"] == "mismatch" {
+                let frame = result.as_object_mut().unwrap();
+                for field in ["file", "line", "column"] {
+                    frame.remove(field);
+                }
+                result["function"] = json!("[unresolved: native image identity mismatch]");
+                return Ok(vec![result]);
+            }
         }
         if let (Some(sidecar), Some(address)) = (sidecar, address) {
             if let Some(data) = sidecar["data"]
@@ -281,8 +303,8 @@ fn integer(value: &Value) -> Option<u64> {
 
 fn same_library(lib: &Value, symbols: &Value) -> bool {
     if let (Some(a), Some(b)) = (lib["codeId"].as_str(), symbols["code_id"].as_str()) {
-        if !a.is_empty() && a.eq_ignore_ascii_case(b) {
-            return true;
+        if !a.is_empty() && !b.is_empty() {
+            return a.eq_ignore_ascii_case(b);
         }
     }
     if let (Some(a), Some(b)) = (lib["breakpadId"].as_str(), symbols["debug_id"].as_str()) {
@@ -307,6 +329,118 @@ mod tests {
     #[test]
     fn rejects_cyclic_stack_instead_of_looping() {
         let raw = json!({"meta":{"startTime":1},"threads":[{"pid":"2","tid":"3","samples":{"stack":[0],"time":[1]},"stackTable":{"frame":[0],"prefix":[0]}}]});
-        assert!(decode(Path::new("missing.json"), &raw, "run", "key").is_err());
+        assert!(
+            decode(
+                Path::new("missing.json"),
+                &raw,
+                "run",
+                "key",
+                &Images::inspect(&raw)
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn code_identifier_conflicts_cannot_fall_back_to_matching_debug_identifiers() {
+        assert!(!same_library(
+            &json!({"codeId":"A","breakpadId":"abcd0","debugName":"same"}),
+            &json!({"code_id":"B","debug_id":"abcd","debug_name":"same"})
+        ));
+    }
+    #[test]
+    fn actual_unloaded_reloaded_image_mismatch_cannot_borrow_another_images_source() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            (
+                "phase_a.dylib",
+                include_bytes!("fixtures/native-reload/phase_a.macho").as_slice(),
+            ),
+            (
+                "phase_b.dylib",
+                include_bytes!("fixtures/native-reload/phase_b.macho").as_slice(),
+            ),
+        ] {
+            fs::write(directory.path().join(name), bytes).unwrap();
+        }
+        let mut raw: Value =
+            serde_json::from_slice(include_bytes!("fixtures/native-reload/cpu.json")).unwrap();
+        for lib in raw["libs"].as_array_mut().unwrap() {
+            if lib["name"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("phase_"))
+            {
+                lib["path"] = json!(directory.path().join(lib["name"].as_str().unwrap()));
+            }
+        }
+        let path = directory.path().join("cpu.json");
+        fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        fs::write(
+            path.with_extension("syms.json"),
+            include_bytes!("fixtures/native-reload/cpu.syms.json"),
+        )
+        .unwrap();
+        let unchecked = decode(
+            &path,
+            &raw,
+            "reload-control",
+            "unchecked",
+            &Images::default(),
+        )
+        .unwrap();
+        assert!(
+            unchecked
+                .0
+                .iter()
+                .flat_map(|r| r["stack"].as_array().into_iter().flatten())
+                .any(|f| f["module"] == "phase_b.dylib"
+                    && f["file"].as_str().is_some_and(|s| s.ends_with("phase_a.c"))),
+            "control must expose the raw wrong-image symbol match"
+        );
+        let profile = crate::importers::import(&path, "firefox", "reload-control").unwrap();
+        assert!(
+            profile
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("identity mismatch for phase_b.dylib"))
+        );
+        let frames: Vec<_> = profile
+            .records
+            .iter()
+            .flat_map(|r| r["stack"].as_array().into_iter().flatten())
+            .collect();
+        let a: Vec<_> = frames
+            .iter()
+            .filter(|f| f["module"] == "phase_a.dylib")
+            .collect();
+        let b: Vec<_> = frames
+            .iter()
+            .filter(|f| f["module"] == "phase_b.dylib")
+            .collect();
+        assert!(a.len() > 100 && b.len() > 100);
+        assert!(a.iter().any(|f| f["function"] == "phase_hot"
+            && f["file"].as_str().is_some_and(|s| s.ends_with("phase_a.c"))));
+        assert!(b.iter().all(
+            |f| f["function"] == "[unresolved: native image identity mismatch]"
+                && f.get("file").is_none()
+                && f.get("line").is_none()
+                && f["code_id"] == "CD3C90FFC4B93EF1B5FD3FBD731EA331"
+        ));
+        crate::ingestion::validate("reload-control", &profile.records, &HashSet::new()).unwrap();
+        assert_eq!(
+            profile.records,
+            crate::importers::import(&path, "firefox", "reload-control")
+                .unwrap()
+                .records
+        );
+        fs::write(
+            directory.path().join("phase_b.dylib"),
+            include_bytes!("fixtures/native-reload/phase_a.macho"),
+        )
+        .unwrap();
+        let changed = crate::importers::import(&path, "firefox", "reload-control").unwrap();
+        assert_ne!(
+            profile.input_fingerprint, changed.input_fingerprint,
+            "image identity affects normalization/replay identity"
+        );
     }
 }

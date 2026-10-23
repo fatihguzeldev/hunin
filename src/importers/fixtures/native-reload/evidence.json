@@ -1,0 +1,33 @@
+{
+  "mechanism": "Actual macOS ARM64 samply0.13.1 capture of dlopen A, dlclose, dlopen B, dlclose, dlopen A. All three function pointers reused0x10431c3b8. The raw profile reports A codeId for both images although B MachUUID differs.",
+  "compiler": "Apple clang21.0.0",
+  "samply": "0.13.1",
+  "actual_uuids": {
+    "phase_a": "CD3C90FF-C4B9-3EF1-B5FD-3FBD731EA331",
+    "phase_b": "9704B91E-012B-334D-A066-2C41D7514208"
+  },
+  "compile_commands": [
+    "clang -g -O1 -dynamiclib phase_a.c -o phase_a.dylib",
+    "clang -g -O1 -dynamiclib phase_b.c -o phase_b.dylib",
+    "clang -g -O1 main.c -o native-load-audit"
+  ],
+  "capture_command": [
+    "samply",
+    "record",
+    "--save-only",
+    "--unstable-presymbolicate",
+    "-o",
+    "cpu.samply.json",
+    "--",
+    "./native-load-audit"
+  ],
+  "sha256": {
+    "phase_b.c": "bdc56a4791b9422b45f1ed0511c4f4662c3b2c3fd65e56f12118586ca3ed769f",
+    "phase_a.macho": "480286d563378328069dd80b62cef4f1893ac3f3a072bf224ca4468a3f148d6a",
+    "main.c": "30cb96e520f73d90cc2f7a8d77a07bf68867f6a502c5a246fe01daaeb04e0f0b",
+    "cpu.json": "14dd93057f6086bbfeddd8dd192a1a79dc0d5e0c8c8d41c4523da5a413b1b6eb",
+    "phase_b.macho": "3c956993442ba5f88bb4d1952a5bf512079377cb48337594f778d840e4aa38d2",
+    "phase_a.c": "983a3ff26241ae15653140b2ebf8d2591596f6e21b3f0a1dddd14eb4874e638e",
+    "cpu.syms.json": "7b3b62bb1ce587bc25cb5e5b8c03925150dcc083bc1c97fd96292b244b4afdf6"
+  }
+}
