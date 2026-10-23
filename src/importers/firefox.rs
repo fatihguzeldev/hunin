@@ -43,7 +43,7 @@ fn decode_process(
     unresolved: &mut usize,
 ) -> Result<()> {
     let epoch_ms = raw["meta"]["startTime"].as_f64();
-    let interval_us = raw["meta"]["interval"].as_f64().unwrap_or(1.0) * 1000.0;
+    let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
     for thread in raw["threads"]
         .as_array()
         .context("Firefox processed profile has no threads")?
@@ -54,6 +54,11 @@ fn decode_process(
             .map(str::to_owned)
             .unwrap_or_else(|| thread["tid"].to_string());
         let table = &thread["samples"];
+        if table["weightType"].as_str().is_some_and(|t| t != "samples") {
+            bail!(
+                "Firefox importer expects sampled-stack weights; this profile has another weightType"
+            );
+        }
         let stacks = table["stack"]
             .as_array()
             .context("Firefox sample stacks missing")?;
@@ -135,7 +140,9 @@ fn decode_process(
                 "samples",
                 attributes,
             );
-            record["interval_us"] = json!(interval_us);
+            if let Some(interval) = interval_us {
+                record["interval_us"] = json!(interval);
+            }
             records.push(record);
         }
     }
@@ -194,10 +201,9 @@ fn frame_info(
             result["code_id"] = json!(code);
         }
         if let (Some(sidecar), Some(address)) = (sidecar, address) {
-            let code = lib["codeId"].as_str().unwrap_or("");
             if let Some(data) = sidecar["data"]
                 .as_array()
-                .and_then(|a| a.iter().find(|s| s["code_id"].as_str() == Some(code)))
+                .and_then(|a| a.iter().find(|s| same_library(lib, s)))
             {
                 if let Some(pair) = data["known_addresses"]
                     .as_array()
@@ -242,6 +248,23 @@ fn frame_info(
 
 fn integer(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
+}
+
+fn same_library(lib: &Value, symbols: &Value) -> bool {
+    if let (Some(a), Some(b)) = (lib["codeId"].as_str(), symbols["code_id"].as_str()) {
+        if !a.is_empty() && a.eq_ignore_ascii_case(b) {
+            return true;
+        }
+    }
+    if let (Some(a), Some(b)) = (lib["breakpadId"].as_str(), symbols["debug_id"].as_str()) {
+        let a = a.replace('-', "").to_ascii_lowercase();
+        let mut b = b.replace('-', "").to_ascii_lowercase();
+        if b.len() == 32 {
+            b.push('0');
+        }
+        return a == b && lib["debugName"].as_str() == symbols["debug_name"].as_str();
+    }
+    false
 }
 fn string_at<'a>(thread: &'a Value, index: &Value) -> Option<&'a str> {
     thread["stringArray"]

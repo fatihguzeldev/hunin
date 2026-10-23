@@ -24,7 +24,7 @@ pub(super) fn decode(
         .as_array()
         .context("Graal CPU sampler contexts missing")?
     {
-        let interval = context["period"].as_f64().unwrap_or(10.0) * 1000.0;
+        let interval = context["period"].as_f64().map(|v| v * 1000.0);
         for thread in context["profile"]
             .as_array()
             .context("Graal thread profiles missing")?
@@ -68,7 +68,7 @@ fn walk(
     parent: &[Value],
     tid: &str,
     pid: u64,
-    interval: f64,
+    interval: Option<f64>,
     run_id: &str,
     key: &str,
     records: &mut Vec<Value>,
@@ -114,7 +114,9 @@ fn walk(
                 "samples",
                 json!({"source_format":"graal-cpusampler","clock":"unknown","clock_alignment":"unmapped","temporal_resolution":"aggregate","tid_kind":"graal_thread_label"}),
             );
-            record["interval_us"] = json!(interval);
+            if let Some(interval) = interval {
+                record["interval_us"] = json!(interval);
+            }
             records.push(record);
         } else {
             for hit in hits {
@@ -134,7 +136,9 @@ fn walk(
                     "samples",
                     json!({"source_format":"graal-cpusampler","clock":"unix_epoch","clock_alignment":"collector_epoch_ms","tid_kind":"graal_thread_label"}),
                 );
-                record["interval_us"] = json!(interval);
+                if let Some(interval) = interval {
+                    record["interval_us"] = json!(interval);
+                }
                 records.push(record);
             }
         }

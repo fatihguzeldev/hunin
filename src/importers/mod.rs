@@ -256,11 +256,25 @@ mod recorded_controls {
 
     #[test]
     fn real_go_pprof_preserves_cpu_time_and_source_hotspot() {
-        let path=Path::new(env!("CARGO_MANIFEST_DIR")).join("src/importers/fixtures/go.pprof");
-        let profile=import(&path,"pprof","control").unwrap();
-        assert!(profile.records.iter().all(|r|r["weight_unit"]=="microseconds" && r["attributes"]["temporal_resolution"]=="aggregate"));
-        assert!(profile.records.iter().flat_map(|r|r["stack"].as_array().unwrap()).any(|f|f["function"].as_str().is_some_and(|n|n.ends_with("huninGoHotspot"))));
-        crate::ingestion::validate("control",&profile.records,&HashSet::new()).unwrap();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/importers/fixtures/go.pprof");
+        let profile = import(&path, "pprof", "control").unwrap();
+        assert!(
+            profile
+                .records
+                .iter()
+                .all(|r| r["weight_unit"] == "microseconds"
+                    && r["attributes"]["temporal_resolution"] == "aggregate")
+        );
+        assert!(
+            profile
+                .records
+                .iter()
+                .flat_map(|r| r["stack"].as_array().unwrap())
+                .any(|f| f["function"]
+                    .as_str()
+                    .is_some_and(|n| n.ends_with("huninGoHotspot")))
+        );
+        crate::ingestion::validate("control", &profile.records, &HashSet::new()).unwrap();
     }
 
     #[test]
