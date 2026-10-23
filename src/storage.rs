@@ -428,10 +428,18 @@ impl Store {
         if self.run(run_id)?.status == "running" {
             bail!("cancel a running recording before removing it");
         }
-        let candidates = self.artifacts(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let candidates = tx.prepare("SELECT metadata FROM artifacts WHERE run_id=?1")?
+            .query_map([run_id], |r| r.get::<_,String>(0))?
+            .map(|r| Ok(serde_json::from_str::<Artifact>(&r?)?)).collect::<Result<Vec<_>>>()?;
         if tx.query_row("SELECT COUNT(*) FROM documents WHERE owner_run_id=?1 AND json_extract(payload,'$.status')='running'",[run_id],|r|r.get::<_,i64>(0))?>0 {bail!("cancel active analyzer executions before removing this recording");}
+        let attempts: Vec<String> = tx
+            .prepare(
+                "SELECT id FROM documents WHERE namespace='analysis-results' AND owner_run_id=?1",
+            )?
+            .query_map([run_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
         tx.execute("DELETE FROM runs WHERE id=?1", [run_id])?;
         tx.commit()?;
         // Only collect after deleting metadata commits. Artifact writers use the
@@ -451,6 +459,10 @@ impl Store {
             }
         }
         tx.commit()?;
+        remove_managed_directory(&self.root.join("captures"), run_id)?;
+        for id in attempts {
+            remove_managed_directory(&self.root.join("analysis-executions"), &id)?;
+        }
         Ok(())
     }
 }
@@ -472,4 +484,34 @@ fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Va
 fn deactivate_source(connection: &Connection, run_id: &str, source_key: &str) -> Result<()> {
     connection.execute("WITH RECURSIVE stale(id) AS (SELECT id FROM result_sets WHERE run_id=?1 AND source_key=?2 AND active=1 UNION SELECT d.result_set_id FROM result_set_dependencies d JOIN stale s ON d.input_result_set_id=s.id) UPDATE result_sets SET active=0 WHERE id IN(SELECT id FROM stale)",params![run_id,source_key])?;
     Ok(())
+}
+
+fn remove_managed_directory(root: &Path, id: &str) -> Result<()> {
+    // Imported IDs are database keys, never permission to traverse a filesystem.
+    let mut components = Path::new(id).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Ok(());
+    }
+    let path = root.join(id);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .context("recording metadata removed; managed directory cleanup failed");
+        }
+    };
+    if metadata.is_symlink() || !metadata.is_dir() {
+        fs::remove_file(&path)
+    } else {
+        fs::remove_dir_all(&path)
+    }
+    .with_context(|| {
+        format!(
+            "recording metadata removed; could not clean managed path {}",
+            path.display()
+        )
+    })
 }

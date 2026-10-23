@@ -233,7 +233,15 @@ fn persisted_cancellation_wins_the_publication_race_and_owned_documents_are_remo
     store
         .save_document("cancellations", "run-1", &json!({"run_id":"run-1"}))
         .unwrap();
+    let capture = root.path().join("captures/run-1");
+    let attempt = root.path().join("analysis-executions/attempt");
+    std::fs::create_dir_all(&capture).unwrap();
+    std::fs::create_dir_all(&attempt).unwrap();
+    std::fs::write(capture.join("raw.txt"), "raw").unwrap();
+    std::fs::write(attempt.join("input.json"), "{}").unwrap();
     store.remove_run("run-1").unwrap();
     assert!(store.document("analysis-results", "attempt").is_err());
     assert!(store.document("cancellations", "run-1").is_err());
+    assert!(!capture.exists());
+    assert!(!attempt.exists());
 }
