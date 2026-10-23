@@ -75,6 +75,11 @@ root, and `HUNIN_GO` selects a compatible Go trace decoder where needed.
 
 - Native Firefox/samply samples use the recording's epoch start plus relative
   sample times. The recorded thread CPU deltas remain separate from sample count.
+  On Windows, an ETW user stack belongs to a CPU sample only when its process,
+  thread and original sample timestamp match exactly. Without that match, Hunin
+  retains the SampleProf instruction pointer and marks the caller chain
+  unavailable. A later sample's stack is never assigned to earlier samples. Module
+  load/lifetime evidence remains separate from caller-stack availability.
 - vmprof timestamps use process-CPU time on the default Unix CPU timer. Windows
   uses QueryPerformanceCounter and wall-timer stack snapshots even when its raw
   real-time flag is unset; the decoder reads the raw OS metadata and preserves
