@@ -78,8 +78,11 @@ pub async fn prepare(
         commands.push((
             vec![
                 command[0].clone(),
-                "-m".into(),
-                "venv".into(),
+                "-c".into(),
+                // venv captures ensurepip's combined output, but its CLI only
+                // prints CalledProcessError's summary. Keep the actual failure
+                // in our managed setup stderr rather than losing that evidence.
+                "import subprocess,sys,venv\ntry:\n venv.main()\nexcept subprocess.CalledProcessError as error:\n sys.stderr.buffer.write(error.output or b''); raise\n".into(),
                 environment.display().to_string(),
             ],
             workspace.to_path_buf(),
