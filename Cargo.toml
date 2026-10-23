@@ -5,6 +5,10 @@ edition = "2024"
 description = "profiling and observability for coding agents. (and developers too)"
 repository = "https://github.com/fatihguzeldev/hunin"
 
+[workspace]
+members = ["sdk/rust"]
+resolver = "3"
+
 [dependencies]
 anyhow = "1"
 axum = "0.8"
@@ -25,3 +29,4 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+hunin-sdk = { path = "sdk/rust" }
