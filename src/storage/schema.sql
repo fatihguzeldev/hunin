@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS observations (
     record TEXT NOT NULL,
     UNIQUE(run_id,id)
 );
+CREATE TABLE IF NOT EXISTS result_set_dependencies (
+    result_set_id TEXT NOT NULL REFERENCES result_sets(id) ON DELETE CASCADE,
+    input_result_set_id TEXT NOT NULL REFERENCES result_sets(id) ON DELETE CASCADE,
+    PRIMARY KEY(result_set_id,input_result_set_id)
+);
+CREATE INDEX IF NOT EXISTS result_dependency_input ON result_set_dependencies(input_result_set_id);
 CREATE INDEX IF NOT EXISTS observation_timeline ON observations(run_id,timestamp_us,seq);
 CREATE INDEX IF NOT EXISTS observation_kind ON observations(run_id,kind);
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -35,5 +41,6 @@ CREATE TABLE IF NOT EXISTS documents (
     id TEXT NOT NULL,
     payload TEXT NOT NULL,
     updated_at_us INTEGER NOT NULL,
+    owner_run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
     PRIMARY KEY(namespace,id)
 );

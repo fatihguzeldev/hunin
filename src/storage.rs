@@ -19,19 +19,52 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn document(&self,namespace:&str,id:&str)->Result<Value> {
-        let text:String=self.connection()?.query_row("SELECT payload FROM documents WHERE namespace=?1 AND id=?2",params![namespace,id],|r|r.get(0)).context("document not found")?;
+    pub fn document(&self, namespace: &str, id: &str) -> Result<Value> {
+        let text: String = self
+            .connection()?
+            .query_row(
+                "SELECT payload FROM documents WHERE namespace=?1 AND id=?2",
+                params![namespace, id],
+                |r| r.get(0),
+            )
+            .context("document not found")?;
         Ok(serde_json::from_str(&text)?)
     }
 
-    pub fn documents(&self,namespace:&str)->Result<Vec<Value>> {
-        let c=self.connection()?;
-        let mut statement=c.prepare("SELECT payload FROM documents WHERE namespace=?1 ORDER BY updated_at_us DESC,id")?;
-        statement.query_map([namespace],|r|r.get::<_,String>(0))?.map(|r|Ok(serde_json::from_str(&r?)?)).collect()
+    pub fn documents(&self, namespace: &str) -> Result<Vec<Value>> {
+        let c = self.connection()?;
+        let mut statement = c.prepare(
+            "SELECT payload FROM documents WHERE namespace=?1 ORDER BY updated_at_us DESC,id",
+        )?;
+        statement
+            .query_map([namespace], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
     }
 
-    pub fn save_document(&self,namespace:&str,id:&str,value:&Value)->Result<()> {
-        self.connection()?.execute("INSERT INTO documents(namespace,id,payload,updated_at_us) VALUES(?1,?2,?3,?4) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload,updated_at_us=excluded.updated_at_us",params![namespace,id,serde_json::to_string(value)?,crate::model::now_us()])?;Ok(())
+    pub fn save_document(&self, namespace: &str, id: &str, value: &Value) -> Result<()> {
+        write_document(&self.connection()?, namespace, id, value)
+    }
+
+    /// Persist a cross-client cancellation without overwriting a completed attempt.
+    pub fn request_analysis_cancel(&self, id: &str) -> Result<Value> {
+        let mut c = self.connection()?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let text: String = tx
+            .query_row(
+                "SELECT payload FROM documents WHERE namespace='analysis-results' AND id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .context("analyzer execution not found")?;
+        let mut value: Value = serde_json::from_str(&text)?;
+        let running = value["status"] == "running";
+        if running {
+            value["cancellation_requested"] = Value::Bool(true);
+            write_document(&tx, "analysis-results", id, &value)?;
+        }
+        tx.commit()?;
+        Ok(value)
     }
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root.join("artifacts"))?;
@@ -52,9 +85,25 @@ impl Store {
         c.execute_batch(
             "CREATE INDEX IF NOT EXISTS artifact_blob ON artifacts(sha256); PRAGMA user_version=1;",
         )?;
-        let columns:Vec<String>=c.prepare("PRAGMA table_info(result_sets)")?.query_map([],|r|r.get(1))?.collect::<rusqlite::Result<_>>()?;
-        if !columns.iter().any(|name|name=="source_key") {c.execute_batch("ALTER TABLE result_sets ADD COLUMN source_key TEXT NOT NULL DEFAULT ''; UPDATE result_sets SET source_key=input_identity;")?;}
-        if !columns.iter().any(|name|name=="active") {c.execute_batch("ALTER TABLE result_sets ADD COLUMN active INTEGER NOT NULL DEFAULT 1;")?;}
+        let columns: Vec<String> = c
+            .prepare("PRAGMA table_info(result_sets)")?
+            .query_map([], |r| r.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|name| name == "source_key") {
+            c.execute_batch("ALTER TABLE result_sets ADD COLUMN source_key TEXT NOT NULL DEFAULT ''; UPDATE result_sets SET source_key=input_identity;")?;
+        }
+        if !columns.iter().any(|name| name == "active") {
+            c.execute_batch(
+                "ALTER TABLE result_sets ADD COLUMN active INTEGER NOT NULL DEFAULT 1;",
+            )?;
+        }
+        let columns: Vec<String> = c
+            .prepare("PRAGMA table_info(documents)")?
+            .query_map([], |r| r.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|name| name == "owner_run_id") {
+            c.execute_batch("ALTER TABLE documents ADD COLUMN owner_run_id TEXT REFERENCES runs(id) ON DELETE CASCADE;")?;
+        }
         Ok(store)
     }
 
@@ -94,28 +143,68 @@ impl Store {
 
     /// Validate and publish a whole result set in one transaction. Replays are no-ops.
     pub fn accept(&self, run_id: &str, input_identity: &str, records: &[Value]) -> Result<bool> {
-        self.publish(run_id,input_identity,input_identity,records,None)
+        self.publish(run_id, input_identity, input_identity, records, None)
     }
 
-    pub fn accept_import(&self,run_id:&str,source_key:&str,fingerprint:&str,records:&[Value])->Result<bool> {
-        self.publish(run_id,source_key,&format!("normalization:{fingerprint}"),records,None)
+    pub fn accept_import(
+        &self,
+        run_id: &str,
+        source_key: &str,
+        fingerprint: &str,
+        records: &[Value],
+    ) -> Result<bool> {
+        self.publish(
+            run_id,
+            source_key,
+            &format!("normalization:{fingerprint}"),
+            records,
+            None,
+        )
     }
 
-    pub fn publish(&self,run_id:&str,source_key:&str,input_identity:&str,records:&[Value],document:Option<(&str,&str,&Value)>)->Result<bool> {
+    pub fn publish(
+        &self,
+        run_id: &str,
+        source_key: &str,
+        input_identity: &str,
+        records: &[Value],
+        document: Option<(&str, &str, &Value)>,
+    ) -> Result<bool> {
         self.run(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some((id,active))=tx.query_row("SELECT id,active FROM result_sets WHERE run_id=?1 AND input_identity=?2",params![run_id,input_identity],|r|Ok((r.get::<_,String>(0)?,r.get::<_,bool>(1)?))).optional()? {
+        if let Some(("analysis-results", id, _)) = document {
+            let cancelled: Option<bool> = tx.query_row("SELECT COALESCE(json_extract(payload,'$.cancellation_requested'),0) FROM documents WHERE namespace='analysis-results' AND id=?1",[id],|r|r.get(0)).optional()?;
+            anyhow::ensure!(
+                cancelled != Some(true),
+                "analyzer execution was cancelled before publication"
+            );
+        }
+        if let Some((id, active, previous_source)) = tx
+            .query_row(
+                "SELECT id,active,source_key FROM result_sets WHERE run_id=?1 AND input_identity=?2",
+                params![run_id, input_identity],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, String>(2)?)),
+            )
+            .optional()?
+        {
+            anyhow::ensure!(previous_source == source_key, "input identity belongs to another result source");
             if !active {
-                tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key=?2",params![run_id,source_key])?;
-                tx.execute("UPDATE result_sets SET active=1 WHERE id=?1",[id])?;
-                tx.commit()?;
+                deactivate_source(&tx, run_id, source_key)?;
+                let stale: i64 = tx.query_row("SELECT COUNT(*) FROM result_set_dependencies d JOIN result_sets r ON r.id=d.input_result_set_id WHERE d.result_set_id=?1 AND r.active=0", [&id], |r|r.get(0))?;
+                anyhow::ensure!(stale == 0, "stored result depends on superseded inputs; recompute the analysis");
+                tx.execute("UPDATE result_sets SET active=1 WHERE id=?1", [&id])?;
             }
+            if let Some((namespace, key, value)) = document {
+                let mut value = value.clone();
+                value["status"] = serde_json::json!("replayed");
+                value["result_set_id"] = serde_json::json!(id);
+                write_document(&tx, namespace, key, &value)?;
+            }
+            tx.commit()?;
             return Ok(false);
         }
-        let replacing=tx.query_row("SELECT COUNT(*) FROM result_sets WHERE run_id=?1 AND source_key=?2 AND active=1",params![run_id,source_key],|r|r.get::<_,i64>(0))?>0;
-        tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key=?2",params![run_id,source_key])?;
-        if replacing && source_key.starts_with("import-v1:") {tx.execute("UPDATE result_sets SET active=0 WHERE run_id=?1 AND source_key LIKE 'analysis:%'",[run_id])?;}
+        deactivate_source(&tx, run_id, source_key)?;
         let existing: HashSet<String> = tx
             .prepare("SELECT o.id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
             .query_map([run_id], |r| r.get(0))?
@@ -132,11 +221,60 @@ impl Store {
             })
             .collect::<Result<_>>()?;
         ingestion::validate_ownership(records, &existing_rows)?;
-        let result_id = uuid::Uuid::new_v4().to_string();
+        let mut dependencies = HashSet::new();
+        let own_ids: HashSet<&str> = records.iter().filter_map(|r| r["id"].as_str()).collect();
+        for record in records {
+            let references = ["parent_id", "context_id", "from", "to"]
+                .into_iter()
+                .filter_map(|key| record[key].as_str())
+                .chain(
+                    record["evidence"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                );
+            for reference in references.filter(|id| !own_ids.contains(id)) {
+                let id: String = tx.query_row("SELECT o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND o.id=?2 AND r.active=1",params![run_id,reference],|r|r.get(0))?;
+                dependencies.insert(id);
+            }
+        }
+        if let Some((_, _, value)) = document {
+            if let Some(inputs) = value.get("input_result_sets") {
+                for id in inputs
+                    .as_array()
+                    .context("input_result_sets must be an array")?
+                {
+                    dependencies.insert(
+                        id.as_str()
+                            .context("input result identity must be a string")?
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        for id in &dependencies {
+            let selected: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM result_sets WHERE id=?1 AND run_id=?2 AND active=1",
+                params![id, run_id],
+                |r| r.get(0),
+            )?;
+            anyhow::ensure!(
+                selected == 1,
+                "analysis input changed before publication; rerun with current selected results"
+            );
+        }
+        let result_id = document
+            .filter(|(ns, _, _)| *ns == "analysis-results")
+            .map(|(_, id, _)| id.to_owned())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         tx.execute(
             "INSERT INTO result_sets(id,run_id,input_identity,source_key,active) VALUES(?1,?2,?3,?4,1)",
             params![result_id, run_id, input_identity,source_key],
         )?;
+        for id in dependencies {
+            tx.execute("INSERT INTO result_set_dependencies(result_set_id,input_result_set_id) VALUES(?1,?2)",params![result_id,id])?;
+        }
         {
             let mut insert=tx.prepare("INSERT INTO observations(run_id,id,kind,timestamp_us,result_set_id,record) VALUES(?1,?2,?3,?4,?5,?6)")?;
             for r in records {
@@ -150,7 +288,9 @@ impl Store {
                 ])?;
             }
         }
-        if let Some((namespace,id,value))=document {tx.execute("INSERT INTO documents(namespace,id,payload,updated_at_us) VALUES(?1,?2,?3,?4) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload,updated_at_us=excluded.updated_at_us",params![namespace,id,serde_json::to_string(value)?,crate::model::now_us()])?;}
+        if let Some((namespace, id, value)) = document {
+            write_document(&tx, namespace, id, value)?;
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -165,10 +305,53 @@ impl Store {
             .collect()
     }
 
-    pub fn records_history(&self,run_id:&str)->Result<Vec<Value>> {
-        self.run(run_id)?;let c=self.connection()?;
-        let mut statement=c.prepare("SELECT record FROM observations WHERE run_id=?1 ORDER BY seq")?;
-        statement.query_map([run_id],|r|r.get::<_,String>(0))?.map(|r|Ok(serde_json::from_str(&r?)?)).collect()
+    pub fn records_history(&self, run_id: &str) -> Result<Vec<Value>> {
+        self.run(run_id)?;
+        let c = self.connection()?;
+        let mut statement =
+            c.prepare("SELECT record FROM observations WHERE run_id=?1 ORDER BY seq")?;
+        statement
+            .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
+
+    /// Snapshot candidates omit the analyzer's old results and their dependents.
+    pub fn active_result_ids(&self, run_id: &str, exclude_source_key: &str) -> Result<Vec<String>> {
+        self.run(run_id)?;
+        let c = self.connection()?;
+        let mut query = c.prepare("WITH RECURSIVE omitted(id) AS (SELECT id FROM result_sets WHERE run_id=?1 AND source_key=?2 UNION SELECT d.result_set_id FROM result_set_dependencies d JOIN omitted o ON d.input_result_set_id=o.id) SELECT id FROM result_sets WHERE run_id=?1 AND active=1 AND id NOT IN(SELECT id FROM omitted) ORDER BY id")?;
+        Ok(query
+            .query_map(params![run_id, exclude_source_key], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn records_for_result_ids(&self, run_id: &str, ids: &[String]) -> Result<Vec<Value>> {
+        self.run(run_id)?;
+        let wanted: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let c = self.connection()?;
+        let mut query = c.prepare("SELECT o.result_set_id,o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq")?;
+        let mut result = Vec::new();
+        for row in query.query_map([run_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (id, record) = row?;
+            if wanted.contains(id.as_str()) {
+                result.push(serde_json::from_str(&record)?);
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn selected_result_id(&self, run_id: &str, source_key: &str) -> Result<Option<String>> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT id FROM result_sets WHERE run_id=?1 AND source_key=?2 AND active=1",
+                params![run_id, source_key],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub fn add_artifact(&self, run_id: &str, source: &Path, format: &str) -> Result<Artifact> {
@@ -248,6 +431,7 @@ impl Store {
         let candidates = self.artifacts(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT COUNT(*) FROM documents WHERE owner_run_id=?1 AND json_extract(payload,'$.status')='running'",[run_id],|r|r.get::<_,i64>(0))?>0 {bail!("cancel active analyzer executions before removing this recording");}
         tx.execute("DELETE FROM runs WHERE id=?1", [run_id])?;
         tx.commit()?;
         // Only collect after deleting metadata commits. Artifact writers use the
@@ -269,4 +453,23 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Value) -> Result<()> {
+    let owner = if matches!(namespace, "analysis-results" | "cancellations") {
+        Some(
+            value["run_id"]
+                .as_str()
+                .context("analyzer result requires an owning run")?,
+        )
+    } else {
+        None
+    };
+    connection.execute("INSERT INTO documents(namespace,id,payload,updated_at_us,owner_run_id) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload,updated_at_us=excluded.updated_at_us,owner_run_id=excluded.owner_run_id",params![namespace,id,serde_json::to_string(value)?,crate::model::now_us(),owner])?;
+    Ok(())
+}
+
+fn deactivate_source(connection: &Connection, run_id: &str, source_key: &str) -> Result<()> {
+    connection.execute("WITH RECURSIVE stale(id) AS (SELECT id FROM result_sets WHERE run_id=?1 AND source_key=?2 AND active=1 UNION SELECT d.result_set_id FROM result_set_dependencies d JOIN stale s ON d.input_result_set_id=s.id) UPDATE result_sets SET active=0 WHERE id IN(SELECT id FROM stale)",params![run_id,source_key])?;
+    Ok(())
 }

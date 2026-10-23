@@ -104,11 +104,136 @@ fn references_preserve_kind_and_acyclic_parent_context_ownership() {
 
 #[test]
 fn reanalysis_selects_one_normalization_and_preserves_history() {
-    let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).unwrap();store.save_run(&run()).unwrap();
-    store.accept_import("run-1","raw-recording","importer-v1-sidecar-a",&[event("old")]).unwrap();
-    store.accept_import("run-1","raw-recording","importer-v1-sidecar-b",&[event("new")]).unwrap();
-    assert_eq!(store.records("run-1").unwrap().len(),1);assert_eq!(store.records("run-1").unwrap()[0]["id"],"new");
-    assert_eq!(store.records_history("run-1").unwrap().len(),2);
-    store.accept_import("run-1","raw-recording","importer-v1-sidecar-a",&[event("old")]).unwrap();
-    assert_eq!(store.records("run-1").unwrap()[0]["id"],"old");
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store
+        .accept_import(
+            "run-1",
+            "raw-recording",
+            "importer-v1-sidecar-a",
+            &[event("old")],
+        )
+        .unwrap();
+    store
+        .accept_import(
+            "run-1",
+            "raw-recording",
+            "importer-v1-sidecar-b",
+            &[event("new")],
+        )
+        .unwrap();
+    assert_eq!(store.records("run-1").unwrap().len(), 1);
+    assert_eq!(store.records("run-1").unwrap()[0]["id"], "new");
+    assert_eq!(store.records_history("run-1").unwrap().len(), 2);
+    store
+        .accept_import(
+            "run-1",
+            "raw-recording",
+            "importer-v1-sidecar-a",
+            &[event("old")],
+        )
+        .unwrap();
+    assert_eq!(store.records("run-1").unwrap()[0]["id"], "old");
+}
+
+#[test]
+fn reanalysis_invalidates_dependents_and_keeps_independent_results() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store.accept("run-1", "raw", &[event("raw")]).unwrap();
+    let raw = store.selected_result_id("run-1", "raw").unwrap().unwrap();
+    let publish = |source: &str, id: &str, inputs: Vec<String>| {
+        let mut record = event(id);
+        record["basis"] = json!("derived");
+        let doc = json!({"run_id":"run-1","status":"accepted","input_result_sets":inputs});
+        store.publish(
+            "run-1",
+            source,
+            id,
+            &[record],
+            Some(("analysis-results", id, &doc)),
+        )
+    };
+    publish("analysis:b", "b1", vec![raw.clone()]).unwrap();
+    publish("analysis:a", "a1", vec!["b1".into()]).unwrap();
+    assert_eq!(
+        store.active_result_ids("run-1", "analysis:b").unwrap(),
+        vec![raw.clone()]
+    );
+    publish("analysis:a", "a2", vec!["b1".into()]).unwrap();
+    assert_eq!(
+        store
+            .selected_result_id("run-1", "analysis:b")
+            .unwrap()
+            .as_deref(),
+        Some("b1")
+    );
+    publish("analysis:b", "b2", vec![raw]).unwrap();
+    assert!(
+        store
+            .selected_result_id("run-1", "analysis:a")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .records_for_result_ids("run-1", &["b2".into()])
+            .unwrap()[0]["id"],
+        "b2"
+    );
+    assert!(publish("analysis:a", "a2", vec!["b1".into()]).is_err());
+    assert_eq!(store.records("run-1").unwrap().len(), 2);
+    assert_eq!(store.records_history("run-1").unwrap().len(), 5);
+}
+
+#[test]
+fn persisted_cancellation_wins_the_publication_race_and_owned_documents_are_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let doc = json!({"run_id":"run-1","status":"running"});
+    store
+        .save_document("analysis-results", "attempt", &doc)
+        .unwrap();
+    let other_client = Store::open(root.path()).unwrap();
+    assert_eq!(
+        other_client.request_analysis_cancel("attempt").unwrap()["cancellation_requested"],
+        true
+    );
+    assert!(
+        store
+            .publish(
+                "run-1",
+                "analysis:a",
+                "a1",
+                &[event("a")],
+                Some((
+                    "analysis-results",
+                    "attempt",
+                    &json!({"run_id":"run-1","status":"accepted"})
+                ))
+            )
+            .is_err()
+    );
+    assert!(store.records("run-1").unwrap().is_empty());
+    assert!(store.remove_run("run-1").is_err());
+    store
+        .save_document(
+            "analysis-results",
+            "attempt",
+            &json!({"run_id":"run-1","status":"cancelled"}),
+        )
+        .unwrap();
+    assert_eq!(
+        other_client.request_analysis_cancel("attempt").unwrap()["status"],
+        "cancelled"
+    );
+    store
+        .save_document("cancellations", "run-1", &json!({"run_id":"run-1"}))
+        .unwrap();
+    store.remove_run("run-1").unwrap();
+    assert!(store.document("analysis-results", "attempt").is_err());
+    assert!(store.document("cancellations", "run-1").is_err());
 }
