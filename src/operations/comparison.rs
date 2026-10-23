@@ -9,6 +9,79 @@ fn elapsed(run: &Run) -> f64 {
         .saturating_sub(run.started_at_us) as f64
         / 1000.0
 }
+struct ResourceValue {
+    value: f64,
+    observations: usize,
+    lifetimes: usize,
+    minimum_points_per_lifetime: usize,
+    identity_known: bool,
+}
+
+fn resource_value(
+    rows: &[Value],
+    name: &str,
+    unit: &str,
+    cumulative: bool,
+) -> Option<ResourceValue> {
+    let mut lifetimes: BTreeMap<String, (f64, BTreeSet<u64>)> = BTreeMap::new();
+    let mut identity_known = true;
+    for row in rows.iter().filter(|r| {
+        r["kind"] == "metric"
+            && r["name"] == name
+            && r["unit"] == unit
+            && r["scope"] == "process"
+            && r["attributes"]["process_role"] != "collector"
+    }) {
+        if cumulative && row["attributes"]["temporality"] != "cumulative" {
+            continue;
+        }
+        let Some(value) = row["value"].as_f64() else {
+            continue;
+        };
+        let attrs = &row["attributes"];
+        let lifetime = if let Some(id) = attrs["process_lifetime_id"].as_str() {
+            json!([row["pid"], id]).to_string()
+        } else if let Some(start) = attrs["process_started_at_seconds"]
+            .as_u64()
+            .filter(|t| *t > 0)
+        {
+            json!([row["pid"], start]).to_string()
+        } else {
+            identity_known = false;
+            json!(["unknown lifetime", row["pid"], row["producer_id"]]).to_string()
+        };
+        let entry = lifetimes
+            .entry(lifetime)
+            .or_insert((value, BTreeSet::new()));
+        entry.0 = entry.0.max(value);
+        if let Some(timestamp) = row["timestamp_us"].as_u64() {
+            entry.1.insert(timestamp);
+        }
+    }
+    if lifetimes.is_empty() {
+        return None;
+    }
+    Some(ResourceValue {
+        value: if cumulative {
+            lifetimes.values().map(|(value, _)| value).sum()
+        } else {
+            lifetimes
+                .values()
+                .map(|(value, _)| *value)
+                .reduce(f64::max)
+                .unwrap()
+        },
+        observations: lifetimes.values().map(|(_, times)| times.len()).sum(),
+        lifetimes: lifetimes.len(),
+        minimum_points_per_lifetime: lifetimes
+            .values()
+            .map(|(_, times)| times.len())
+            .min()
+            .unwrap(),
+        identity_known,
+    })
+}
+
 pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
     let before = store.run(before)?;
     let after = store.run(after)?;
@@ -43,10 +116,41 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
     {
         reasons.push("Collector settings differ");
     }
-    let metric = |name: &str, unit: &str, a: f64, b: f64| json!({"name":name,"unit":unit,"before":a,"after":b,"delta":b-a,"percent_change":if a!=0.0 {Some((b-a)/a*100.0)}else{None}});
+    for (a, b, missing, different) in [
+        (
+            &before.source["environment_fingerprint"],
+            &after.source["environment_fingerprint"],
+            "Effective environment identity is unavailable",
+            "Effective workload environments differ",
+        ),
+        (
+            &before.source["workload_inputs"]["fingerprint"],
+            &after.source["workload_inputs"]["fingerprint"],
+            "Declared workload input identity is unavailable",
+            "Declared workload input contents differ",
+        ),
+        (
+            &before.source["correctness_recipe_fingerprint"],
+            &after.source["correctness_recipe_fingerprint"],
+            "Correctness recipe identity is unavailable",
+            "Correctness recipes differ",
+        ),
+    ] {
+        if !known(a) || !known(b) {
+            reasons.push(missing);
+        } else if a != b {
+            reasons.push(different);
+        }
+    }
+    if before.source["supervised_execution_scope"] != after.source["supervised_execution_scope"] {
+        reasons.push("Supervised elapsed measurement scopes differ");
+    }
+    let metric = |name: &str, unit: &str, scope: &str, basis: &str, a: f64, b: f64| json!({"name":name,"unit":unit,"scope":scope,"basis":basis,"before":a,"after":b,"delta":b-a,"percent_change":if a!=0.0 {Some((b-a)/a*100.0)}else{None}});
     let mut metrics = vec![metric(
         "recording.elapsed",
         "milliseconds",
+        "recording_orchestration",
+        "record creation through preservation/ingestion; not target wall time",
         elapsed(&before),
         elapsed(&after),
     )];
@@ -57,45 +161,60 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
         metrics.push(metric(
             "supervised.elapsed",
             "milliseconds",
+            before.source["supervised_execution_scope"].as_str().unwrap_or("unknown"),
+            "supervised process spawn/wait including runtime or collector overhead; not isolated hot-function time",
             x / 1000.0,
             y / 1000.0,
         ));
     }
     let a = store.records(&before.id)?;
     let b = store.records(&after.id)?;
-    let measured =
-        |r: &&Value| r["kind"] == "metric" && r["attributes"]["process_role"] != "collector";
-    let rss = |rows: &[Value]| {
-        rows.iter()
-            .filter(measured)
-            .filter(|r| r["name"] == "process.rss")
-            .filter_map(|r| r["value"].as_f64())
-            .reduce(f64::max)
-    };
-    if let (Some(x), Some(y)) = (rss(&a), rss(&b)) {
-        metrics.push(metric("process.rss.max_process", "bytes", x, y));
-    }
-    let cpu = |rows: &[Value]| {
-        let mut lifetimes: BTreeMap<String, f64> = BTreeMap::new();
-        for r in rows
-            .iter()
-            .filter(measured)
-            .filter(|r| r["name"] == "process.cpu_time")
-        {
-            if let (Some(id), Some(value)) = (r["producer_id"].as_str(), r["value"].as_f64()) {
-                let current = lifetimes.entry(id.into()).or_default();
-                *current = current.max(value);
-            }
-        }
-        (!lifetimes.is_empty()).then(|| lifetimes.values().sum::<f64>())
-    };
-    if let (Some(x), Some(y)) = (cpu(&a), cpu(&b)) {
-        metrics.push(metric(
+    for (name, input, unit, cumulative, scope, basis) in [
+        (
+            "process.rss.max_process",
+            "process.rss",
+            "bytes",
+            false,
+            "observed_measured_process",
+            "maximum observed individual-process RSS; collector wrapper and non-process scopes excluded",
+        ),
+        (
             "process.cpu_time.observed_total",
+            "process.cpu_time",
             "milliseconds",
-            x,
-            y,
-        ));
+            true,
+            "observed_measured_process_lifetimes",
+            "sum of last cumulative CPU observations per OS process lifetime; collector wrapper excluded; final cumulative values may be missed",
+        ),
+    ] {
+        if let (Some(x), Some(y)) = (
+            resource_value(&a, input, unit, cumulative),
+            resource_value(&b, input, unit, cumulative),
+        ) {
+            let sufficient = x.identity_known
+                && y.identity_known
+                && x.minimum_points_per_lifetime >= 2
+                && y.minimum_points_per_lifetime >= 2;
+            let mut row = metric(name, unit, scope, basis, x.value, y.value);
+            row["measurement_quality"] = json!(if sufficient {
+                "observed_partial"
+            } else {
+                "insufficient_observations"
+            });
+            row["comparable"] = json!(sufficient);
+            row["before_observations"] = json!(x.observations);
+            row["after_observations"] = json!(y.observations);
+            row["before_process_lifetimes"] = json!(x.lifetimes);
+            row["after_process_lifetimes"] = json!(y.lifetimes);
+            if !sufficient {
+                row["delta"] = Value::Null;
+                row["percent_change"] = Value::Null;
+                row["diagnostic"] = json!(
+                    "Fewer than two distinct observations per process lifetime, or unknown lifetime identity; startup-only points do not establish CPU totals or memory peaks."
+                );
+            }
+            metrics.push(row);
+        }
     }
     let units = |rows: &[Value]| {
         rows.iter()
@@ -121,8 +240,8 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
             }
         }
     }
-    let hotspots=joined.into_values().map(|(r,x,y)|json!({"function":r["function"],"file":r["file"],"before":x,"after":y,"delta":y-x,"unit":bh["weight_unit"],"before_available":!units(&a).is_empty(),"after_available":!units(&b).is_empty()})).collect::<Vec<_>>();
+    let hotspots=joined.into_values().map(|(r,x,y)|json!({"function":r["function"],"file":r["file"],"module":r["module"],"before":x,"after":y,"delta":y-x,"unit":bh["weight_unit"],"basis":"profiler sample weight; not elapsed time or a speedup ratio","before_available":!units(&a).is_empty(),"after_available":!units(&b).is_empty()})).collect::<Vec<_>>();
     Ok(
-        json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Process resource peaks retain process scope; no per-request ownership is inferred."]}),
+        json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"sample_weight_units":{"before":units(&a),"after":units(&b)},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred."]}),
     )
 }

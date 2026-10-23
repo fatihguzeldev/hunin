@@ -5,6 +5,66 @@ use hunin::{
 use serde_json::json;
 
 #[tokio::test]
+async fn validates_exact_stdout_and_records_declared_environment_and_inputs() {
+    use sha2::{Digest, Sha256};
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("input.txt"), "data").unwrap();
+    std::fs::write(project.path().join("app.mjs"), "import {readFileSync} from 'node:fs'; console.log(process.env.HUNIN_TEST_VALUE+':'+readFileSync('input.txt','utf8'));").unwrap();
+    let engine = Engine::new(Store::open(data.path()).unwrap());
+    let base = json!({"command":["node","app.mjs"],"runtime":"none","cwd":project.path(),"env":{"HUNIN_TEST_VALUE":"value"},"input_files":["input.txt"],"expected_stdout":"value:data\n"});
+    let run = engine
+        .start(serde_json::from_value(base.clone()).unwrap())
+        .await
+        .unwrap();
+    let run = engine.wait(&run.id).await.unwrap();
+    assert_eq!(run.status, "completed");
+    assert_eq!(run.correctness["passed"], true);
+    assert_eq!(run.correctness["validation"], "exit_code_and_stdout");
+    assert_eq!(run.correctness["checks"][1]["passed"], true);
+    assert_eq!(run.correctness["stdout_bytes"], 11);
+    assert_eq!(
+        run.source["environment"]["overrides"]["HUNIN_TEST_VALUE"],
+        "value"
+    );
+    assert_eq!(
+        run.source["workload_inputs"]["files"][0]["path"],
+        "input.txt"
+    );
+    let mut hashed = base.clone();
+    hashed.as_object_mut().unwrap().remove("expected_stdout");
+    hashed["expected_stdout_sha256"] = json!(format!("{:x}", Sha256::digest(b"value:data\n")));
+    let hashed = engine
+        .start(serde_json::from_value(hashed).unwrap())
+        .await
+        .unwrap();
+    let hashed = engine.wait(&hashed.id).await.unwrap();
+    assert_eq!(hashed.correctness["passed"], true);
+    assert_eq!(
+        run.source["correctness_recipe_fingerprint"],
+        hashed.source["correctness_recipe_fingerprint"]
+    );
+    let mut wrong = base;
+    wrong["expected_stdout"] = json!("wrong\n");
+    let wrong = engine
+        .start(serde_json::from_value(wrong).unwrap())
+        .await
+        .unwrap();
+    let wrong = engine.wait(&wrong.id).await.unwrap();
+    assert_eq!(wrong.exit_code, Some(0));
+    assert_eq!(wrong.status, "failed");
+    assert_eq!(wrong.correctness["checks"][0]["passed"], true);
+    assert_eq!(wrong.correctness["checks"][1]["passed"], false);
+    let conflicting = json!({"command":["node","app.mjs"],"cwd":project.path(),"expected_stdout":"x","expected_stdout_sha256":"0".repeat(64)});
+    assert!(
+        engine
+            .start(serde_json::from_value(conflicting).unwrap())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn records_real_exit_and_times_out_owned_process_group() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

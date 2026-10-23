@@ -29,6 +29,14 @@ enum Command {
         timeout: Option<f64>,
         #[arg(long, default_value_t = 0)]
         expected_exit_code: i32,
+        #[arg(long, value_parser = parse_environment)]
+        env: Vec<(String, String)>,
+        #[arg(long = "input-file")]
+        input_files: Vec<PathBuf>,
+        #[arg(long, conflicts_with = "expected_stdout_sha256")]
+        expected_stdout: Option<String>,
+        #[arg(long)]
+        expected_stdout_sha256: Option<String>,
         #[arg(required = true, last = true)]
         command: Vec<String>,
     },
@@ -61,6 +69,14 @@ enum Command {
     },
 }
 
+fn parse_environment(value: &str) -> std::result::Result<(String, String), String> {
+    let (key, value) = value.split_once('=').ok_or("expected KEY=VALUE")?;
+    if key.is_empty() || key.contains('\0') || value.contains('\0') {
+        return Err("environment names must be nonempty and contain no NUL bytes".into());
+    }
+    Ok((key.to_owned(), value.to_owned()))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -78,14 +94,20 @@ async fn main() -> Result<()> {
             cwd,
             timeout,
             expected_exit_code,
+            env,
+            input_files,
+            expected_stdout,
+            expected_stdout_sha256,
             command,
         } => {
-            let mut params = json!({"command":command,"expected_exit_code":expected_exit_code});
+            let mut params = json!({"command":command,"expected_exit_code":expected_exit_code,"env":env.into_iter().collect::<std::collections::BTreeMap<_,_>>(),"input_files":input_files});
             for (key, value) in [
                 ("name", json!(name)),
                 ("runtime", json!(runtime)),
                 ("cwd", json!(cwd)),
                 ("timeout_seconds", json!(timeout)),
+                ("expected_stdout", json!(expected_stdout)),
+                ("expected_stdout_sha256", json!(expected_stdout_sha256)),
             ] {
                 if !value.is_null() {
                     params[key] = value;

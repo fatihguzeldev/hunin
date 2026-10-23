@@ -16,6 +16,8 @@ pub struct CaptureRequest {
     pub artifact_dir: PathBuf,
     pub run_id: String,
     pub runtime: String,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +117,7 @@ fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
         request.artifact_dir.join("go-tool.json"),
         serde_json::to_vec(&serde_json::json!({"executable":request.command[0]}))?,
     )?;
-    Ok(CapturePlan{command,env:BTreeMap::new(),runtime_version:Command::new(&request.command[0]).arg("version").output().ok().map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
+    Ok(CapturePlan{command,env:BTreeMap::new(),runtime_version:Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version").output().ok().map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
 }
 
 fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
@@ -134,6 +136,8 @@ fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
 fn python(request: &CaptureRequest) -> Result<CapturePlan> {
     let interpreter = &request.command[0];
     let check = Command::new(interpreter)
+        .envs(&request.env)
+        .current_dir(&request.cwd)
         .args(["-c", "import vmprof,sys,importlib.metadata as m; v=m.version('vmprof'); assert tuple(map(int,v.split('.')[:2])) == (0,6), 'Hunin requires the vmprof 0.6 series'; print(sys.version+'\\nvmprof '+v)"])
         .output()
         .with_context(|| format!("launch Python interpreter {interpreter}"))?;
@@ -187,7 +191,7 @@ fn graal(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: version(&request.command[0]),
+    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("--version").output().ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()),
         diagnostics: vec!["GraalPy distribution must expose Truffle CPUSampler; native-image and JVM-hosted modes differ".into(), "CPU sampler call-tree weights are aggregated; no per-call duration is inferred".into()] })
 }
 

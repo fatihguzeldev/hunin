@@ -13,9 +13,242 @@ fn run(id: &str, cwd: &str, passed: bool) -> Run {
         finished_at_us: Some(30),
         exit_code: Some(if passed { 0 } else { 1 }),
         diagnostics: vec![],
-        source: json!({"fingerprint":"known"}),
+        source: json!({"fingerprint":"known","collector_settings_fingerprint":"settings","environment_fingerprint":"environment","workload_inputs":{"fingerprint":"inputs"},"correctness_recipe_fingerprint":"recipe","supervised_elapsed_us":10,"supervised_execution_scope":"target_process"}),
         correctness: json!({"passed":passed}),
     }
+}
+
+#[tokio::test]
+async fn comparison_accepts_source_changes_but_rejects_changed_inputs_environment_and_recipe() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    let before = run("before", "/project", true);
+    let mut after = before.clone();
+    after.id = "after".into();
+    after.source["fingerprint"] = json!("optimized-source");
+    store.save_run(&before).unwrap();
+    store.save_run(&after).unwrap();
+    let ops = Operations::new(store.clone());
+    let result = ops
+        .call(
+            "comparisons.create",
+            json!({"before":"before","after":"after"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["comparable"], true, "{result}");
+    assert_eq!(result["metrics"][0]["scope"], "recording_orchestration");
+    assert_eq!(result["metrics"][1]["scope"], "target_process");
+    for (field, value, reason) in [
+        (
+            "environment_fingerprint",
+            json!("changed-env"),
+            "environment",
+        ),
+        (
+            "workload_inputs",
+            json!({"fingerprint":"changed-input"}),
+            "input",
+        ),
+        (
+            "correctness_recipe_fingerprint",
+            json!("changed-recipe"),
+            "correctness",
+        ),
+    ] {
+        let original = after.source[field].clone();
+        after.source[field] = value;
+        store.save_run(&after).unwrap();
+        let result = ops
+            .call(
+                "comparisons.create",
+                json!({"before":"before","after":"after"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["comparable"], false, "{field}");
+        assert!(
+            result["reasons"].as_array().unwrap().iter().any(|v| v
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains(reason)),
+            "{result}"
+        );
+        after.source[field] = original;
+    }
+}
+
+#[tokio::test]
+async fn stored_scenario_replays_environment_inputs_and_stdout_recipe() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("input.txt"), "payload").unwrap();
+    let source = "const fs=require('node:fs');process.stdout.write(process.env.SCENARIO_LABEL+':'+fs.readFileSync('input.txt','utf8'));";
+    std::fs::write(project.path().join("app.cjs"), source).unwrap();
+    let ops = Operations::new(Store::open(data.path()).unwrap());
+    let saved = ops.call("scenarios.save",json!({"name":"checked input","command":["node","app.cjs"],"runtime":"none","cwd":project.path(),"env":{"SCENARIO_LABEL":"case"},"input_files":["input.txt"],"expected_stdout":"case:payload"})).await.unwrap();
+    let id = saved["scenario"]["id"].as_str().unwrap();
+    let started = ops
+        .call("scenarios.run", json!({"scenario_id":id}))
+        .await
+        .unwrap();
+    let run = ops
+        .engine
+        .wait(started["run"]["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(run.correctness["passed"], true);
+    assert_eq!(run.correctness["validation"], "exit_code_and_stdout");
+    assert_eq!(
+        run.source["environment"]["overrides"]["SCENARIO_LABEL"],
+        "case"
+    );
+    assert_eq!(
+        run.source["workload_inputs"]["files"][0]["path"],
+        "input.txt"
+    );
+    let listed = ops.call("scenarios.list", json!({})).await.unwrap();
+    assert_eq!(listed["scenarios"][0]["expected_stdout"], "case:payload");
+}
+
+#[tokio::test]
+async fn resource_comparisons_deduplicate_process_lifetimes_and_do_not_extrapolate_startup_points()
+{
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("before", "/project", true)).unwrap();
+    store.save_run(&run("after", "/project", true)).unwrap();
+    let point = |id: &str,
+                 run: &str,
+                 producer: &str,
+                 time: u64,
+                 name: &str,
+                 value: f64,
+                 scope: &str,
+                 role: &str| json!({"schema_version":1,"kind":"metric","id":id,"run_id":run,"producer_id":producer,"pid":1,"tid":"process","timestamp_us":time,"basis":"observed","name":name,"value":value,"unit":if name=="process.rss"{"bytes"}else{"milliseconds"},"scope":scope,"attributes":{"process_started_at_seconds":100,"process_role":role,"temporality":if name=="process.rss"{"gauge"}else{"cumulative"}}});
+    let before = vec![
+        point(
+            "c1",
+            "before",
+            "p1",
+            10,
+            "process.cpu_time",
+            10.,
+            "process",
+            "measured",
+        ),
+        point(
+            "c2",
+            "before",
+            "p1",
+            20,
+            "process.cpu_time",
+            20.,
+            "process",
+            "measured",
+        ),
+        point(
+            "duplicate",
+            "before",
+            "p2",
+            20,
+            "process.cpu_time",
+            20.,
+            "process",
+            "measured",
+        ),
+        point(
+            "collector",
+            "before",
+            "wrapper",
+            20,
+            "process.cpu_time",
+            10000.,
+            "process",
+            "collector",
+        ),
+        point(
+            "context",
+            "before",
+            "sdk",
+            20,
+            "process.cpu_time",
+            20000.,
+            "context",
+            "measured",
+        ),
+        point(
+            "r1",
+            "before",
+            "p1",
+            10,
+            "process.rss",
+            100.,
+            "process",
+            "measured",
+        ),
+        point(
+            "r2",
+            "before",
+            "p1",
+            20,
+            "process.rss",
+            200.,
+            "process",
+            "measured",
+        ),
+    ];
+    let after = vec![
+        point(
+            "c3",
+            "after",
+            "p1",
+            10,
+            "process.cpu_time",
+            0.,
+            "process",
+            "measured",
+        ),
+        point(
+            "r3",
+            "after",
+            "p1",
+            10,
+            "process.rss",
+            5.,
+            "process",
+            "measured",
+        ),
+    ];
+    store.accept("before", "resources", &before).unwrap();
+    store.accept("after", "resources", &after).unwrap();
+    let result = Operations::new(store)
+        .call(
+            "comparisons.create",
+            json!({"before":"before","after":"after"}),
+        )
+        .await
+        .unwrap();
+    let cpu = result["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "process.cpu_time.observed_total")
+        .unwrap();
+    assert_eq!(cpu["before"], 20.0);
+    assert_eq!(cpu["after"], 0.0);
+    assert_eq!(cpu["measurement_quality"], "insufficient_observations");
+    assert_eq!(cpu["delta"], serde_json::Value::Null);
+    assert_eq!(cpu["percent_change"], serde_json::Value::Null);
+    let rss = result["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "process.rss.max_process")
+        .unwrap();
+    assert_eq!(rss["before"], 200.0);
+    assert_eq!(rss["percent_change"], serde_json::Value::Null);
 }
 
 #[tokio::test]

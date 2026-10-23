@@ -1,3 +1,4 @@
+mod correctness;
 mod identity;
 pub(crate) mod ownership;
 pub(crate) mod process;
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::PathBuf,
     process::Stdio,
@@ -37,6 +38,12 @@ pub struct StartRequest {
     pub runtime: Option<String>,
     pub timeout_seconds: Option<f64>,
     pub expected_exit_code: Option<i32>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub input_files: Vec<PathBuf>,
+    pub expected_stdout: Option<String>,
+    pub expected_stdout_sha256: Option<String>,
 }
 
 #[derive(Clone)]
@@ -85,6 +92,15 @@ impl Engine {
         if !cwd.is_dir() {
             bail!("working directory must be a directory");
         }
+        let recipe = correctness::recipe(&request)?;
+        let environment = identity::environment(&request.env)?;
+        let inputs = identity::workload_inputs(&cwd, &request.input_files)?;
+        let mut resolved_command = request.command.clone();
+        if let Some(executable) =
+            identity::resolve_with_environment(&request.command[0], &cwd, &request.env)
+        {
+            resolved_command[0] = executable.display().to_string();
+        }
         let runtime = request
             .runtime
             .clone()
@@ -103,9 +119,17 @@ impl Engine {
             finished_at_us: None,
             exit_code: None,
             diagnostics: vec![],
-            source: identity::source(&cwd, &request.command, Some(self.store.root())),
-            correctness: json!({"passed":null,"expected_exit_code":request.expected_exit_code.unwrap_or(0),"actual_exit_code":null}),
+            source: identity::source(&cwd, &resolved_command, Some(self.store.root())),
+            correctness: correctness::pending(&recipe),
         };
+        run.source["environment_fingerprint"] = environment["fingerprint"].clone();
+        run.source["environment"] = environment;
+        run.source["workload_inputs"] = inputs;
+        run.source["correctness_recipe"] = recipe.clone();
+        run.source["correctness_recipe_fingerprint"] = json!(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&recipe)?)
+        ));
         run.source["owner"] = serde_json::to_value(&self.owner)?;
         run.source["target_outcome"] = json!({"status":"not_started","exit_code":null});
         let (tx, rx) = watch::channel(false);
@@ -180,16 +204,21 @@ impl Engine {
         let directory = self.store.root().join("captures").join(&run.id);
         fs::create_dir_all(directory.join("sdk"))?;
         crate::source::retain(&self.store, &mut run)?;
+        let mut capture_command = run.command.clone();
+        if let Some(path) = run.source["executable"].as_str() {
+            capture_command[0] = path.to_owned();
+        }
         let capture = CaptureRequest {
-            command: run.command.clone(),
+            command: capture_command.clone(),
             cwd: PathBuf::from(&run.cwd),
             artifact_dir: directory.clone(),
             run_id: run.id.clone(),
             runtime: run.runtime.clone(),
+            env: request.env.clone(),
         };
         let plan = if run.runtime == "none" {
             collection::CapturePlan {
-                command: run.command.clone(),
+                command: capture_command,
                 env: Default::default(),
                 diagnostics: vec![
                     "Automatic profiling explicitly disabled for this recording".into(),
@@ -231,6 +260,7 @@ impl Engine {
         );
         command
             .args(&plan.command[1..])
+            .envs(&request.env)
             .envs(plan.env)
             .env("HUNIN_RUN_ID", &run.id)
             .env("HUNIN_RECORD_DIR", directory.join("sdk"))
@@ -242,7 +272,7 @@ impl Engine {
         let execution_started_at_us = now_us();
         let (mut child, mut tree) = process::spawn(&mut command).await?;
         let pid = child.id().context("target process has no PID")?;
-        let collector_wrapper = plan.command[0] != run.command[0]
+        let collector_wrapper = plan.command[0] != capture.command[0]
             || matches!(run.runtime.as_str(), "go-test" | "go-trace");
         run.source["supervised_execution_started_at_us"] = json!(execution_started_at_us);
         run.source["supervised_execution_scope"] = json!(if collector_wrapper {
@@ -254,8 +284,9 @@ impl Engine {
         run.source["target_outcome"] = json!({"status":"running","supervised_pid":pid});
         self.store.save_run(&run)?;
         let mut metrics = Vec::new();
-        let mut system = sysinfo::System::new();
-        let mut sequence = 0;
+        let (observer, mut observations) =
+            resources::Observer::start(pid, run.id.clone(), collector_wrapper);
+        let mut observations_open = true;
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         let timeout = tokio::time::sleep(Duration::from_secs_f64(
             request.timeout_seconds.unwrap_or(86400.0),
@@ -268,9 +299,9 @@ impl Engine {
                 status=child.wait()=>{break status?;}
                 _=cancel.changed()=>{canceled=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
                 _=&mut timeout=>{timed_out=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
+                rows=observations.recv(),if observations_open=>{if let Some(rows)=rows{metrics.extend(rows);}else{observations_open=false;}}
                 _=tick.tick()=>{
                     if self.store.document("cancellations",&run.id).is_ok(){canceled=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("persistent cancellation required forced process-tree cleanup after the graceful deadline".into());}break status;}
-                    sequence+=1;metrics.extend(resources::observe(&mut system,pid,&run.id,sequence,collector_wrapper));
                 }
             }
         };
@@ -279,18 +310,43 @@ impl Engine {
         run.source["supervised_execution_finished_at_us"] = json!(execution_finished_at_us);
         run.source["supervised_elapsed_us"] =
             json!(execution_finished_at_us.saturating_sub(execution_started_at_us));
+        if let Err(error) = observer.finish().await {
+            run.diagnostics
+                .push(format!("resource observer stopped unexpectedly: {error}"));
+        }
+        while let Ok(rows) = observations.try_recv() {
+            metrics.extend(rows);
+        }
+        run.source["resource_observation"] = json!({"scope":"observed processes in supervised tree","requested_interval_us":100000,"implementation":"CPU/memory-only process discovery on a blocking worker","limitations":"observer work can perturb the target; refresh duration and actual point intervals are recorded; short-lived processes or final cumulative values may be missed"});
         run.source["process_elapsed_limitation"] = json!(if collector_wrapper {
-            "includes collector startup/shutdown and supervised command; not isolated target elapsed"
+            "includes collector startup/shutdown, observer overhead and supervised command; not isolated target elapsed"
+        } else if run.runtime == "none" {
+            "includes runtime startup/shutdown and observer overhead; process wall interval, not isolated function time"
         } else {
-            "includes runtime profiling overhead; not an unprofiled speed measurement"
+            "includes runtime profiling and observer overhead; not an unprofiled speed measurement"
         });
         run.exit_code = status.code();
         run.finished_at_us = Some(now_us());
-        let expected = request.expected_exit_code.unwrap_or(0);
-        run.correctness = json!({"passed":!canceled&&!timed_out&&status.code()==Some(expected),"expected_exit_code":expected,"actual_exit_code":status.code()});
+        run.correctness = correctness::evaluate(
+            &run.source["correctness_recipe"],
+            &stdout,
+            status.code(),
+            canceled,
+            timed_out,
+        )?;
+        if !canceled && !timed_out {
+            for check in run.correctness["checks"].as_array().unwrap() {
+                if check["passed"] == false {
+                    run.diagnostics.push(format!(
+                        "target correctness check failed: {}",
+                        check["kind"].as_str().unwrap_or("unknown")
+                    ));
+                }
+            }
+        }
         run.status = if canceled {
             "canceled"
-        } else if timed_out || status.code() != Some(expected) {
+        } else if run.correctness["passed"] != true {
             "failed"
         } else {
             "completed"

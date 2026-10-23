@@ -2,7 +2,7 @@ use crate::{model::now_us, storage::Store};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::{Value, json};
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 #[derive(Clone, Serialize)]
 pub struct Owner {
@@ -15,7 +15,7 @@ impl Owner {
     pub fn current() -> Self {
         let pid = std::process::id();
         let mut system = System::new();
-        system.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        refresh(&mut system, &[Pid::from_u32(pid)]);
         Self {
             pid,
             process_start_time_seconds: system
@@ -28,26 +28,40 @@ impl Owner {
 }
 
 pub fn recover_abandoned(store: &Store) -> Result<()> {
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
     let mut offset = 0;
+    let mut running = Vec::new();
     loop {
         let runs = store.runs(250, offset)?;
         let count = runs.len();
-        for mut run in runs {
-            if run.status != "running" || !owner_absent(&run.source["owner"], &system) {
-                continue;
-            }
-            run.status = "failed".into();
-            run.finished_at_us = Some(now_us());
-            run.diagnostics.push("Recording interrupted: its owning Hunin process is absent or has a different OS start identity. Preserved artifacts remain available; no stale PID was signaled.".into());
-            run.source["collection_status"] = json!("interrupted");
-            store.save_run(&run)?;
-        }
+        running.extend(runs.into_iter().filter(|run| run.status == "running"));
         if count < 250 {
             break;
         }
         offset += count;
+    }
+    if running.is_empty() {
+        return Ok(());
+    }
+    let pids = running
+        .iter()
+        .filter_map(|run| run.source["owner"]["pid"].as_u64())
+        .filter_map(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .map(Pid::from_u32)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut system = System::new();
+    refresh(&mut system, &pids);
+    for mut run in running {
+        if !owner_absent(&run.source["owner"], &system) {
+            continue;
+        }
+        run.status = "failed".into();
+        run.finished_at_us = Some(now_us());
+        run.diagnostics.push("Recording interrupted: its owning Hunin process is absent or has a different OS start identity. Preserved artifacts remain available; no stale PID was signaled.".into());
+        run.source["collection_status"] = json!("interrupted");
+        store.save_run(&run)?;
     }
     Ok(())
 }
@@ -55,9 +69,19 @@ pub fn recover_abandoned(store: &Store) -> Result<()> {
 pub fn is_proven_absent(value: &Value) -> bool {
     let mut system = System::new();
     if let Some(pid) = value["pid"].as_u64().and_then(|v| u32::try_from(v).ok()) {
-        system.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        refresh(&mut system, &[Pid::from_u32(pid)]);
     }
     owner_absent(value, &system)
+}
+
+fn refresh(system: &mut System, pids: &[Pid]) {
+    if !pids.is_empty() {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(pids),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+    }
 }
 
 fn owner_absent(value: &Value, system: &System) -> bool {

@@ -77,12 +77,43 @@
         },
         "expected_exit_code": {
           "type": "integer"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Explicit environment overrides inherited by the workload."
+        },
+        "input_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "Workload data files whose startup content digests must match in comparisons; relative to cwd."
+        },
+        "expected_stdout": {
+          "type": "string",
+          "description": "Exact expected UTF-8 stdout, including whitespace and final newline."
+        },
+        "expected_stdout_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
         }
       },
       "required": [
         "command"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "expected_stdout",
+          "expected_stdout_sha256"
+        ]
+      }
     }
   },
   {
@@ -593,13 +624,44 @@
         },
         "expected_exit_code": {
           "type": "integer"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Explicit environment overrides inherited by the workload."
+        },
+        "input_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "Workload data files whose startup content digests must match in comparisons; relative to cwd."
+        },
+        "expected_stdout": {
+          "type": "string",
+          "description": "Exact expected UTF-8 stdout, including whitespace and final newline."
+        },
+        "expected_stdout_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
         }
       },
       "required": [
         "name",
         "command"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "expected_stdout",
+          "expected_stdout_sha256"
+        ]
+      }
     }
   },
   {

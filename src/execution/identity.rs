@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -160,23 +161,169 @@ fn snapshot(
 }
 
 pub fn resolve(name: &str, cwd: &Path) -> Option<PathBuf> {
+    resolve_with_environment(name, cwd, &BTreeMap::new())
+}
+
+pub fn resolve_with_environment(
+    name: &str,
+    cwd: &Path,
+    overrides: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
     let p = Path::new(name);
     if p.is_absolute() || p.components().count() > 1 {
         return cwd.join(p).canonicalize().ok();
     }
     let names = if cfg!(windows) && p.extension().is_none() {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
+        overrides
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("PATHEXT"))
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("PATHEXT").ok())
+            .unwrap_or_else(|| ".EXE;.CMD;.BAT;.COM".into())
             .split(';')
             .map(|ext| format!("{name}{ext}"))
             .collect::<Vec<_>>()
     } else {
         vec![name.to_owned()]
     };
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+    let path = overrides
+        .iter()
+        .find(|(k, _)| {
+            if cfg!(windows) {
+                k.eq_ignore_ascii_case("PATH")
+            } else {
+                k.as_str() == "PATH"
+            }
+        })
+        .map(|(_, v)| std::ffi::OsString::from(v))
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|directory| {
+            if directory.is_absolute() {
+                directory
+            } else {
+                cwd.join(directory)
+            }
+        })
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|p| p.is_file())
         .and_then(|p| p.canonicalize().ok())
+}
+
+pub fn environment(overrides: &BTreeMap<String, String>) -> anyhow::Result<Value> {
+    for (key, value) in overrides {
+        if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+            anyhow::bail!(
+                "environment names must be nonempty without '=' or NUL; values cannot contain NUL"
+            );
+        }
+    }
+    let normalize = |key: &std::ffi::OsStr| {
+        if cfg!(windows) {
+            std::ffi::OsString::from(key.to_string_lossy().to_uppercase())
+        } else {
+            key.to_owned()
+        }
+    };
+    let mut effective = std::env::vars_os()
+        .map(|(k, v)| (normalize(&k), v))
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in overrides {
+        effective.insert(normalize(std::ffi::OsStr::new(key)), value.into());
+    }
+    let ignored = [
+        "HUNIN_RUN_ID",
+        "HUNIN_RECORD_DIR",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+        "TERM",
+        "TERMCOLOR",
+        "COLORTERM",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_SESSION_ID",
+        "ITERM_SESSION_ID",
+        "WT_SESSION",
+        "WT_PROFILE_ID",
+        "VSCODE_INJECTION",
+        "VSCODE_IPC_HOOK_CLI",
+    ];
+    let mut hash = Sha256::new();
+    let mut count = 0;
+    for (key, value) in effective {
+        let text = key.to_string_lossy();
+        let explicitly_set = overrides.keys().any(|name| {
+            if cfg!(windows) {
+                text.eq_ignore_ascii_case(name)
+            } else {
+                text == name.as_str()
+            }
+        });
+        let generated = text == "HUNIN_RUN_ID" || text == "HUNIN_RECORD_DIR";
+        if generated
+            || (!explicitly_set
+                && ignored.iter().any(|ignored| {
+                    if cfg!(windows) {
+                        text.eq_ignore_ascii_case(ignored)
+                    } else {
+                        text == *ignored
+                    }
+                }))
+        {
+            continue;
+        }
+        for item in [&key, &value] {
+            #[cfg(unix)]
+            let bytes = {
+                use std::os::unix::ffi::OsStrExt;
+                item.as_os_str().as_bytes().to_vec()
+            };
+            #[cfg(windows)]
+            let bytes = {
+                use std::os::windows::ffi::OsStrExt;
+                item.encode_wide()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>()
+            };
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
+        count += 1;
+    }
+    Ok(
+        json!({"fingerprint":format!("{:x}",hash.finalize()),"overrides":overrides,"effective_variable_count":count,"excluded_variables":ignored,"identity_scope":"effective inherited environment plus explicit overrides before collector and SDK injection; inherited values are hashed, not stored"}),
+    )
+}
+
+pub fn workload_inputs(cwd: &Path, paths: &[PathBuf]) -> anyhow::Result<Value> {
+    use anyhow::Context;
+    let mut files = BTreeMap::new();
+    for path in paths {
+        let actual = cwd
+            .join(path)
+            .canonicalize()
+            .with_context(|| format!("declared input does not exist: {}", path.display()))?;
+        let metadata = fs::metadata(&actual)?;
+        if !metadata.is_file() {
+            anyhow::bail!("declared input must be a regular file: {}", path.display());
+        }
+        let key = actual
+            .strip_prefix(cwd)
+            .unwrap_or(&actual)
+            .to_string_lossy()
+            .to_string();
+        files.insert(
+            key.clone(),
+            json!({"path":key,"sha256":file_hash(&actual)?,"bytes":metadata.len()}),
+        );
+    }
+    let rows = files.into_values().collect::<Vec<_>>();
+    Ok(
+        json!({"fingerprint":format!("{:x}",Sha256::digest(serde_json::to_vec(&rows)?)),"files":rows,"coverage":"explicit files snapshotted before launch only; stdin is closed, dynamic or network inputs are not inferred"}),
+    )
 }
 
 #[cfg(test)]

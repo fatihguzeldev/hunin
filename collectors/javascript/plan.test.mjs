@@ -20,6 +20,23 @@ test('capture planning runs when the installed collector is reached through a di
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('target environment composes with profiling and selects the requested runtime through PATH', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-plan-env-'));
+  try {
+    const executableDirectory = join(directory, 'runtime');
+    symlinkSync(dirname(process.execPath), executableDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+    const capture = plan({ command: ['node', '-e', 'console.log(JSON.stringify([process.env.HUNIN_ENV_TEST,process.execArgv,process.env.NODE_OPTIONS]))'], cwd: directory, artifact_dir: directory, run_id: 'target-env', runtime: 'node', env: { PATH: executableDirectory, HUNIN_ENV_TEST: 'requested-value', NODE_OPTIONS: '--stack-trace-limit=42' } });
+    assert.ok(capture.env.NODE_OPTIONS.startsWith('--stack-trace-limit=42 '));
+    assert.match(capture.env.NODE_OPTIONS, /--cpu-prof/);
+    assert.equal(capture.env.PATH, executableDirectory);
+    const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout)[0], 'requested-value');
+    assert.ok(readdirSync(directory).some(name => name.endsWith('.cpuprofile')));
+    assert.throws(() => plan({ command: [process.execPath], cwd: directory, artifact_dir: directory, runtime: 'node', env: { VALUE: 3 } }), /env must be/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 for (const [runtime, executable] of [['node', process.execPath], ['bun', process.env.HUNIN_TEST_BUN], ['deno', process.env.HUNIN_TEST_DENO]]) {
   if (!executable) continue;
   test(`${runtime} automatic capture resolves CPU work in its worker`, () => {
