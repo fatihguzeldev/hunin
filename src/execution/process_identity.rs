@@ -74,6 +74,34 @@ fn native_birth(_: u32) -> Option<String> {
     None
 }
 
+/// Parent IDs are historical on Windows. A known child birth must be at
+/// least as recent as its current parent's birth before adding a tree edge.
+pub(super) fn child_not_older_than_parent(parent: &str, child: &str) -> bool {
+    fn value(identity: &str) -> Option<(&str, u128)> {
+        let (domain, raw) = identity.split_once(':')?;
+        let time = match domain {
+            "linux-start-ticks" | "windows-creation-100ns" => raw.parse().ok()?,
+            "macos-start-us" => {
+                let (seconds, micros) = raw.split_once(':')?;
+                let seconds = seconds.parse::<u128>().ok()?;
+                let micros = micros.parse::<u128>().ok()?;
+                if micros >= 1_000_000 {
+                    return None;
+                }
+                seconds.checked_mul(1_000_000)?.checked_add(micros)?
+            }
+            _ => return None,
+        };
+        Some((domain, time))
+    }
+    match (value(parent), value(child)) {
+        (Some((parent_domain, parent)), Some((child_domain, child))) => {
+            parent_domain == child_domain && child >= parent
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

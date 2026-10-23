@@ -94,6 +94,12 @@ fn owner_absent(value: &Value, system: &System) -> bool {
     else {
         return false;
     };
+    // A terminated Windows process remains queryable while any handle is
+    // retained. Matching creation time proves identity, not that it is alive.
+    #[cfg(windows)]
+    if windows_proven_absent(pid) {
+        return true;
+    }
     if let Some(saved) = value["process_birth_identity"].as_str() {
         if let Some(current) = super::process_identity::birth(pid) {
             return saved != current;
@@ -112,23 +118,101 @@ fn owner_absent(value: &Value, system: &System) -> bool {
         return libc::kill(pid as i32, 0) == -1
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
+    false
+}
+
+#[cfg(windows)]
+fn windows_proven_absent(pid: u32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
     unsafe {
-        use windows_sys::Win32::{
-            Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError},
-            System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            },
-        };
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
         if handle.is_null() {
             return GetLastError() == ERROR_INVALID_PARAMETER;
         }
-        let mut code = 259;
-        let queried = GetExitCodeProcess(handle, &mut code) != 0;
+        let state = WaitForSingleObject(handle, 0);
         CloseHandle(handle);
-        return queried && code != 259;
+        // WAIT_FAILED (including denied access) remains unknown. The signaled
+        // process object also handles a legitimate exit code259 correctly.
+        state == WAIT_OBJECT_0
     }
-    #[cfg(not(any(unix, windows)))]
-    false
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, WAIT_OBJECT_0},
+        System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        },
+    };
+
+    #[test]
+    fn windows_owner_exit259_fixture() {
+        let Some(release) = std::env::var_os("HUNIN_OWNER_EXIT259_RELEASE") else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !std::path::Path::new(&release).exists() {
+            if std::time::Instant::now() >= deadline {
+                std::process::exit(77);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::process::exit(259);
+    }
+
+    #[test]
+    fn terminated_owner_with_retained_handle_and_exit259_is_proven_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        let release = directory.path().join("release");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "execution::ownership::tests::windows_owner_exit259_fixture",
+            ])
+            .env("HUNIN_OWNER_EXIT259_RELEASE", &release)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let birth = super::super::process_identity::birth(pid).unwrap();
+        let owner = json!({"pid":pid,"process_birth_identity":birth});
+        assert!(!is_proven_absent(&owner));
+        struct Held(windows_sys::Win32::Foundation::HANDLE);
+        impl Drop for Held {
+            fn drop(&mut self) {
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+        let held = Held(unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        });
+        assert!(!held.0.is_null());
+        std::fs::write(release, b"exit").unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(259));
+        assert_eq!(unsafe { WaitForSingleObject(held.0, 0) }, WAIT_OBJECT_0);
+        let mut code = 0;
+        assert_ne!(unsafe { GetExitCodeProcess(held.0, &mut code) }, 0);
+        assert_eq!(code, 259);
+        assert_eq!(
+            super::super::process_identity::birth(pid).as_deref(),
+            owner["process_birth_identity"].as_str()
+        );
+        assert!(
+            is_proven_absent(&owner),
+            "signaled owner must recover even though creation time is still queryable"
+        );
+    }
 }
