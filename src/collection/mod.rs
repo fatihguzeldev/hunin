@@ -53,7 +53,7 @@ pub fn collect(request: &CaptureRequest) -> Result<Vec<ImportedProfile>> {
     files.sort();
     let mut profiles = Vec::new();
     for path in files {
-        let format=profile_format(&path);
+        let format = profile_format(&path);
         if let Some(format) = format {
             profiles.push(crate::importers::import(&path, format, &request.run_id)?);
         }
@@ -67,14 +67,23 @@ pub fn collect(request: &CaptureRequest) -> Result<Vec<ImportedProfile>> {
     Ok(profiles)
 }
 
-pub(crate) fn profile_format(path:&Path)->Option<&'static str>{
-    let name=path.file_name()?.to_string_lossy();
-    if name.ends_with(".cpuprofile"){Some("v8-cpuprofile")}
-    else if name.ends_with(".vmprof"){Some("vmprof")}
-    else if name.ends_with(".samply.json")||name.ends_with(".samply.json.gz"){Some("firefox")}
-    else if name.ends_with(".graal.json"){Some("graal-cpusampler")}
-    else if name.ends_with(".pprof")||name.ends_with(".pprof.gz"){Some("pprof")}
-    else if name.ends_with(".gotrace"){Some("go-trace")}else{None}
+pub(crate) fn profile_format(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_string_lossy();
+    if name.ends_with(".cpuprofile") {
+        Some("v8-cpuprofile")
+    } else if name.ends_with(".vmprof") {
+        Some("vmprof")
+    } else if name.ends_with(".samply.json") || name.ends_with(".samply.json.gz") {
+        Some("firefox")
+    } else if name.ends_with(".graal.json") {
+        Some("graal-cpusampler")
+    } else if name.ends_with(".pprof") || name.ends_with(".pprof.gz") {
+        Some("pprof")
+    } else if name.ends_with(".gotrace") {
+        Some("go-trace")
+    } else {
+        None
+    }
 }
 
 fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
@@ -82,7 +91,17 @@ fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
         bail!("go-test/go-trace runtime expects `go test <one package> [test flags]`");
     }
     let mut command = request.command[..2].to_vec();
-    command.push(format!("-o={}",request.artifact_dir.join(if cfg!(windows){"workload.test.exe"}else{"workload.test"}).display()));
+    command.push(format!(
+        "-o={}",
+        request
+            .artifact_dir
+            .join(if cfg!(windows) {
+                "workload.test.exe"
+            } else {
+                "workload.test"
+            })
+            .display()
+    ));
     command.push(format!(
         "{}={}",
         if trace { "-trace" } else { "-cpuprofile" },
@@ -115,12 +134,12 @@ fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
 fn python(request: &CaptureRequest) -> Result<CapturePlan> {
     let interpreter = &request.command[0];
     let check = Command::new(interpreter)
-        .args(["-c", "import vmprof,sys; print(sys.version)"])
+        .args(["-c", "import vmprof,sys,importlib.metadata as m; v=m.version('vmprof'); assert tuple(map(int,v.split('.')[:2])) == (0,6), 'Hunin requires the vmprof 0.6 series'; print(sys.version+'\\nvmprof '+v)"])
         .output()
         .with_context(|| format!("launch Python interpreter {interpreter}"))?;
     if !check.status.success() {
         bail!(
-            "{interpreter} cannot import vmprof; install vmprof 0.6+ in this interpreter (`{interpreter} -m pip install vmprof`). The interpreter is never silently replaced. {}",
+            "{interpreter} needs vmprof 0.6 in this interpreter (`{interpreter} -m pip install 'vmprof>=0.6,<0.7'`). The interpreter is never silently replaced. {}",
             String::from_utf8_lossy(&check.stderr)
         );
     }

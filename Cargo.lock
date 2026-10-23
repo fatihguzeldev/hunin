@@ -619,7 +619,9 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower-http",
+ "url",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1655,6 +1657,17 @@ version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
+[[package]]
+name = "url"
+version = "2.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+dependencies = [
+ "form_urlencoded",
+ "idna",
+ "percent-encoding",
+ "serde",
+]
 
 [[package]]
 name = "utf8_iter"
