@@ -1,10 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { plan } from './plan.mjs';
+
+test('capture planning runs when the installed collector is reached through a directory link', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-linked-plan-'));
+  try {
+    const linked = join(directory, 'collector');
+    symlinkSync(dirname(fileURLToPath(import.meta.url)), linked, process.platform === 'win32' ? 'junction' : 'dir');
+    const request = { command: [process.execPath, '-e', 'console.log(1)'], cwd: directory, artifact_dir: join(directory, 'capture'), run_id: 'linked', runtime: 'node' };
+    const result = spawnSync(process.execPath, [join(linked, 'plan.mjs')], { input: JSON.stringify(request), encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.trim(), 'entry point silently produced no capture plan');
+    assert.deepEqual(JSON.parse(result.stdout).command, request.command);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 for (const [runtime, executable] of [['node', process.execPath], ['bun', process.env.HUNIN_TEST_BUN], ['deno', process.env.HUNIN_TEST_DENO]]) {
   if (!executable) continue;

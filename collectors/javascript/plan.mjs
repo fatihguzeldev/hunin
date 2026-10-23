@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -42,7 +42,11 @@ export function plan(request) {
   }
   return { command: launched, env, profiles: [{ path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' }], diagnostics, runtime_version };
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isEntrypoint() {
+  try { return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isEntrypoint()) {
   try { process.stdout.write(JSON.stringify(plan(JSON.parse(readFileSync(0, 'utf8')))) + '\n'); }
   catch (error) { process.stderr.write(String(error.message ?? error) + '\n'); process.exitCode = 1; }
 }
