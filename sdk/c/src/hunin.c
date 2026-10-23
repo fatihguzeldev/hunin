@@ -182,7 +182,13 @@ static int prepare(void) {
     failure = ENOMEM;
     return 0;
   }
+#ifdef _WIN32
+  /* Extended-length Windows paths do not normalize forward slashes. */
+  snprintf(path, size, "%s%ssdk-%s.jsonl", directory,
+           directory[strlen(directory) - 1] == '\\' ? "" : "\\", producer);
+#else
   snprintf(path, size, "%s/sdk-%s.jsonl", directory, producer);
+#endif
   output = fopen(path, "a");
   free(path);
   if (!output) {

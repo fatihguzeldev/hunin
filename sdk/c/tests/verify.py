@@ -6,10 +6,16 @@ import subprocess
 import sys
 import tempfile
 
-def verify(directory):
-    result = subprocess.run([sys.argv[1]], env=dict(os.environ, HUNIN_RUN_ID="sdk-contract", HUNIN_RECORD_DIR=str(directory)),
+def verify(directory, probe=False):
+    environment = dict(os.environ, HUNIN_RUN_ID="sdk-contract", HUNIN_RECORD_DIR=str(directory))
+    if probe:
+        environment["HUNIN_TEST_MIXED_PATH_PROBE"] = "1"
+    result = subprocess.run([sys.argv[1]], env=environment,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, f"exit={result.returncode} (0x{result.returncode & 0xffffffff:08x}): {result.stderr}"
+    if probe:
+        assert "legacy mixed-separator fopen " in result.stderr, result.stderr
+        print(result.stderr.strip())
     rows = [json.loads(line) for path in Path(directory).glob("*.jsonl") for line in path.read_text().splitlines()]
     contexts = [row for row in rows if row["kind"] == "context"]
     parents = {row["id"]: row for row in rows if row["kind"] == "span" and row["name"] == "parent"}
@@ -33,4 +39,11 @@ def verify(directory):
 with tempfile.TemporaryDirectory(prefix="hunin-sdk-c-") as directory:
     verify(Path(directory))
     verify(Path(directory) / "missing" / "nested")
+    if os.name == "nt":
+        ordinary = Path(directory) / "extended-existing"
+        ordinary.mkdir()
+        absolute = os.path.abspath(ordinary)
+        extended = "\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\") else "\\\\?\\" + absolute
+        verify(extended, probe=True)
+        verify(extended + "\\extended-missing\\nested")
     print("C/C++ contexts, spans, counters, relations and threaded flush verified for existing and nested spool directories")
