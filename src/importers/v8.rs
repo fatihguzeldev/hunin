@@ -53,9 +53,22 @@ pub(super) fn decode(
     if samples.len() != deltas.len() {
         bail!("CPU profile sample/timeDelta lengths differ");
     }
-    let mut now = raw["startTime"]
+    let start = raw["startTime"]
         .as_f64()
         .context("CPU profile startTime missing")?;
+    checked_us(start, "CPU profile startTime")?;
+    let end = raw
+        .get("endTime")
+        .filter(|value| !value.is_null())
+        .map(|value| -> Result<f64> {
+            let end = value.as_f64().context("invalid CPU profile endTime")?;
+            checked_us(end, "CPU profile endTime")?;
+            Ok(end)
+        })
+        .transpose()?;
+    let mut now = start;
+    let mut backsteps = 0;
+    let mut outside_bounds = 0;
     let mut records = Vec::new();
     let mut frames = HashMap::new();
     for (id, node) in &map {
@@ -78,10 +91,14 @@ pub(super) fn decode(
         let delta = deltas[index]
             .as_f64()
             .context("invalid CPU profile time delta")?;
-        if delta < 0.0 {
-            bail!("negative CPU profile sample delta");
-        }
+        // V8 serializes signed differences between consecutive sample times.
+        // DevTools also accumulates these before ordering samples for display:
+        // a negative difference is ordering evidence, not negative CPU cost.
+        // Keep the original index, timestamp and sample-count weight here.
+        backsteps += usize::from(delta < 0.0);
         now += delta;
+        checked_us(now, "CPU profile sample timestamp")?;
+        outside_bounds += usize::from(now < start || end.is_some_and(|end| now > end));
         let mut cursor = Some(leaf.as_u64().context("invalid CPU profile leaf")?);
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
@@ -106,6 +123,8 @@ pub(super) fn decode(
         } else {
             json!({"source_format":"v8-cpuprofile","clock":"runtime_monotonic","clock_alignment":"unmapped"})
         };
+        attrs["profile_time_delta_us"] = deltas[index].clone();
+        attrs["profile_timestamp_us"] = json!(now);
         if !script_proofs.is_empty() {
             attrs["script_sources"] = json!(script_proofs.into_values().collect::<Vec<_>>());
         }
@@ -118,6 +137,12 @@ pub(super) fn decode(
     } else {
         Vec::new()
     };
+    if backsteps > 0 {
+        diagnostics.push(format!("CPU profile contains {backsteps} timestamp backstep(s); original signed deltas, sample order and timestamps are preserved; weights remain sample counts"));
+    }
+    if outside_bounds > 0 {
+        diagnostics.push(format!("CPU profile contains {outside_bounds} sample timestamps outside its declared start/end range; reported timestamps are preserved, not clamped"));
+    }
     diagnostics.extend(sources.diagnostics.clone());
     Ok((records, diagnostics))
 }
@@ -189,6 +214,115 @@ fn identity_from_filename(path: &Path) -> (Option<u64>, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_deltas_keep_sample_identity_order_and_count_weight() {
+        // Reduced from Deno 2.9.8's Mac ARM profile: an anonymous sample is
+        // timestamped 2us before the preceding hotspot sample.
+        let raw = json!({"startTime":366793600,"endTime":367275292,
+            "nodes":[{"id":45,"callFrame":{"functionName":""},"children":[46]},
+                     {"id":46,"callFrame":{"functionName":"huninSmokeHotspot"}}],
+            "samples":[46,45,46],"timeDeltas":[83524,-2,168]});
+        let (records, diagnostics) = decode(
+            Path::new("absent.cpuprofile"),
+            &raw,
+            "run",
+            "key",
+            &Scripts::default(),
+        )
+        .unwrap();
+        let timestamps: Vec<_> = records
+            .iter()
+            .map(|row| row["timestamp_us"].as_u64().unwrap())
+            .collect();
+        assert_eq!(timestamps, [366877124, 366877122, 366877290]);
+        assert_eq!(records[0]["stack"][1]["function"], "huninSmokeHotspot");
+        assert_eq!(records[1]["stack"][0]["function"], "(anonymous)");
+        assert_eq!(records[1]["id"], "profile:key:1");
+        assert_eq!(records[1]["attributes"]["profile_time_delta_us"], -2);
+        assert_eq!(
+            records[1]["attributes"]["profile_timestamp_us"].as_f64(),
+            Some(366877122.0)
+        );
+        assert!(
+            records
+                .iter()
+                .all(|row| row["weight"] == 1.0 && row["weight_unit"] == "samples")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| message.contains("1 timestamp backstep"))
+        );
+    }
+
+    #[test]
+    fn declared_time_bounds_are_evidence_rather_than_a_timestamp_rewrite() {
+        let raw = json!({"startTime":10,"endTime":20,
+            "nodes":[{"id":1,"callFrame":{"functionName":"work"}}],
+            "samples":[1,1],"timeDeltas":[12,-13]});
+        let (records, diagnostics) = decode(
+            Path::new("absent.cpuprofile"),
+            &raw,
+            "run",
+            "key",
+            &Scripts::default(),
+        )
+        .unwrap();
+        assert_eq!(records[0]["timestamp_us"], 22);
+        assert_eq!(records[1]["timestamp_us"], 9);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|message| message.contains("2 sample timestamps outside"))
+        );
+    }
+
+    #[test]
+    fn fractional_runtime_times_are_preserved_before_protocol_rounding() {
+        let raw = json!({"startTime":10.125,"endTime":20,
+            "nodes":[{"id":1,"callFrame":{"functionName":"work"}}],
+            "samples":[1,1],"timeDeltas":[1.25,-0.125]});
+        let (records, _) = decode(
+            Path::new("absent.cpuprofile"),
+            &raw,
+            "run",
+            "key",
+            &Scripts::default(),
+        )
+        .unwrap();
+        assert_eq!(records[0]["attributes"]["profile_timestamp_us"], 11.375);
+        assert_eq!(records[1]["attributes"]["profile_timestamp_us"], 11.25);
+        assert_eq!(records[1]["attributes"]["profile_time_delta_us"], -0.125);
+        assert_eq!(records[0]["timestamp_us"], 11);
+        assert_eq!(records[1]["weight"], 1.0);
+    }
+
+    #[test]
+    fn signed_deltas_still_reject_unsafe_or_negative_cumulative_timestamps() {
+        for (start, end, deltas) in [
+            (json!(10), json!(20), json!([-11])),
+            (json!(9_007_199_254_740_991u64), Value::Null, json!([1])),
+            (json!(9_007_199_254_740_992u64), Value::Null, json!([-1])),
+            (json!(10), json!(9_007_199_254_740_992u64), json!([1])),
+            (json!(10), json!("invalid"), json!([1])),
+        ] {
+            let raw = json!({"startTime":start,"endTime":end,
+                "nodes":[{"id":1,"callFrame":{"functionName":"work"}}],
+                "samples":[1],"timeDeltas":deltas});
+            assert!(
+                decode(
+                    Path::new("absent.cpuprofile"),
+                    &raw,
+                    "run",
+                    "key",
+                    &Scripts::default()
+                )
+                .is_err()
+            );
+        }
+    }
+
     #[test]
     fn raw_profile_retains_unmapped_clock_and_root_to_leaf_stack() {
         let raw = json!({"startTime":10,"nodes":[{"id":1,"callFrame":{"functionName":"root"},"children":[2]},{"id":2,"callFrame":{"functionName":"hot","url":"work.ts","lineNumber":4}}],"samples":[2],"timeDeltas":[3]});
