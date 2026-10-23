@@ -1,4 +1,4 @@
-import { operation, type Run } from '../api';
+import { operation, type Run, type Artifact } from '../api';
 import { badge, button, el, empty, errorView, loading } from '../dom';
 import { bytes, numeric } from '../format';
 import type { Observation } from '../record.generated';
@@ -7,6 +7,7 @@ import { hasInspectableSource } from '../source-path';
 import { canReanalyze } from '../artifact';
 import { observationLabel, referenceIds } from '../observation';
 import { nativeEvidence } from '../native-evidence';
+import { pagedList } from '../paged-list';
 
 export async function source(run: Run, path: string, line?: number, codeId?: string): Promise<HTMLElement> {
   const data = await operation('source.read', { run_id: run.id, path, line, code_id: codeId, count: 120 });
@@ -26,9 +27,7 @@ export async function source(run: Run, path: string, line?: number, codeId?: str
 }
 
 export async function evidence(context: ViewContext, cursor?: string): Promise<HTMLElement> {
-  const [artifacts, relationships] = await Promise.all([
-    operation('artifacts.list', { run_id: context.run.id }), operation('contexts.query', { run_id: context.run.id, cursor, limit: 100 }),
-  ]);
+  const relationships = await operation('contexts.query', { run_id: context.run.id, cursor, limit: 100 });
   const body = el('div', { class: 'stack' });
   const inspector = el('div');
   const names = new Map(relationships.contexts.map(record => [record.id, record.name ?? record.id]));
@@ -89,22 +88,27 @@ export async function evidence(context: ViewContext, cursor?: string): Promise<H
     el('div', {}, button(record.relation ?? 'relation', () => inspect(record), 'text-button'),
       el('p', { class: 'relation-basis' }, record.basis, ' · ', `${record.evidence?.length ?? 0} evidence references`)),
     el('div', {}, record.to ? button(names.get(record.to) ?? record.to, () => resolve(record.to!), 'text-button mono') : 'Unknown destination')));
-  const artifactTable = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Immutable artifacts')),
+  const artifacts = pagedList<Artifact>({
+    label: 'artifacts', nextLabel: 'More artifacts',
+    load: async pageCursor => { const page = await operation('artifacts.list', { run_id: context.run.id, cursor: pageCursor, limit: 50 }); return { items: page.artifacts, next_cursor: page.next_cursor }; },
+    render: items => el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Immutable artifacts')),
     el('div', { class: 'table-scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Artifact'), el('th', {}, 'Format'), el('th', { class: 'numeric' }, 'Size'), el('th', {}, 'SHA-256'), el('th', {}, 'Normalization'))),
-      el('tbody', {}, ...artifacts.artifacts.map(item => {
+      el('tbody', {}, ...items.map(item => {
         const action = button('Reanalyze', () => reanalyze(item.id, action), 'button small');
         action.setAttribute('aria-label', `Reanalyze ${item.name}`);
         return el('tr', {}, el('td', {}, button(item.name, () => { void inspectArtifact(item.id, item.name); }, 'text-button mono')), el('td', {}, item.format), el('td', { class: 'numeric' }, bytes(item.size)), el('td', { class: 'mono', title: item.sha256 }, item.sha256.slice(0, 16)),
           el('td', {}, canReanalyze(item.format) ? action : '—'));
-      })))));
+      }))))),
+  });
   body.append(el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, 'Measured source and executable identities'),
     context.run.source.build_source_verified !== true ? el('p', { class: 'panel-body metric-note' }, 'Source and executable identities are distinct. Their build relationship has not been verified.') : null,
-    el('pre', { class: 'panel-body' }, JSON.stringify(context.run.source, null, 2))), contexts, relations, inspector, artifactTable);
+    el('pre', { class: 'panel-body' }, JSON.stringify(context.run.source, null, 2))), contexts, relations, inspector, artifacts.element);
   async function showPage(page?: string): Promise<void> {
     try { body.replaceWith(await evidence(context, page)); }
     catch (error) { inspector.replaceChildren(errorView(error, () => { void showPage(page); })); }
   }
   if (relationships.next_cursor) body.append(button('Next context / relationship page', () => { void showPage(relationships.next_cursor); }));
   if (cursor) body.append(button('First evidence page', () => { void showPage(); }, 'button subtle'));
+  await artifacts.refresh();
   return body;
 }

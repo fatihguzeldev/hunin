@@ -121,3 +121,49 @@ test('native lifetime labels retain instance identity and unknown mapping eviden
   assert.ok(nativeEvidenceRows(sample).some(([, value]) => value.includes('mapping_unresolved')));
   assert.deepEqual(nativeEvidenceRows({ attributes: { native_mapping_status: 'sample_link_unavailable' } }), [['Native mapping status', 'sample_link_unavailable']]);
 });
+
+test('metadata page navigation retains history, handles failures, and rejects stale refreshes', async () => {
+  const { PagedQuery } = await moduleFrom('../src/pagination.ts');
+  const requested = [];
+  let fail = false;
+  const pages = new PagedQuery(async cursor => {
+    requested.push(cursor);
+    if (fail) throw new Error('unavailable');
+    return { items: [cursor ?? 'first'], next_cursor: cursor ? null : 'opaque-next' };
+  });
+  await pages.refresh();
+  await pages.next();
+  assert.deepEqual(pages.page.items, ['opaque-next']);
+  assert.equal(pages.hasPrevious, true);
+  await pages.refresh(); // Polling keeps the historical page selected.
+  assert.equal(requested.at(-1), 'opaque-next');
+  fail = true;
+  await assert.rejects(pages.previous(), /unavailable/);
+  assert.deepEqual(pages.page.items, ['opaque-next']);
+  assert.equal(pages.hasPrevious, true);
+  fail = false;
+  await pages.previous();
+  assert.deepEqual(pages.page.items, ['first']);
+  assert.equal(pages.hasPrevious, false);
+  await pages.next();
+  await pages.refresh(true);
+  assert.deepEqual(pages.page.items, ['first']);
+  assert.equal(pages.hasPrevious, false);
+
+  const pending = [];
+  const concurrent = new PagedQuery(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+  const old = concurrent.refresh();
+  const current = concurrent.refresh(true);
+  pending[1].resolve({ items: ['current'] });
+  assert.equal(await current, true);
+  pending[0].resolve({ items: ['stale'] });
+  assert.equal(await old, false);
+  assert.deepEqual(concurrent.page.items, ['current']);
+  const staleFailure = concurrent.refresh();
+  const latest = concurrent.refresh();
+  pending[3].resolve({ items: ['latest'] });
+  await latest;
+  pending[2].reject(new Error('stale failure'));
+  assert.equal(await staleFailure, false);
+  assert.deepEqual(concurrent.page.items, ['latest']);
+});

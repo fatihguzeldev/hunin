@@ -1,51 +1,57 @@
-import { operation } from '../api';
+import { operation, type Analysis, type AnalysisResult } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { date } from '../format';
 import { parseCommand } from '../command';
 import type { ViewContext } from '../workspace';
+import { pagedList } from '../paged-list';
 
 export async function analyses(context: ViewContext): Promise<HTMLElement> {
-  const content = el('div');
   const feedback = el('div', { role: 'status' });
-  let poll: ReturnType<typeof setTimeout> | undefined;
+  const packages = pagedList<Analysis>({
+    label: 'analyzer packages', nextLabel: 'More analyzer packages',
+    load: async cursor => { const page = await operation('analyses.list', { cursor, limit: 25 }); return { items: page.analyses, next_cursor: page.next_cursor }; },
+    render: renderPackages,
+  });
+  const attempts = pagedList<AnalysisResult>({
+    label: 'analyzer attempts', nextLabel: 'Older attempts',
+    load: async cursor => { const page = await operation('analyses.results', { run_id: context.run.id, cursor, limit: 25 }); return { items: page.results, next_cursor: page.next_cursor }; },
+    render: renderAttempts, pollWhen: items => items.some(result => result.status === 'running'),
+  });
   const body = el('div', { class: 'stack' },
     el('div', { class: 'view-title' }, el('h2', {}, 'Durable analyzers'), el('p', {}, 'Managed packages · fresh inputs · atomic publication')),
     el('p', { class: 'notice' }, 'Applicability checks constrain reuse. A passing declaration does not prove the semantic correctness of an analyzer’s conclusions.'),
-    el('div', { class: 'toolbar' }, button('Register analyzer', register), button('Refresh results', () => { void load(); }, 'button subtle')),
-    feedback, content);
-  async function load(): Promise<void> {
-    clearTimeout(poll);
-    content.replaceChildren(loading('Loading analyzer packages and results…'));
-    try {
-      const [packages, results] = await Promise.all([operation('analyses.list', { run_id: context.run.id }), operation('analyses.results', { run_id: context.run.id })]);
-      const list = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Registered packages')));
-      if (!packages.analyses.length) list.append(empty('No registered analyzers', 'Register an analyzer package to derive additional relationships from declared recording inputs.'));
-      for (const analysis of packages.analyses) {
-        const run = button('Run on this recording', () => {
-          run.disabled = true;
-          feedback.replaceChildren(loading('Running analyzer against this recording…'));
-          void operation('analyses.run', { run_id: context.run.id, analysis_id: analysis.id }).then(result => {
-            feedback.replaceChildren(el('p', { class: 'notice' }, result.status === 'running' ? `Attempt ${result.result_set_id} started. Follow its status below; output is published only after acceptance.` : `${result.status} · ${result.result_set_id}`, ...result.diagnostics.map(value => el('span', { class: 'source-label' }, value))));
-            void load();
-          }).catch(error => { feedback.replaceChildren(errorView(error, () => run.click())); }).finally(() => { run.disabled = false; });
-        }, 'button small');
-        list.append(el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h3', {}, analysis.name), badge(analysis.version), el('span', { class: 'spacer' }), run),
-          el('p', { class: 'mono' }, analysis.command.join(' ')), el('details', {}, el('summary', { class: 'metric-note' }, 'Applicability and dependencies'), el('pre', {}, JSON.stringify({ requirements: analysis.requirements, dependencies: analysis.dependencies }, null, 2)))));
-      }
-      const published = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Attempts and accepted results'), el('small', {}, 'Accepted observations join Timeline and Evidence')));
-      if (!results.results.length) published.append(empty('No analyzer results', 'Completed attempts and accepted result identities will be retained with the recording.'));
-      for (const result of results.results) published.append(el('div', { class: 'result-item' },
-        el('div', { class: 'toolbar' }, el('h3', { class: 'mono' }, result.id), badge(result.status, ['accepted', 'replayed'].includes(result.status) ? 'good' : ['failed', 'timed_out'].includes(result.status) ? 'bad' : 'warn'),
-          result.selected ? badge('selected result', 'good') : result.selected === false && ['accepted', 'replayed'].includes(result.status) ? badge('historical') : null,
-          result.status === 'running' ? button('Cancel attempt', () => {
-            void operation('analyses.cancel', { execution_id: result.id }).then(() => load()).catch(error => feedback.replaceChildren(errorView(error, () => { void load(); })));
-          }, 'button small danger') : null),
-        el('p', {}, `${result.analysis_id} · ${result.version} · ${date(new Date(result.created_at_us / 1_000).toISOString())}`),
-        result.result_set_id && ['accepted', 'replayed'].includes(result.status) ? el('p', { class: 'mono source-label' }, `Accepted result set ${result.result_set_id}`) : null,
-        el('p', { class: 'mono source-label' }, `Input fingerprint ${result.input_fingerprint}`), ...result.diagnostics.map(message => el('p', {}, message))));
-      content.replaceChildren(el('div', { class: 'stack' }, list, published));
-      if (results.results.some(result => result.status === 'running')) poll = setTimeout(() => { if (body.isConnected) void load(); }, 1_500);
-    } catch (error) { content.replaceChildren(errorView(error, () => { void load(); })); }
+    el('div', { class: 'toolbar' }, button('Register analyzer', register), button('Refresh results', () => { void Promise.all([packages.refresh(), attempts.refresh()]); }, 'button subtle')),
+    feedback, packages.element, attempts.element);
+  function renderPackages(items: Analysis[]): HTMLElement {
+    const list = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Registered packages')));
+    if (!items.length) list.append(empty('No registered analyzers', 'Register an analyzer package to derive additional relationships from declared recording inputs.'));
+    for (const analysis of items) {
+      const run = button('Run on this recording', () => {
+        run.disabled = true;
+        feedback.replaceChildren(loading('Running analyzer against this recording…'));
+        void operation('analyses.run', { run_id: context.run.id, analysis_id: analysis.id }).then(result => {
+          feedback.replaceChildren(el('p', { class: 'notice' }, result.status === 'running' ? `Attempt ${result.result_set_id} started. Follow its status below; output is published only after acceptance.` : `${result.status} · ${result.result_set_id}`, ...result.diagnostics.map(value => el('span', { class: 'source-label' }, value))));
+          void attempts.refresh(true);
+        }).catch(error => { feedback.replaceChildren(errorView(error, () => run.click())); }).finally(() => { run.disabled = false; });
+      }, 'button small');
+      list.append(el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h3', {}, analysis.name), badge(analysis.version), el('span', { class: 'spacer' }), run),
+        el('p', { class: 'mono' }, analysis.command.join(' ')), el('details', {}, el('summary', { class: 'metric-note' }, 'Applicability and dependencies'), el('pre', {}, JSON.stringify({ requirements: analysis.requirements, dependencies: analysis.dependencies }, null, 2)))));
+    }
+    return list;
+  }
+  function renderAttempts(items: AnalysisResult[]): HTMLElement {
+    const published = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Attempts and accepted results'), el('small', {}, 'Accepted observations join Timeline and Evidence')));
+    if (!items.length) published.append(empty('No analyzer results', 'Completed attempts and accepted result identities will be retained with the recording.'));
+    for (const result of items) published.append(el('div', { class: 'result-item' },
+      el('div', { class: 'toolbar' }, el('h3', { class: 'mono' }, result.id), badge(result.status, ['accepted', 'replayed'].includes(result.status) ? 'good' : ['failed', 'timed_out'].includes(result.status) ? 'bad' : 'warn'),
+        result.selected ? badge('selected result', 'good') : result.selected === false && ['accepted', 'replayed'].includes(result.status) ? badge('historical') : null,
+        result.status === 'running' ? button('Cancel attempt', () => {
+          void operation('analyses.cancel', { execution_id: result.id }).then(() => attempts.refresh()).catch(error => feedback.replaceChildren(errorView(error, () => { void attempts.refresh(); })));
+        }, 'button small danger') : null),
+      el('p', {}, `${result.analysis_id} · ${result.version} · ${date(new Date(result.created_at_us / 1_000).toISOString())}`),
+      result.result_set_id && ['accepted', 'replayed'].includes(result.status) ? el('p', { class: 'mono source-label' }, `Accepted result set ${result.result_set_id}`) : null,
+      el('p', { class: 'mono source-label' }, `Input fingerprint ${result.input_fingerprint}`), ...result.diagnostics.map(message => el('p', {}, message))));
+    return published;
   }
   function register(): void {
     const dialog = el('dialog', { 'aria-labelledby': 'analysis-title' });
@@ -84,10 +90,10 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
             executable_sha256: context.run.source.executable_sha256 || undefined,
             runtime_version: context.run.source.runtime_version || undefined,
           }) }, dependencies: declared as Record<string, unknown> });
-        dialog.close(); void load();
+        dialog.close(); await packages.refresh(true);
       } catch (error) { message.textContent = error instanceof Error ? error.message : String(error); submit.disabled = false; }
     }
   }
-  await load();
+  await Promise.all([packages.refresh(), attempts.refresh()]);
   return body;
 }

@@ -30,6 +30,8 @@ Source locations are tied to the measured recording and carry their measured cod
 
 Native module observations show the module, process instance and load instance in their labels, so unloading and reloading the same library remain distinct. Their inspector retains observed boundary windows, censored endpoints, address ranges and library identity; a recorded mapping interval does not measure execution time in that module. Sample inspectors expose accepted code-instance references and unresolved mapping reasons. Evidence relationships link samples to their recorded module instances without converting missing bounds into exact loader timestamps.
 
+Analyzer packages, attempt history, artifacts and scenarios use bounded pages with previous/next/first-page controls. Each list navigates independently. Active-attempt polling keeps its selected history page; starting a new attempt returns to the newest attempt page. Refresh from the first page to include newly registered packages or recipes after concurrent changes.
+
 ## Navigation and access
 
 Run and view selection live in the URL, so browser Back/Forward restores navigation. Interactive controls are native buttons, inputs, and selects, with visible focus states. The layout uses a horizontal recording rail on narrow screens and scrollable data tables instead of squeezing evidence into unreadable columns. Loading, empty, and operation failure states retain useful explanations and retry controls.
