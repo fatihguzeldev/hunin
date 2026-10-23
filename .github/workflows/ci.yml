@@ -63,32 +63,45 @@ jobs:
         working-directory: ui
         run: npm ci --ignore-scripts
       - name: UI build
+        id: ui-build
         working-directory: ui
         run: npm run build
       - name: UI tests
         working-directory: ui
         run: npm test
       - name: Core and SDK Rust tests
+        if: always()
         run: cargo +stable test --locked --all
       - name: JavaScript SDK tests
+        if: always()
         run: node --test sdk/javascript/sdk.test.mjs
       - name: Python SDK tests
+        if: always()
         run: python -m unittest discover -s sdk/python
       - name: Go SDK tests
+        if: always()
         working-directory: sdk/go
         run: go test ./...
       - name: Configure C and C++ SDK contract test
+        id: c-configure
+        if: always()
         run: cmake -S sdk/c -B sdk-c-build -DHUNIN_SDK_BUILD_TESTS=ON
       - name: Build C and C++ SDK contract test
+        id: c-build
+        if: always() && steps.c-configure.outcome == 'success'
         run: cmake --build sdk-c-build --config Release
       - name: Verify C and C++ SDK concurrency
+        if: always() && steps.c-build.outcome == 'success'
         run: ctest --test-dir sdk-c-build -C Release --output-on-failure
       - name: Packaging integrity tests
+        if: always()
         run: python -m unittest discover -s distribution -p "test_*.py"
       - name: Build native host executable
+        if: always()
         id: build
         run: cargo +stable build --locked --release
       - name: Install verified native profiler
+        if: always() && steps.build.outcome == 'success'
         id: samply
         run: python distribution/fetch_samply.py --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/samply" --github-env
       - name: Enable process profiling in the ephemeral Linux runner
@@ -114,7 +127,8 @@ jobs:
         if: always() && steps.build.outcome == 'success' && steps.vmprof.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime cpython --executable python --output collector-evidence/cpython
       - name: Assemble host bundle
-        if: always() && steps.build.outcome == 'success'
+        id: bundle
+        if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success'
         run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist
       - uses: actions/cache/save@v4
         if: always() && steps.build.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
@@ -132,7 +146,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4
-        if: always() && steps.build.outcome == 'success'
+        if: always() && steps.bundle.outcome == 'success'
         with:
           name: hunin-${{ matrix.platform }}
           path: dist/*
