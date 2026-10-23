@@ -15,7 +15,27 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 
+def read_observations(path):
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    return [row for row in rows if row["record_type"] == "observation"]
+
+
 class CpuProgressTest(unittest.TestCase):
+    def test_thread_end_counter_is_retained_without_stack_attribution(self):
+        # Windows can observe a terminated cached thread handle between frame
+        # discovery and its counter read. That raw counter has no stack or
+        # attribution; it must not enter the positive/negative sample gates.
+        sample = {"record_type": "observation", "attribution": "sample", "cpu_delta_ns": 15_625_000}
+        ended = {"record_type": "unmapped_thread_end_counter", "native_tid": 5628,
+                 "thread_lifetime": "134372610373580930", "cpu_counter_ns": 0,
+                 "ended_filetime_100ns": 134372610378897921}
+        with tempfile.TemporaryDirectory(prefix="hunin-ended-counter-") as directory:
+            raw = Path(directory) / "cpu.pythoncpu.jsonl"
+            raw.write_text("\n".join(json.dumps(row) for row in [sample, ended]) + "\n")
+            observations = read_observations(raw)
+            self.assertEqual(sum(row["cpu_delta_ns"] for row in observations if row["attribution"] == "sample"), 15_625_000)
+            self.assertEqual([json.loads(line) for line in raw.read_text().splitlines()][1], ended)
+
     def test_terminated_cached_windows_handle_is_not_reused_for_a_python_frame(self):
         from ctypes import wintypes
         from cpu_clock import WindowsClock
@@ -87,7 +107,7 @@ class CpuProgressTest(unittest.TestCase):
                 print(f"CPU progress evidence: {work}", file=sys.stderr)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "expected\n")
-            rows = [json.loads(line) for line in raw.read_text().splitlines()]
+            rows = read_observations(raw)
             metadata = json.loads(raw.with_suffix(raw.suffix + ".meta.json").read_text())
             self.workload = json.loads((work / "workload.json").read_text()) if (work / "workload.json").exists() else None
             self.assertFalse(metadata["errors"])
@@ -117,10 +137,19 @@ def cpu_hot():
     cpu_start=time.thread_time()
     wall_start=time.perf_counter()
     end=cpu_start+0.45
+    next_yield=cpu_start+0.005
+    scheduling_yields=0
     value=1
     while time.thread_time()<end:
         for n in range(10000): value=(value+n)%10000007
-    windows.append({'native_tid':threading.get_native_id(),'thread_cpu_seconds':time.thread_time()-cpu_start,'wall_start_seconds':wall_start,'wall_end_seconds':time.perf_counter()})
+        now=time.thread_time()
+        if now>=next_yield:
+            # This positive control supplies bounded observation opportunities.
+            # The separate long-GIL control deliberately supplies none.
+            time.sleep(0.001)
+            scheduling_yields+=1
+            next_yield=now+0.005
+    windows.append({'native_tid':threading.get_native_id(),'thread_cpu_seconds':time.thread_time()-cpu_start,'wall_start_seconds':wall_start,'wall_end_seconds':time.perf_counter(),'scheduling_yields':scheduling_yields,'yield_every_thread_cpu_seconds':0.005})
 def idle_wait(): time.sleep(0.5)
 hot=threading.Thread(target=cpu_hot)
 idle=threading.Thread(target=idle_wait)
@@ -139,6 +168,7 @@ print('expected')
         self.assertEqual(hot_threads, {window["native_tid"] for window in self.workload})
         self.assertEqual(len(self.workload), 2)
         self.assertTrue(all(window["thread_cpu_seconds"] >= 0.45 for window in self.workload))
+        self.assertTrue(all(window["scheduling_yields"] > 0 for window in self.workload))
         self.assertTrue(all(row["thread_ident"] and row["thread_lifetime"] for row in samples))
         self.assertGreaterEqual(metadata["observed_cpu_ns"], metadata["attributed_cpu_ns"])
         self.assertGreater(metadata["attributed_cpu_ns"], 0)
