@@ -9,7 +9,12 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{
+    fs,
+    io::{Read, Seek, SeekFrom},
+    path::PathBuf,
+    sync::OnceLock,
+};
 
 #[derive(Clone)]
 pub struct Operations {
@@ -92,9 +97,7 @@ impl Operations {
                 params["weight_unit"].as_str().unwrap_or(""),
             )),
             "timeline.query" => Ok(query::timeline(&store.records(id()?)?, &params)),
-            "resources.query" => {
-                Ok(query::resources_page(&store.records(id()?)?, &params))
-            }
+            "resources.query" => Ok(query::resources_page(&store.records(id()?)?, &params)),
             "contexts.query" => {
                 let records = store.records(id()?)?;
                 let rows = records
@@ -121,14 +124,18 @@ impl Operations {
             "artifacts.list" => Ok(json!({"artifacts":store.artifacts(id()?)?})),
             "artifacts.read" => {
                 let path = store.artifact_path(id()?, params["artifact_id"].as_str().unwrap())?;
-                let bytes = fs::read(path)?;
-                let start = params["offset"].as_u64().unwrap_or(0) as usize;
-                let end = start.saturating_add(limit.min(5000)).min(bytes.len());
-                if start > bytes.len() {
+                let mut file = fs::File::open(path)?;
+                let size = file.metadata()?.len();
+                let start = params["offset"].as_u64().unwrap_or(0);
+                if start > size {
                     bail!("artifact offset outside content");
                 }
+                file.seek(SeekFrom::Start(start))?;
+                let mut bytes = Vec::new();
+                file.take(limit.min(5000) as u64).read_to_end(&mut bytes)?;
+                let end = start + bytes.len() as u64;
                 Ok(
-                    json!({"content":String::from_utf8_lossy(&bytes[start..end]),"next_offset":(end<bytes.len()).then_some(end),"size":bytes.len()}),
+                    json!({"content":String::from_utf8_lossy(&bytes),"encoding":"utf8_lossy","next_offset":(end<size).then_some(end),"size":size}),
                 )
             }
             "source.read" => crate::source::read(store, &params),
