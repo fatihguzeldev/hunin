@@ -225,6 +225,7 @@ impl Engine {
                     "Automatic profiling explicitly disabled for this recording".into(),
                 ],
                 runtime_version: None,
+                collector_identity: None,
             }
         } else {
             let planning = capture.clone();
@@ -237,7 +238,11 @@ impl Engine {
                 .replace(&directory.to_string_lossy().to_string(), "<artifacts>")
                 .replace(&run.id, "<run>")
         };
-        let settings = json!({"runtime":run.runtime,"runtime_version":plan.runtime_version,"command":plan.command.iter().map(|v|normalize(v)).collect::<Vec<_>>(),"environment":plan.env.iter().map(|(k,v)|(k.clone(),normalize(v))).collect::<std::collections::BTreeMap<_,_>>()});
+        let mut settings = json!({"runtime":run.runtime,"runtime_version":plan.runtime_version,"command":plan.command.iter().map(|v|normalize(v)).collect::<Vec<_>>(),"environment":plan.env.iter().map(|(k,v)|(k.clone(),normalize(v))).collect::<std::collections::BTreeMap<_,_>>()});
+        if let Some(identity) = &plan.collector_identity {
+            settings["collector_identity"] = identity.clone();
+            run.source["collector_identity"] = identity.clone();
+        }
         run.source["collector_settings_fingerprint"] = json!(format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(&settings)?)
@@ -330,7 +335,7 @@ impl Engine {
             "includes runtime profiling and observer overhead; not an unprofiled speed measurement"
         });
         let native_collection = matches!(
-            run.runtime.as_str(),
+            run.runtime.to_ascii_lowercase().as_str(),
             "go" | "rust" | "c" | "cpp" | "c++" | "native"
         );
         let target_outcome = if native_collection {

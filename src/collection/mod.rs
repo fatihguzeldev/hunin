@@ -29,6 +29,8 @@ pub struct CapturePlan {
     #[serde(default)]
     pub diagnostics: Vec<String>,
     pub runtime_version: Option<String>,
+    #[serde(default)]
+    pub collector_identity: Option<serde_json::Value>,
 }
 
 pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
@@ -127,7 +129,7 @@ fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
         request.artifact_dir.join("go-tool.json"),
         serde_json::to_vec(&serde_json::json!({"executable":request.command[0]}))?,
     )?;
-    Ok(CapturePlan{command,env:BTreeMap::new(),runtime_version:probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version")).ok().filter(|o|o.status.success()).map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
+    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,runtime_version:probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version")).ok().filter(|o|o.status.success()).map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
 }
 
 fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
@@ -172,7 +174,7 @@ fn python(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_owned()),
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_owned()),
         diagnostics:vec!["vmprof captures Python threads in one process; child processes require separate collection".into(), "CPU-clock sample times are retained without an invented wall-clock mapping".into()] })
 }
 
@@ -200,7 +202,7 @@ fn python_cpu(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan{command,env:BTreeMap::new(),runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_string()),diagnostics:vec!["Python stacks are gated and weighted by measured OS thread CPU progress across bounded observation windows; weights are statistical attribution, not individual call durations. Delayed observations remain unattributed CPU evidence.".into(),"GIL scheduling, native-only threads and short-lived undiscovered threads limit CPU attribution coverage; raw counters, frame snapshots and timing uncertainty are retained.".into()]})
+    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_string()),diagnostics:vec!["Python stacks are gated and weighted by measured OS thread CPU progress across bounded observation windows; weights are statistical attribution, not individual call durations. Delayed observations remain unattributed CPU evidence.".into(),"GIL scheduling, native-only threads and short-lived undiscovered threads limit CPU attribution coverage; raw counters, frame snapshots and timing uncertainty are retained.".into()]})
 }
 
 fn graal(request: &CaptureRequest) -> Result<CapturePlan> {
@@ -227,7 +229,7 @@ fn graal(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("--version")).ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()),
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, runtime_version: probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("--version")).ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()),
         diagnostics: vec!["GraalPy distribution must expose Truffle CPUSampler; native-image and JVM-hosted modes differ".into(), "CPU sampler call-tree weights are aggregated; no per-call duration is inferred".into()] })
 }
 
@@ -262,7 +264,9 @@ fn python_arguments(args: &[String]) -> Result<(Vec<String>, Vec<String>)> {
 
 fn native(request: &CaptureRequest) -> Result<CapturePlan> {
     let samply = tool("samply").context("native/Go sampling requires Hunin's bundled samply0.13.1-hunin-native1; reinstall collector assets or set HUNIN_SAMPLY to a patched executable (an explicit override must be an existing file)")?;
-    let runtime_version = native_tool::check(&samply, None, std::time::Duration::from_secs(10))?;
+    let sampler_version = native_tool::check(&samply, None, std::time::Duration::from_secs(10))?;
+    let collector_identity = native_tool::identity(&samply, &sampler_version)?;
+    let runtime_version = native_runtime_version(request);
     let mut command = vec![
         samply.display().to_string(),
         "record".into(),
@@ -286,10 +290,76 @@ fn native(request: &CaptureRequest) -> Result<CapturePlan> {
     }
     command.push("--".into());
     command.extend(request.command.clone());
-    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: Some(runtime_version), diagnostics:vec![
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:Some(collector_identity), runtime_version, diagnostics:vec![
         "Native symbols/source require debug information for the measured build".into(),
+        "Target runtime version is separate from collector identity. Go reports build information from the launched executable when a Go inspection tool is available; generic native executables and subprocess toolchain versions remain unknown.".into(),
         "Linux perf permissions, Windows ETW elevation, and macOS signing restrictions are checked by samply at capture time".into(),
         "OS samples do not imply Go goroutine/scheduler/GC tracing; import an enabled runtime pprof recording for that additional route".into()] })
+}
+
+fn requested_executable(request: &CaptureRequest, name: &str) -> Option<PathBuf> {
+    let supplied = Path::new(name);
+    if supplied.is_absolute() || supplied.components().count() > 1 {
+        let path = if supplied.is_absolute() {
+            supplied.to_path_buf()
+        } else {
+            request.cwd.join(supplied)
+        };
+        return path.is_file().then(|| path.canonicalize().unwrap_or(path));
+    }
+    let effective_path = request
+        .env
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| env::var_os("PATH"));
+    env::split_paths(&effective_path.unwrap_or_default()).find_map(|directory| {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            request.cwd.join(directory)
+        };
+        let name = if cfg!(windows) && supplied.extension().is_none() {
+            format!("{name}.exe")
+        } else {
+            name.into()
+        };
+        let path = directory.join(name);
+        path.is_file().then(|| path.canonicalize().unwrap_or(path))
+    })
+}
+
+fn native_runtime_version(request: &CaptureRequest) -> Option<String> {
+    if request.runtime.to_lowercase() != "go" {
+        return None;
+    }
+    let target = requested_executable(request, &request.command[0])?;
+    let inspector = if target
+        .file_stem()?
+        .to_string_lossy()
+        .eq_ignore_ascii_case("go")
+    {
+        target.clone()
+    } else {
+        requested_executable(request, "go").or_else(|| tool("go"))?
+    };
+    let output = probe::standard(
+        Command::new(inspector)
+            .envs(&request.env)
+            .current_dir(&request.cwd)
+            .env("GOTOOLCHAIN", "local")
+            .arg("version")
+            .arg(target),
+    )
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    go_build_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn go_build_version(output: &str) -> Option<String> {
+    let (_, version) = output.lines().next()?.rsplit_once(": ")?;
+    (version.starts_with("go") || version.starts_with("devel ")).then(|| version.trim().to_owned())
 }
 
 fn javascript(request: &CaptureRequest) -> Result<CapturePlan> {
@@ -386,4 +456,26 @@ pub(crate) fn tool(name: &str) -> Option<PathBuf> {
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::go_build_version;
+
+    #[test]
+    fn go_runtime_build_version_does_not_include_target_output_paths() {
+        assert_eq!(
+            go_build_version("/tmp/control one: go1.27.3\n"),
+            Some("go1.27.3".into())
+        );
+        assert_eq!(
+            go_build_version("C:\\control one\\cpu.exe: go1.27.3\r\n"),
+            Some("go1.27.3".into())
+        );
+        assert_eq!(
+            go_build_version("/tmp/cpu: devel go1.28-abcdef\n"),
+            Some("devel go1.28-abcdef".into())
+        );
+        assert_eq!(go_build_version("/tmp/not-go: not a Go executable\n"), None);
+    }
 }

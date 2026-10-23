@@ -27,8 +27,20 @@ pub(crate) fn check(path: &Path, reported: Option<&str>, timeout: Duration) -> R
             "samply"
         });
     let managed = path.canonicalize().ok() == bundled.canonicalize().ok() && bundled.is_file();
-    verify_receipt(path, managed)?;
+    let _ = verify_receipt(path, managed)?;
     Ok(version)
+}
+
+pub(crate) fn identity(binary: &Path, version: &str) -> Result<Value> {
+    let receipt = verify_receipt(binary, false)?;
+    let sha256 = match &receipt {
+        Some(receipt) => receipt["binary_sha256"].as_str().unwrap().to_owned(),
+        None => binary_sha256(binary)?,
+    };
+    Ok(
+        serde_json::json!({"name":"samply-hunin","version":version,"binary_sha256":sha256,
+        "provenance":receipt,"identity_scope":"selected collector executable bytes and any verified build receipt; distinct from target runtime version"}),
+    )
 }
 
 fn output(command: &mut Command, timeout: Duration) -> Result<String> {
@@ -41,13 +53,13 @@ fn output(command: &mut Command, timeout: Duration) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn verify_receipt(binary: &Path, required: bool) -> Result<()> {
+fn verify_receipt(binary: &Path, required: bool) -> Result<Option<Value>> {
     let name = binary
         .file_name()
         .context("native collector filename missing")?;
     let receipt = binary.with_file_name(format!("{}.provenance.json", name.to_string_lossy()));
     if !required && !receipt.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let mut bytes = Vec::new();
     fs::File::open(&receipt)
@@ -72,6 +84,14 @@ fn verify_receipt(binary: &Path, required: bool) -> Result<()> {
     let expected = receipt["binary_sha256"]
         .as_str()
         .context("native collector binary SHA256 missing")?;
+    ensure!(
+        binary_sha256(binary)? == expected,
+        "native collector executable does not match its provenance SHA256"
+    );
+    Ok(Some(receipt))
+}
+
+fn binary_sha256(binary: &Path) -> Result<String> {
     let mut source = fs::File::open(binary)?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -82,11 +102,7 @@ fn verify_receipt(binary: &Path, required: bool) -> Result<()> {
         }
         hash.update(&buffer[..count]);
     }
-    ensure!(
-        format!("{:x}", hash.finalize()) == expected,
-        "native collector executable does not match its provenance SHA256"
-    );
-    Ok(())
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 #[cfg(test)]
@@ -106,7 +122,8 @@ mod tests {
         let mut receipt = json!({"schema_version":1,"version":manifest["version"],"identity":{"upstream":manifest["upstream"]},"extension":manifest["extension"],"binary_sha256":format!("{:x}",Sha256::digest(b"collector executable"))});
         let path = root.path().join("samply.provenance.json");
         fs::write(&path, receipt.to_string()).unwrap();
-        verify_receipt(&binary, true).unwrap();
+        let _ = verify_receipt(&binary, true).unwrap();
+        let before = identity(&binary, VERSION).unwrap();
         fs::write(&binary, b"modified executable").unwrap();
         assert!(
             verify_receipt(&binary, true)
@@ -114,6 +131,10 @@ mod tests {
                 .to_string()
                 .contains("SHA256")
         );
+        fs::remove_file(&path).unwrap();
+        let changed = identity(&binary, VERSION).unwrap();
+        assert_ne!(before["binary_sha256"], changed["binary_sha256"]);
+        assert_eq!(before["version"], changed["version"]);
         receipt["version"] = json!("0.13.1");
         fs::write(path, receipt.to_string()).unwrap();
         assert!(
