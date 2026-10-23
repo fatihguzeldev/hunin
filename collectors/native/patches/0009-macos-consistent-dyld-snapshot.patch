@@ -1,0 +1,858 @@
+diff --git a/samply/src/mac/mod.rs b/samply/src/mac/mod.rs
+--- a/samply/src/mac/mod.rs
++++ b/samply/src/mac/mod.rs
+@@ -3,6 +3,7 @@
+ 
+ pub mod codesign_setup;
+ mod error;
++mod image_snapshot;
+ pub mod kernel_error;
+ mod mach_ipc;
+ mod proc_maps;
+diff --git a/samply/src/mac/proc_maps.rs b/samply/src/mac/proc_maps.rs
+--- a/samply/src/mac/proc_maps.rs
++++ b/samply/src/mac/proc_maps.rs
+@@ -90,6 +90,8 @@
+     all_image_info_addr: Option<u64>,
+     last_change_timestamp: Option<u64>,
+     pub hunin_observation_complete: bool,
++    pub hunin_observation: super::image_snapshot::Trace,
++    pub hunin_resume_error: Option<KernelError>,
+     saved_image_info: Vec<DyldInfo>,
+ }
+ 
+@@ -101,6 +103,8 @@
+             all_image_info_addr: None,
+             last_change_timestamp: None,
+             hunin_observation_complete: false,
++            hunin_observation: Default::default(),
++            hunin_resume_error: None,
+             saved_image_info: Vec::new(),
+         }
+     }
+@@ -111,6 +115,26 @@
+ 
+     pub fn check_for_changes(&mut self) -> kernel_error::Result<Vec<Modification<DyldInfo>>> {
+         self.hunin_observation_complete = false;
++        self.hunin_resume_error = None;
++        let observation = super::image_snapshot::read(
++            || self.check_for_changes_once(),
++            super::time::get_monotonic_timestamp,
++            |delay| std::thread::sleep(std::time::Duration::from_nanos(delay)),
++        );
++        self.hunin_observation = observation.trace;
++        match observation.result {
++            Ok(Some(changes)) => {
++                self.hunin_observation_complete = true;
++                Ok(changes)
++            }
++            Ok(None) => Ok(Vec::new()),
++            Err(error) => Err(error),
++        }
++    }
++
++    fn check_for_changes_once(
++        &mut self,
++    ) -> kernel_error::Result<Option<Vec<Modification<DyldInfo>>>> {
+         // Avoid suspending the task if we know that the image info array hasn't changed.
+         // The process-wide dyld_all_image_infos instance always stays in the same place,
+         // so we can keep its memory mapped and just check the timestamp in the mapped memory.
+@@ -120,70 +144,84 @@
+             let image_infos: &dyld_all_image_infos =
+                 unsafe { self.memory.get_type_ref_at_address(info_addr) }?;
+             // infoArrayChangeTimestamp is 10.12+. TODO: check version
+-            if image_infos.infoArrayChangeTimestamp == last_change_timestamp {
+-                self.hunin_observation_complete = true;
+-                return Ok(Vec::new());
++            if super::image_snapshot::unchanged_and_available(
++                !image_infos.infoArray.is_null(),
++                image_infos.infoArrayChangeTimestamp,
++                last_change_timestamp,
++            ) {
++                return Ok(Some(Vec::new()));
+             }
+         }
+ 
+         // Now, suspend the task, enumerate the libraries, and diff against our saved list.
+-        with_suspended_task(self.task, || {
+-            let info_addr = match self.all_image_info_addr {
+-                Some(addr) => addr,
+-                None => get_all_image_info_addr(self.task)?,
+-            };
+-
+-            self.all_image_info_addr = Some(info_addr);
+-
+-            let (
+-                info_array_addr,
+-                info_array_count,
+-                info_array_change_timestamp,
+-                dyld_image_load_addr,
+-                dyld_image_path,
+-            ) = {
+-                let image_infos: &dyld_all_image_infos =
+-                    unsafe { self.memory.get_type_ref_at_address(info_addr) }?;
+-                (
+-                    image_infos.infoArray as usize as u64,
+-                    image_infos.infoArrayCount,
+-                    image_infos.infoArrayChangeTimestamp, // 10.12+
+-                    image_infos.dyldImageLoadAddress as usize as u64,
+-                    image_infos.dyldPath as usize as u64, // 10.12+
+-                )
+-            };
+-
+-            // From dyld_images.h:
+-            // For a snashot of what images are currently loaded, the infoArray fields contain a pointer
+-            // to an array of all images. If infoArray is NULL, it means it is being modified, come back later.
+-            if info_array_addr == 0 {
+-                // Pretend there are no modifications. We will pick up the modifications the next time we're called.
+-                return Ok(Vec::new());
+-            }
+-
+-            // Image mappings may have been replaced at the same virtual address.
+-            // A cached mach_vm_remap still references the old memory object.
+-            self.memory.clear();
+-            let new_image_info = enumerate_dyld_images(
+-                &mut self.memory,
+-                info_array_addr,
+-                info_array_count,
+-                dyld_image_load_addr,
+-                dyld_image_path,
+-            )?;
+-
+-            // self.saved_image_info and new_image_info are sorted by address. Diff the two lists.
+-            let diff =
+-                diff_sorted_slices(&self.saved_image_info, &new_image_info, |left, right| {
+-                    left.base_avma.cmp(&right.base_avma)
+-                });
+-
+-            self.last_change_timestamp = Some(info_array_change_timestamp);
+-            self.hunin_observation_complete = true;
+-            self.saved_image_info = new_image_info;
+-
+-            Ok(diff)
+-        })
++        let mut resume_error = None;
++        let observed = with_suspended_task(
++            self.task,
++            || {
++                let info_addr = match self.all_image_info_addr {
++                    Some(addr) => addr,
++                    None => get_all_image_info_addr(self.task)?,
++                };
++
++                self.all_image_info_addr = Some(info_addr);
++
++                let (
++                    info_array_addr,
++                    info_array_count,
++                    info_array_change_timestamp,
++                    dyld_image_load_addr,
++                    dyld_image_path,
++                ) = {
++                    let image_infos: &dyld_all_image_infos =
++                        unsafe { self.memory.get_type_ref_at_address(info_addr) }?;
++                    (
++                        image_infos.infoArray as usize as u64,
++                        image_infos.infoArrayCount,
++                        image_infos.infoArrayChangeTimestamp, // 10.12+
++                        image_infos.dyldImageLoadAddress as usize as u64,
++                        image_infos.dyldPath as usize as u64, // 10.12+
++                    )
++                };
++
++                // From dyld_images.h:
++                // For a snashot of what images are currently loaded, the infoArray fields contain a pointer
++                // to an array of all images. If infoArray is NULL, it means it is being modified, come back later.
++                if info_array_addr == 0 {
++                    // Return Busy only after with_suspended_task resumes dyld.
++                    return Ok(None);
++                }
++
++                // Image mappings may have been replaced at the same virtual address.
++                // A cached mach_vm_remap still references the old memory object.
++                self.memory.clear();
++                let new_image_info = enumerate_dyld_images(
++                    &mut self.memory,
++                    info_array_addr,
++                    info_array_count,
++                    dyld_image_load_addr,
++                    dyld_image_path,
++                )?;
++
++                // self.saved_image_info and new_image_info are sorted by address. Diff the two lists.
++                let diff =
++                    diff_sorted_slices(&self.saved_image_info, &new_image_info, |left, right| {
++                        left.base_avma.cmp(&right.base_avma)
++                    });
++
++                Ok(Some((diff, new_image_info, info_array_change_timestamp)))
++            },
++            |error| resume_error = Some(error),
++        );
++        self.hunin_resume_error = resume_error;
++        let observed = observed?;
++        // A failed resume must not commit state the caller never receives.
++        if let Some((diff, images, timestamp)) = observed {
++            self.last_change_timestamp = Some(timestamp);
++            self.saved_image_info = images;
++            Ok(Some(diff))
++        } else {
++            Ok(None)
++        }
+     }
+ }
+ 
+@@ -211,11 +249,15 @@
+ fn with_suspended_task<T>(
+     task: mach_port_t,
+     f: impl FnOnce() -> kernel_error::Result<T>,
++    mut on_resume_error: impl FnMut(KernelError),
+ ) -> kernel_error::Result<T> {
+     unsafe { task_suspend(task) }.into_result()?;
+     let result = f();
+-    let _ = unsafe { task_resume(task) };
+-    result
++    let resumed = unsafe { task_resume(task) }.into_result();
++    if let Err(error) = &resumed {
++        on_resume_error(error.clone());
++    }
++    super::image_snapshot::after_resume(result, resumed)
+ }
+ 
+ fn enumerate_dyld_images(
+diff --git a/samply/src/mac/task_profiler.rs b/samply/src/mac/task_profiler.rs
+--- a/samply/src/mac/task_profiler.rs
++++ b/samply/src/mac/task_profiler.rs
+@@ -138,9 +138,13 @@
+         let start_time = timestamp_converter.convert_time(start_time_mono);
+ 
+         let mut lib_info_manager = DyldInfoManager::new(task);
+-        let initial_lib_mods = lib_info_manager
+-            .check_for_changes()
+-            .map_err(|e| SamplingError::Ignorable("Could not check process libraries", e))?;
++        let initial_lib_mods = lib_info_manager.check_for_changes().map_err(|e| {
++            if lib_info_manager.hunin_resume_error.is_some() {
++                SamplingError::Fatal("task_resume after initial image snapshot", e)
++            } else {
++                SamplingError::Ignorable("Could not check process libraries", e)
++            }
++        })?;
+ 
+         let cmdline: Vec<String> = proc_cmdline(pid as i32).unwrap_or_default();
+         let executable_name =
+@@ -318,8 +322,14 @@
+             profile_creation_props,
+         };
+ 
+-        task_profiler.process_lib_modifications(start_time_mono, initial_lib_mods, profile);
+-        task_profiler.hunin_snapshot(start_time_mono, profile);
++        let initial_observation = task_profiler
++            .lib_info_manager
++            .hunin_observation
++            .successful_start();
++        if let Some(observed) = initial_observation {
++            task_profiler.process_lib_modifications(observed, initial_lib_mods, profile);
++        }
++        task_profiler.hunin_snapshot_observation(profile);
+ 
+         Ok(task_profiler)
+     }
+@@ -364,25 +374,45 @@
+ 
+     fn sample_impl(
+         &mut self,
+-        now: Timestamp,
+-        now_mono: u64,
++        _now: Timestamp,
++        _now_mono: u64,
+         unwinder_cache: &mut UnwinderCache,
+         profile: &mut Profile,
+         stack_scratch_buffer: &mut Vec<FrameAddress>,
+         unresolved_stacks: &mut UnresolvedStacks,
+     ) -> Result<(), SamplingError> {
+         // First, check for any newly-loaded libraries.
+-        if let Ok(changes) = self.lib_info_manager.check_for_changes() {
+-            self.process_lib_modifications(now_mono, changes, profile);
+-            if self.lib_info_manager.hunin_observation_complete {
+-                self.hunin_snapshot(now_mono, profile);
+-            } else {
+-                profile.hunin_record(serde_json::json!({"kind":"loss","basis":"dyld_snapshot_incomplete","process":profile.hunin_process_identity(self.profile_process),"time_ms":now}));
+-            }
+-        }
++        let check = self.lib_info_manager.check_for_changes();
++        if let Some(error) = self.lib_info_manager.hunin_resume_error.clone() {
++            self.hunin_snapshot_observation(profile);
++            return Err(SamplingError::Fatal(
++                "task_resume after image snapshot",
++                error,
++            ));
++        }
++        let check_failed = check.is_err();
++        if let Ok(changes) = check {
++            if let Some(observed) = self.lib_info_manager.hunin_observation.successful_start() {
++                self.process_lib_modifications(observed, changes, profile);
++            }
++            self.hunin_snapshot_observation(profile);
++        } else if self.lib_info_manager.hunin_observation.had_busy() {
++            // A failed retry cannot erase the preceding unavailable snapshot.
++            self.hunin_snapshot_observation(profile);
++        }
++
++        // Retrying resumes the target. Its new mapping generations and thread
++        // stacks must not be stamped with the earlier, failed probe's time.
++        let now_mono = super::time::get_monotonic_timestamp();
++        let now = self.timestamp_converter.convert_time(now_mono);
+ 
+         // Enumerate threads.
+         let thread_acts = get_thread_list(self.task, self.profile_creation_props.main_thread_only)?;
++        if check_failed && !self.lib_info_manager.hunin_observation.had_busy() {
++            // A still-live target with an unreadable snapshot is incomplete.
++            // A dead task instead ends at the censored process boundary above.
++            self.hunin_snapshot_observation(profile);
++        }
+         let previously_live_threads: HashSet<_> = self.live_threads.keys().cloned().collect();
+         let mut now_live_threads = HashSet::new();
+         for thread_act in thread_acts {
+@@ -466,11 +496,41 @@
+         Ok(())
+     }
+ 
+-    fn hunin_snapshot(&mut self, now: u64, profile: &mut Profile) {
++    fn hunin_snapshot_observation(&mut self, profile: &mut Profile) {
+         if profile.hunin_enabled() {
+-            let completed = super::time::get_monotonic_timestamp();
+-            profile.hunin_record(serde_json::json!({"kind":"snapshot","basis":"dyld_snapshot","process":profile.hunin_process_identity(self.profile_process),"time_ms":self.timestamp_converter.convert_time(now),"previous_observation_ms":self.hunin_last_snapshot_mono.map(|t|self.timestamp_converter.convert_time(t)),"observation_completed_ms":self.timestamp_converter.convert_time(completed)}));
+-            self.hunin_last_snapshot_mono = Some(now);
++            let trace = &self.lib_info_manager.hunin_observation;
++            let Some(last) = trace.attempts.last() else {
++                return;
++            };
++            let completed = trace.completed().unwrap_or(last.completed);
++            let previous = self
++                .hunin_last_snapshot_mono
++                .map(|t| self.timestamp_converter.convert_time(t));
++            if trace.had_busy() {
++                let attempts = trace.attempts.iter().map(|attempt| serde_json::json!({
++                    "start_ms": self.timestamp_converter.convert_time(attempt.start),
++                    "completed_ms": self.timestamp_converter.convert_time(attempt.completed),
++                    "outcome": match attempt.outcome {super::image_snapshot::Outcome::Busy=>"busy",super::image_snapshot::Outcome::Stable=>"stable",super::image_snapshot::Outcome::Error=>"error"}
++                })).collect::<Vec<_>>();
++                profile.hunin_record(serde_json::json!({
++                    "kind":"snapshot_retry", "basis":"dyld_image_array_busy",
++                    "process":profile.hunin_process_identity(self.profile_process),
++                    "time_ms":self.timestamp_converter.convert_time(trace.attempts[0].start),
++                    "observation_completed_ms":self.timestamp_converter.convert_time(completed),
++                    "previous_observation_ms":previous, "attempts":attempts,
++                    "max_attempts":super::image_snapshot::MAX_ATTEMPTS,
++                    "retry_start_budget_ns":super::image_snapshot::RETRY_START_BUDGET_NS,
++                    "pause_ns":super::image_snapshot::PAUSE_NS,
++                    "budget_exhausted":trace.exhausted,
++                    "complete":self.lib_info_manager.hunin_observation_complete
++                }));
++            }
++            if let Some(observed) = trace.successful_start() {
++                profile.hunin_record(serde_json::json!({"kind":"snapshot","basis":"dyld_snapshot","process":profile.hunin_process_identity(self.profile_process),"time_ms":self.timestamp_converter.convert_time(observed),"previous_observation_ms":previous,"observation_completed_ms":self.timestamp_converter.convert_time(completed)}));
++                self.hunin_last_snapshot_mono = Some(observed);
++            } else {
++                profile.hunin_record(serde_json::json!({"kind":"loss","basis":"dyld_snapshot_incomplete","process":profile.hunin_process_identity(self.profile_process),"time_ms":self.timestamp_converter.convert_time(last.start),"observation_completed_ms":self.timestamp_converter.convert_time(completed),"previous_observation_ms":previous,"budget_exhausted":trace.exhausted,"reason":if trace.exhausted {"busy_budget_exhausted"} else {"snapshot_probe_error"}}));
++            }
+         }
+     }
+ 
+diff --git a/samply/src/mac/sampler.rs b/samply/src/mac/sampler.rs
+--- a/samply/src/mac/sampler.rs
++++ b/samply/src/mac/sampler.rs
+@@ -103,8 +103,7 @@
+             &mut profile,
+             process_recycler.as_mut(),
+             self.profile_creation_props.clone(),
+-        )
+-        .expect("couldn't create root TaskProfiler");
++        )?;
+ 
+         let mut process_sample_datas = Vec::new();
+         let mut stack_scratch_buffer = Vec::new();
+@@ -137,7 +136,7 @@
+                         break;
+                     }
+                 };
+-                if let Ok(new_task) = TaskProfiler::new(
++                match TaskProfiler::new(
+                     task_init,
+                     timestamp_converter,
+                     &self.profile_creation_props.fallback_profile_name,
+@@ -145,10 +144,12 @@
+                     process_recycler.as_mut(),
+                     self.profile_creation_props.clone(),
+                 ) {
+-                    live_tasks.push(new_task);
+-                } else {
+-                    // The task is probably already dead again. We get here for tasks which are
+-                    // very short-lived.
++                    Ok(new_task) => live_tasks.push(new_task),
++                    Err(error @ SamplingError::Fatal(_, _)) => return Err(error),
++                    Err(_) => {
++                        // The task is probably already dead again. We get here for tasks which are
++                        // very short-lived.
++                    }
+                 }
+             }
+ 
+@@ -188,7 +189,11 @@
+                 if still_alive {
+                     live_tasks.push(task);
+                 } else {
+-                    task.notify_dead(sample_timestamp, &mut profile);
++                    // A snapshot retry can resume the target and observe a
++                    // mapping after this iteration's original sample time.
++                    // Process-end observation must not precede that mapping.
++                    let ended = timestamp_converter.convert_time(get_monotonic_timestamp());
++                    task.notify_dead(ended, &mut profile);
+                     let (process_sample_data, process_recycling_data) =
+                         task.finish(&mut jit_category_manager, &mut profile);
+ 
+diff --git a/samply/src/mac/profiler.rs b/samply/src/mac/profiler.rs
+--- a/samply/src/mac/profiler.rs
++++ b/samply/src/mac/profiler.rs
+@@ -2,6 +2,10 @@
+ use std::collections::HashMap;
+ use std::fs::File;
+ use std::process::ExitStatus;
++use std::sync::{
++    atomic::{AtomicBool, Ordering},
++    Arc,
++};
+ use std::thread;
+ use std::time::Duration;
+ 
+@@ -83,9 +87,15 @@
+ 
+     let (task_sender, task_receiver) = unbounded();
+ 
++    let sampling_aborted = Arc::new(AtomicBool::new(false));
++    let sampler_aborted = sampling_aborted.clone();
+     let sampler_thread = thread::spawn(move || {
+         let sampler = Sampler::new(task_receiver, recording_props, profile_creation_props);
+-        sampler.run()
++        let result = sampler.run();
++        if matches!(&result, Err(SamplingError::Fatal(_, _))) {
++            sampler_aborted.store(true, Ordering::Release);
++        }
++        result
+     });
+ 
+     let (accepter_sender, accepter_receiver) = unbounded();
+@@ -181,7 +191,7 @@
+     });
+ 
+     // Run the root task: either launch or attach to existing pid
+-    let exit_status = root_task_runner.run_root_task()?;
++    let exit_status = root_task_runner.run_root_task(&sampling_aborted)?;
+ 
+     accepter_sender
+         .send(())
+diff --git a/samply/src/mac/process_launcher.rs b/samply/src/mac/process_launcher.rs
+--- a/samply/src/mac/process_launcher.rs
++++ b/samply/src/mac/process_launcher.rs
+@@ -7,6 +7,7 @@
+ use std::os::unix::process::ExitStatusExt;
+ use std::path::PathBuf;
+ use std::process::{Child, Command, ExitStatus};
++use std::sync::atomic::AtomicBool;
+ use std::sync::Arc;
+ use std::time::Duration;
+ 
+@@ -21,7 +22,7 @@
+ use crate::shared::ctrl_c::CtrlC;
+ 
+ pub trait RootTaskRunner {
+-    fn run_root_task(&mut self) -> Result<ExitStatus, MachError>;
++    fn run_root_task(&mut self, aborted: &AtomicBool) -> Result<ExitStatus, MachError>;
+ }
+ 
+ pub struct TaskLauncher {
+@@ -32,7 +33,7 @@
+ }
+ 
+ impl RootTaskRunner for TaskLauncher {
+-    fn run_root_task(&mut self) -> Result<ExitStatus, MachError> {
++    fn run_root_task(&mut self, aborted: &AtomicBool) -> Result<ExitStatus, MachError> {
+         // Ignore Ctrl+C while the subcommand is running. The signal still reaches the process
+         // under observation while we continue to record it. (ctrl+c will send the SIGINT signal
+         // to all processes in the foreground process group).
+@@ -41,7 +42,8 @@
+         let mut root_child = self.launch_child();
+         let root_pid = root_child.id();
+         crate::shared::lifetimes::target_started(root_pid);
+-        let mut exit_status = root_child.wait().expect("couldn't wait for child");
++        let mut exit_status =
++            wait_owned_child(&mut root_child, aborted).expect("couldn't supervise owned child");
+         crate::shared::lifetimes::target_finished(
+             root_pid,
+             exit_status.code(),
+@@ -49,6 +51,9 @@
+         );
+ 
+         for i in 2..=self.iteration_count {
++            if aborted.load(std::sync::atomic::Ordering::Acquire) {
++                break;
++            }
+             if !exit_status.success() {
+                 eprintln!(
+                     "Skipping remaining iterations due to non-success exit status: \"{}\"",
+@@ -58,7 +63,8 @@
+             }
+             eprintln!("Running iteration {i} of {}...", self.iteration_count);
+             let mut root_child = self.launch_child();
+-            exit_status = root_child.wait().expect("couldn't wait for child");
++            exit_status =
++                wait_owned_child(&mut root_child, aborted).expect("couldn't supervise owned child");
+         }
+ 
+         // From now on, we want to terminate if the user presses Ctrl+C.
+@@ -279,16 +285,27 @@
+ }
+ 
+ impl RootTaskRunner for ExistingProcessRunner {
+-    fn run_root_task(&mut self) -> Result<ExitStatus, MachError> {
+-        let ctrl_c_receiver = CtrlC::observe_oneshot();
++    fn run_root_task(&mut self, aborted: &AtomicBool) -> Result<ExitStatus, MachError> {
++        let mut ctrl_c_receiver = CtrlC::observe_oneshot();
+ 
+         eprintln!("Profiling {}, press Ctrl-C to stop...", self.pid);
+ 
+-        ctrl_c_receiver
+-            .blocking_recv()
+-            .expect("Ctrl+C receiver failed");
++        while !aborted.load(std::sync::atomic::Ordering::Acquire) {
++            match ctrl_c_receiver.try_recv() {
++                Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break,
++                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
++                    std::thread::sleep(Duration::from_millis(5))
++                }
++            }
++        }
+ 
+         if let Some(aux_child) = self.aux_child.as_mut() {
++            if aborted.load(std::sync::atomic::Ordering::Acquire) {
++                // This helper was spawned by us; never signal the attached target.
++                wait_owned_child(aux_child, aborted)
++                    .expect("Failed to supervise owned auxiliary process");
++                return Ok(ExitStatus::default());
++            }
+             let aux_pid = aux_child.id();
+             unsafe {
+                 libc::kill(aux_pid as i32, libc::SIGINT);
+@@ -415,3 +432,52 @@
+     }
+     Some(pids)
+ }
++
++pub(super) fn wait_owned_child(
++    child: &mut std::process::Child,
++    aborted: &std::sync::atomic::AtomicBool,
++) -> std::io::Result<std::process::ExitStatus> {
++    loop {
++        if let Some(status) = child.try_wait()? {
++            return Ok(status);
++        }
++        if aborted.load(std::sync::atomic::Ordering::Acquire) {
++            return match child.kill() {
++                Ok(()) => child.wait(),
++                // Natural exit can win the try_wait/kill race. Never block
++                // waiting after a genuine failure to kill a live child.
++                Err(error) => child.try_wait()?.ok_or(error),
++            };
++        }
++        std::thread::sleep(std::time::Duration::from_millis(5));
++    }
++}
++
++#[cfg(test)]
++mod owned_child_tests {
++    use super::*;
++    #[test]
++    fn fatal_sampling_abort_kills_and_reaps_only_retained_child() {
++        use std::os::unix::process::ExitStatusExt;
++        use std::sync::atomic::AtomicBool;
++        let mut child = std::process::Command::new("/bin/sleep")
++            .arg("30")
++            .spawn()
++            .unwrap();
++        let aborted = std::sync::Arc::new(AtomicBool::new(false));
++        let signal = aborted.clone();
++        let started = std::time::Instant::now();
++        let sender = std::thread::spawn(move || {
++            std::thread::sleep(std::time::Duration::from_millis(20));
++            signal.store(true, std::sync::atomic::Ordering::Release);
++        });
++        let status = wait_owned_child(&mut child, &aborted).unwrap();
++        sender.join().unwrap();
++        assert!(
++            started.elapsed() < std::time::Duration::from_secs(2),
++            "fatal notification must wake an already waiting launcher"
++        );
++        assert_eq!(status.signal(), Some(9));
++        assert_eq!(child.try_wait().unwrap(), Some(status));
++    }
++}
+diff --git a/samply/src/mac/image_snapshot.rs b/samply/src/mac/image_snapshot.rs
+new file mode 100644
+--- /dev/null
++++ b/samply/src/mac/image_snapshot.rs
+@@ -0,0 +1,255 @@
++//! Retry only dyld's explicitly busy image array, after the probe resumes it.
++pub(super) const MAX_ATTEMPTS: usize = 4;
++pub(super) const RETRY_START_BUDGET_NS: u64 = 2_000_000;
++pub(super) const PAUSE_NS: u64 = 250_000;
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(super) enum Outcome {
++    Busy,
++    Stable,
++    Error,
++}
++
++#[derive(Debug, Clone)]
++pub(super) struct Attempt {
++    pub start: u64,
++    pub completed: u64,
++    pub outcome: Outcome,
++}
++
++#[derive(Debug, Clone, Default)]
++pub(super) struct Trace {
++    pub attempts: Vec<Attempt>,
++    pub exhausted: bool,
++    pub finished: u64,
++}
++
++impl Trace {
++    pub fn successful_start(&self) -> Option<u64> {
++        self.attempts
++            .last()
++            .filter(|a| a.outcome == Outcome::Stable)
++            .map(|a| a.start)
++    }
++    pub fn completed(&self) -> Option<u64> {
++        self.attempts.last().map(|_| self.finished)
++    }
++    pub fn had_busy(&self) -> bool {
++        self.attempts.iter().any(|a| a.outcome == Outcome::Busy)
++    }
++}
++
++pub(super) struct Observation<T, E> {
++    pub result: Result<Option<T>, E>,
++    pub trace: Trace,
++}
++
++// None means dyld explicitly reported a NULL image array, not an empty map.
++// The probe must release task suspension before returning. No additional
++// retry starts after the elapsed budget; an OS probe itself can finish later.
++pub(super) fn read<T, E>(
++    mut probe: impl FnMut() -> Result<Option<T>, E>,
++    mut clock: impl FnMut() -> u64,
++    mut pause: impl FnMut(u64),
++) -> Observation<T, E> {
++    let mut trace = Trace::default();
++    let first = clock();
++    loop {
++        let start = clock();
++        if !trace.attempts.is_empty()
++            && (trace.attempts.len() >= MAX_ATTEMPTS
++                || start.saturating_sub(first) >= RETRY_START_BUDGET_NS)
++        {
++            trace.exhausted = true;
++            trace.finished = start;
++            return Observation {
++                result: Ok(None),
++                trace,
++            };
++        }
++        let result = probe();
++        let completed = clock();
++        trace.finished = completed;
++        let outcome = match &result {
++            Ok(Some(_)) => Outcome::Stable,
++            Ok(None) => Outcome::Busy,
++            Err(_) => Outcome::Error,
++        };
++        trace.attempts.push(Attempt {
++            start,
++            completed,
++            outcome,
++        });
++        if outcome != Outcome::Busy {
++            return Observation { result, trace };
++        }
++        if trace.attempts.len() >= MAX_ATTEMPTS
++            || completed.saturating_sub(first) >= RETRY_START_BUDGET_NS
++        {
++            trace.exhausted = true;
++            return Observation { result, trace };
++        }
++        pause(PAUSE_NS);
++    }
++}
++
++pub(super) fn unchanged_and_available(array_present: bool, timestamp: u64, previous: u64) -> bool {
++    array_present && timestamp == previous
++}
++
++// A stable image list cannot be accepted if resuming the target failed.
++pub(super) fn after_resume<T, E>(result: Result<T, E>, resumed: Result<(), E>) -> Result<T, E> {
++    resumed?;
++    result
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::cell::Cell;
++    #[test]
++    fn busy_resumes_before_retry_and_never_backdates_new_generation() {
++        let suspended = Cell::new(false);
++        let time = Cell::new(100);
++        let calls = Cell::new(0);
++        let observation = read(
++            || -> Result<Option<&str>, ()> {
++                assert!(!suspended.replace(true));
++                calls.set(calls.get() + 1);
++                time.set(time.get() + 10);
++                let result = if calls.get() == 1 {
++                    None
++                } else {
++                    Some("new generation")
++                };
++                suspended.set(false); // Real probe's task_resume runs before returning.
++                Ok(result)
++            },
++            || time.get(),
++            |delay| {
++                assert!(
++                    !suspended.get(),
++                    "dyld cannot finish mutating while suspended"
++                );
++                time.set(time.get() + delay);
++            },
++        );
++        assert_eq!(observation.result, Ok(Some("new generation")));
++        assert_eq!(observation.trace.attempts[0].start, 100);
++        assert_eq!(observation.trace.successful_start(), Some(250110));
++        assert_eq!(observation.trace.completed(), Some(250120));
++        // A sample from the busy interval predates the new mapping and must
++        // not be linked to that future generation. Post-read samples do not.
++        assert!(200 < observation.trace.successful_start().unwrap());
++        assert!(
++            observation.trace.completed().unwrap() >= observation.trace.successful_start().unwrap()
++        );
++        assert!(!observation.trace.exhausted);
++        assert!(observation.trace.had_busy());
++        use crate::shared::lib_mappings::{
++            LibMappingAdd, LibMappingInfo, LibMappingOp, LibMappingOpQueue, LibMappingsHierarchy,
++        };
++        use fxprof_processed_profile::{LibraryInfo, Profile, SamplingInterval};
++        let mut profile = Profile::new(
++            "retry mapping",
++            std::time::UNIX_EPOCH.into(),
++            SamplingInterval::from_millis(1),
++        );
++        let lib = profile.add_lib(LibraryInfo {
++            name: "new".into(),
++            debug_name: "new".into(),
++            path: "new".into(),
++            debug_path: "new".into(),
++            debug_id: debugid::DebugId::nil(),
++            code_id: None,
++            arch: None,
++            symbol_table: None,
++        });
++        let mut ops = LibMappingOpQueue::default();
++        ops.push(
++            observation.trace.successful_start().unwrap(),
++            LibMappingOp::Add(LibMappingAdd {
++                start_avma: 0x1000,
++                end_avma: 0x2000,
++                relative_address_at_start: 0,
++                info: LibMappingInfo::new_lib(lib),
++            }),
++        );
++        let mut mappings = LibMappingsHierarchy::new(ops);
++        mappings.process_ops(200);
++        assert!(
++            mappings.convert_address(0x1100).is_none(),
++            "sample during retry cannot acquire a future mapping"
++        );
++        mappings.process_ops(observation.trace.completed().unwrap());
++        assert!(mappings.convert_address(0x1100).is_some());
++    }
++    #[test]
++    fn busy_budget_retains_unavailability_and_never_retries_errors() {
++        let time = Cell::new(0);
++        let observation = read(
++            || -> Result<Option<()>, ()> {
++                time.set(time.get() + 1);
++                Ok(None)
++            },
++            || time.get(),
++            |delay| time.set(time.get() + delay),
++        );
++        assert_eq!(observation.result, Ok(None));
++        assert_eq!(observation.trace.attempts.len(), MAX_ATTEMPTS);
++        assert!(observation.trace.exhausted);
++        assert!(observation.trace.successful_start().is_none());
++        let time = Cell::new(0);
++        let observation = read(
++            || -> Result<Option<()>, ()> {
++                time.set(RETRY_START_BUDGET_NS + 1);
++                Ok(None)
++            },
++            || time.get(),
++            |_| panic!("budget exhausted"),
++        );
++        assert_eq!(observation.trace.attempts.len(), 1);
++        assert!(observation.trace.exhausted);
++        assert_eq!(
++            observation.trace.completed(),
++            Some(RETRY_START_BUDGET_NS + 1)
++        );
++        let observation = read(
++            || -> Result<Option<()>, u8> { Err(7) },
++            || 0,
++            |_| panic!("OS error is not dyld Busy"),
++        );
++        assert_eq!(observation.result, Err(7));
++        assert_eq!(observation.trace.attempts[0].outcome, Outcome::Error);
++        let time = Cell::new(0);
++        let calls = Cell::new(0);
++        let observation = read(
++            || -> Result<Option<()>, ()> {
++                calls.set(calls.get() + 1);
++                Ok(None)
++            },
++            || time.get(),
++            |_| time.set(RETRY_START_BUDGET_NS),
++        );
++        assert_eq!(
++            calls.get(),
++            1,
++            "no retry starts at/after budget after an oversleep"
++        );
++        assert!(observation.trace.exhausted);
++        assert_eq!(observation.trace.completed(), Some(RETRY_START_BUDGET_NS));
++        let observation = read(
++            || after_resume(Ok(Some(())), Err(9)),
++            || 0,
++            |_| panic!("failed resume must not retry"),
++        );
++        assert_eq!(observation.result, Err(9));
++        assert_eq!(observation.trace.attempts.len(), 1);
++    }
++    #[test]
++    fn null_array_is_busy_even_before_change_timestamp_updates() {
++        assert!(!unchanged_and_available(false, 7, 7));
++        assert!(unchanged_and_available(true, 7, 7));
++        assert!(!unchanged_and_available(true, 8, 7));
++    }
++}
