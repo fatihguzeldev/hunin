@@ -7,8 +7,6 @@ import time
 
 
 class WindowsClock:
-    source = "QueryPerformanceCounter"
-
     def __init__(self):
         from ctypes import wintypes
         self.api = getattr(ctypes, "PyDLL", ctypes.CDLL)("kernel32", use_last_error=True)
@@ -17,20 +15,14 @@ class WindowsClock:
         self.api.CloseHandle.argtypes = [wintypes.HANDLE]
         self.api.GetThreadTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
         self.api.GetThreadTimes.restype = wintypes.BOOL
-        self.api.QueryPerformanceFrequency.argtypes = [ctypes.POINTER(ctypes.c_longlong)]
-        self.api.QueryPerformanceCounter.argtypes = [ctypes.POINTER(ctypes.c_longlong)]
-        frequency = ctypes.c_longlong()
-        if not self.api.QueryPerformanceFrequency(ctypes.byref(frequency)) or frequency.value <= 0:
-            raise OSError("QueryPerformanceFrequency failed")
-        self.frequency = frequency.value
+        self.source = "python_perf_counter:" + time.get_clock_info("perf_counter").implementation
         self.handles = {}
         self.filetime = wintypes.FILETIME
 
     def now_ns(self):
-        value = ctypes.c_longlong()
-        if not self.api.QueryPerformanceCounter(ctypes.byref(value)):
-            raise OSError("QueryPerformanceCounter failed")
-        return value.value * 1_000_000_000 // self.frequency
+        # Both supported interpreters implement this with QPC on Windows.
+        # Calling their builtin avoids an extra PyPy ctypes GIL handoff.
+        return time.perf_counter_ns()
 
     def snapshot(self, native_ids):
         result = {}
