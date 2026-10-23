@@ -4,9 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-
-const entry = fileURLToPath(new URL('./index.mjs', import.meta.url));
+const entry = new URL('./index.mjs', import.meta.url).href;
 function run(code, env = {}) {
   return spawnSync(process.env.HUNIN_SDK_TEST_RUNTIME || process.execPath, [...(process.env.HUNIN_SDK_TEST_DENO ? ['eval', '--allow-env', '--allow-write', '--allow-read'] : ['--input-type=module', '-e']), `import assert from "node:assert/strict"; import * as h from ${JSON.stringify(entry)}; ${code}`], {
     encoding: 'utf8', env: { ...process.env, HUNIN_RUN_ID: '', HUNIN_RECORD_DIR: '', ...env },
