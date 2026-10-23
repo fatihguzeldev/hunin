@@ -25,13 +25,19 @@ export class Workspace {
 
   constructor(views: Record<string, View>, private sourceView: (run: Run, path: string, line?: number) => Promise<HTMLElement>) {
     this.views = { overview: { name: 'Overview', render: context => overview(context.run, context.summary, context.source) }, ...views };
+    this.normalizeTab();
     window.addEventListener('popstate', () => {
       const params = new URLSearchParams(location.search);
       this.selected = params.get('run') ?? '';
       this.tab = params.get('view') ?? 'overview';
+      this.normalizeTab();
       this.renderRail();
       void this.render();
     });
+  }
+
+  private normalizeTab(): void {
+    if (![...Object.keys(this.views), 'capabilities', 'scenarios'].includes(this.tab)) this.tab = 'overview';
   }
 
   mount(root: HTMLElement): void {
@@ -84,8 +90,11 @@ export class Workspace {
     if (!shown.length) this.rail.append(el('p', { class: 'sidebar-empty' }, this.runs.length ? 'No matching recordings.' : 'No recordings yet. Record a workload to begin.'));
     if (this.nextCursor) this.rail.append(button('Load older recordings', () => {
       const cursor = this.nextCursor;
+      const generation = this.reloadEpoch;
       void operation('runs.list', { limit: 100, cursor }).then(data => {
-        const unique = new Map([...this.runs, ...data.runs].map(run => [run.id, run]));
+        if (generation !== this.reloadEpoch) return;
+        const unique = new Map(this.runs.map(run => [run.id, run]));
+        for (const run of data.runs) if (!unique.has(run.id)) unique.set(run.id, run);
         this.runs = [...unique.values()];
         this.nextCursor = data.next_cursor;
         this.renderRail();
@@ -115,15 +124,16 @@ export class Workspace {
     try {
       if (this.tab === 'capabilities') {
         const view = await capabilities();
-        if (epoch === this.epoch) this.content.replaceChildren(el('div', { class: 'view' }, view));
+        if (epoch === this.epoch) { this.content.replaceChildren(el('div', { class: 'view' }, view)); document.title = 'Capabilities · Hunin'; }
         return;
       }
       if (this.tab === 'scenarios') {
         const view = await scenarios(id => { this.tab = 'overview'; void this.reload(id); });
-        if (epoch === this.epoch) this.content.replaceChildren(el('div', { class: 'view' }, view));
+        if (epoch === this.epoch) { this.content.replaceChildren(el('div', { class: 'view' }, view)); document.title = 'Scenarios · Hunin'; }
         return;
       }
       if (!this.selected) {
+        document.title = 'Hunin · recordings';
         this.content.replaceChildren(empty('Make the next change measurable', 'Record a workload, inspect its execution, then compare the same workload after your change.',
           button('Record a workload', () => recordDialog(id => { void this.reload(id); }), 'button primary')));
         return;

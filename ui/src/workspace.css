@@ -37,6 +37,7 @@
 .view-title { margin-bottom: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .view-title p { color: var(--muted); font-size: 12px; }
 .metric-note { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.metric-note.mono, .capability .mono { overflow-wrap: anywhere; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .capability { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; background: var(--surface); }
 .capability h3 { margin-bottom: 10px; }

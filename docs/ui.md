@@ -26,7 +26,7 @@ The recording views cover these tasks:
 - **Analyzers** registers managed packages, declares their applicability and dependencies, runs them against a fresh recording, and retains result set identities and diagnostics. Active attempts refresh their status and can be canceled. Choose an exact source build or explicitly declare a source-independent analyzer. Accepted observations appear in the shared timeline and evidence views. Passing applicability checks does not establish semantic correctness.
 - **Compare** selects a baseline and candidate, shows backend comparability reasons and correctness results, then displays the measured deltas. An incorrect result or incompatible workload cannot become an unqualified successful optimization.
 
-Source locations are tied to the measured recording. An unverified source identity carries a visible warning; the current editor source is not silently presented as the measured build. Missing source, missing samples, unavailable observations, failed collection, and derived relationships remain distinct states.
+Source locations are tied to the measured recording. The inspector distinguishes retained source snapshots from current files, verified source bytes from an unverified relationship to the loaded build, and missing source from missing debug information. Backend provenance diagnostics remain visible even when snapshot bytes are verified. The current editor source is not silently presented as the measured build. Missing samples, unavailable observations, failed collection, and derived relationships remain distinct states.
 
 ## Navigation and access
 

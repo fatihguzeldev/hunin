@@ -25,8 +25,9 @@ export async function overview(run: Run, summary: Summary, source: (file: string
     stat('Sampled profile', weight(data.total_weight, data.weight_unit), `${numeric(summary.sample_count)} stack samples`),
     stat('Explicit spans', numeric(summary.span_count), 'SDK observations'),
     stat('Relationships', numeric(summary.relation_count), 'recorded evidence')));
-  if (run.correctness?.passed === false) body.append(el('p', { class: 'notice' },
-    `Workload check failed: expected exit ${run.correctness.expected_exit_code ?? 'unknown'}, observed ${run.correctness.actual_exit_code ?? 'unavailable'}. ${run.correctness.reason ?? ''}`));
+  if (run.correctness?.passed === false) body.append(el('p', { class: 'notice' }, run.correctness.actual_exit_code == null
+    ? `Workload check incomplete: no exit result is available for this ${run.status} recording. ${run.correctness.reason ?? ''}`
+    : `Workload check failed: expected exit ${run.correctness.expected_exit_code ?? 'unknown'}, observed ${run.correctness.actual_exit_code}. ${run.correctness.reason ?? ''}`));
   const rows = el('tbody');
   for (const item of data.hotspots) {
     const name = hasLocalSource(item.file) ? el('button', { class: 'text-button mono', type: 'button' }, item.function) : el('span', { class: 'mono' }, item.function);
