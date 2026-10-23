@@ -5,6 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+/** Rust's canonical Win32 paths are not accepted by every runtime resolver. */
+export function toolPath(value, platform = process.platform) {
+  if (platform !== 'win32') return value;
+  if (/^\\\\\?\\[a-z]:\\/i.test(value)) return value.slice(4);
+  if (/^\\\\\?\\UNC\\/i.test(value)) return '\\\\' + value.slice(8);
+  return value;
+}
+
 export function plan(request) {
   const { command, cwd, artifact_dir, run_id } = request;
   if (!Array.isArray(command) || !command.length || command.some(value => typeof value !== 'string')) throw Error('command must be a nonempty array of strings');
@@ -13,10 +21,12 @@ export function plan(request) {
   const effectiveEnv = { ...process.env, ...targetEnv };
   const runtime = request.runtime ?? basename(command[0]).replace(/\.exe$/i, '');
   if (!['node', 'bun', 'deno'].includes(runtime)) throw Error(`unsupported JavaScript runtime: ${runtime}`);
-  const directory = resolve(artifact_dir);
+  const directory = toolPath(resolve(artifact_dir));
+  const project = toolPath(resolve(cwd));
+  const executable = toolPath(command[0]);
   mkdirSync(directory, { recursive: true });
-  const probe = basename(command[0]).replace(/\.exe$/i, '') === runtime ? command[0] : runtime;
-  const result = spawnSync(probe, ['--version'], { cwd, env: effectiveEnv, encoding: 'utf8', timeout: 10000 });
+  const probe = basename(command[0]).replace(/\.exe$/i, '') === runtime ? executable : runtime;
+  const result = spawnSync(probe, ['--version'], { cwd: project, env: effectiveEnv, encoding: 'utf8', timeout: 10000 });
   if (result.status !== 0) throw Error(`cannot inspect ${runtime}: ${result.error?.message ?? result.stderr}`);
   const runtime_version = result.stdout.trim().split('\n')[0];
   const version = runtime_version.match(/(\d+)\.(\d+)/);
@@ -24,12 +34,12 @@ export function plan(request) {
   if (runtime === 'node' && major < 20) throw Error('Node 20 or newer is required');
   if (runtime === 'bun' && (major < 1 || major === 1 && minor < 4)) throw Error('Bun 1.4 or newer is required for per-worker profiling');
   if (runtime === 'deno' && (major < 2 || major === 2 && minor < 8)) throw Error('Deno 2.8 or newer is required for built-in CPU profiling');
-  const env = { ...targetEnv, HUNIN_RUN_ID: run_id, HUNIN_JS_PROFILE_DIR: directory, HUNIN_PROJECT_ROOT: resolve(cwd) };
+  const env = { ...targetEnv, HUNIN_RUN_ID: run_id, HUNIN_JS_PROFILE_DIR: directory, HUNIN_PROJECT_ROOT: project };
   const diagnostics = [];
   diagnostics.push('JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.');
   let launched;
   if (runtime === 'bun') {
-    const preload = fileURLToPath(new URL('./bun-preload.mjs', import.meta.url));
+    const preload = toolPath(fileURLToPath(new URL('./bun-preload.mjs', import.meta.url)));
     // BUN_OPTIONS retains quote characters in --preload= values. Resolve a
     // whitespace-free unique shim through NODE_PATH, whose path list supports
     // spaces, then let ESM resolve the real file URL on every host.
@@ -37,18 +47,18 @@ export function plan(request) {
     writeFileSync(join(directory, shim), `import ${JSON.stringify(pathToFileURL(preload).href)};\n`, { mode: 0o600 });
     env.NODE_PATH = [directory, effectiveEnv.NODE_PATH].filter(Boolean).join(delimiter);
     env.BUN_OPTIONS = `${effectiveEnv.BUN_OPTIONS ?? ''} --preload=${shim}`.trim();
-    launched = [command[0], '--preload', preload, ...command.slice(1)];
+    launched = [executable, '--preload', preload, ...command.slice(1)];
     diagnostics.push('Bun workers are sampled through Inspector preloads; worker termination waits up to 100ms for a profiling flush. Forced process termination can leave the current segment incomplete.');
   } else if (runtime === 'node') {
-    const preload = fileURLToPath(new URL('./clock-preload.mjs', import.meta.url));
+    const preload = toolPath(fileURLToPath(new URL('./clock-preload.mjs', import.meta.url)));
     env.NODE_OPTIONS = `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(pathToFileURL(preload).href)}`.trim();
-    launched = [...command];
+    launched = [executable, ...command.slice(1)];
   } else {
-    const preload = fileURLToPath(new URL('./clock-preload.mjs', import.meta.url));
+    const preload = toolPath(fileURLToPath(new URL('./clock-preload.mjs', import.meta.url)));
     // Keep the target's explicit permissions. Hunin only adds access needed by its preload.
     const inspectorDenied = command.some(value => value === '--deny-sys' || value.startsWith('--deny-sys=') && value.slice('--deny-sys='.length).split(',').includes('inspector'));
     const index = ['run', 'eval', 'test', 'bench'].includes(command[1]) ? 2 : 1;
-    launched = [...command.slice(0, index), '--cpu-prof', `--cpu-prof-dir=${directory}`, '--preload', preload,
+    launched = [executable, ...command.slice(1, index), '--cpu-prof', `--cpu-prof-dir=${directory}`, '--preload', preload,
       `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_PROJECT_ROOT,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-write=${directory}`, ...command.slice(index)];
     if (inspectorDenied) diagnostics.push('The target denies Inspector access; CPU samples retain an unmapped runtime clock when epoch calibration is unavailable.');
     diagnostics.push('Deno TypeScript CPU profile positions refer to generated JavaScript when the runtime omits source maps. Worker profiles are emitted by Deno itself. Child Deno processes need their own collection plan.');

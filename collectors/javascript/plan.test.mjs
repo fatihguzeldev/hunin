@@ -2,10 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, toNamespacedPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { plan } from './plan.mjs';
+import { plan, toolPath } from './plan.mjs';
+
+test('runtime tool paths normalize only Win32 verbatim disks and UNC shares', () => {
+  assert.equal(toolPath('\\\\?\\C:\\work dir\\capture', 'win32'), 'C:\\work dir\\capture');
+  assert.equal(toolPath('\\\\?\\UNC\\server\\share\\capture', 'win32'), '\\\\server\\share\\capture');
+  for (const value of ['\\\\.\\pipe\\hunin', '\\\\?\\Volume{guid}\\capture', 'relative path', 'C:\\ordinary\\path', 'file:///C:/work/file.mjs']) {
+    assert.equal(toolPath(value, 'win32'), value);
+  }
+  assert.equal(toolPath('\\\\?\\C:\\literal', 'darwin'), '\\\\?\\C:\\literal');
+});
 
 test('capture planning runs when the installed collector is reached through a directory link', () => {
   const directory = mkdtempSync(join(tmpdir(), 'hunin-linked-plan-'));
@@ -106,7 +115,8 @@ if (process.env.HUNIN_TEST_BUN) {
     try {
       const main = join(directory, 'main.mjs');
       writeFileSync(main, 'function inheritedHot(){const end=Date.now()+150;let value=0;while(Date.now()<end)for(let i=1;i<10000;i++)value+=Math.sqrt(i);return value;}console.log(inheritedHot());');
-      const capture = plan({ command: [process.env.HUNIN_TEST_BUN, main], cwd: directory, artifact_dir: directory, run_id: 'inherited-preload', runtime: 'bun' });
+      const capture = plan({ command: [toNamespacedPath(process.env.HUNIN_TEST_BUN), main], cwd: toNamespacedPath(directory), artifact_dir: toNamespacedPath(directory), run_id: 'inherited-preload', runtime: 'bun' });
+      if (process.platform === 'win32') assert.equal(capture.env.NODE_PATH.startsWith('\\\\?\\'), false, 'Bun cannot resolve a verbatim NODE_PATH');
       assert.match(capture.env.BUN_OPTIONS, /--preload=hunin-bun-preload-[\w-]+\.mjs$/);
       // A descendant inherits env, but not its parent's explicit launch argv.
       const result = spawnSync(process.env.HUNIN_TEST_BUN, [main], { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
