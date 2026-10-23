@@ -19,6 +19,79 @@ fn run(id: &str, cwd: &str, passed: bool) -> Run {
 }
 
 #[tokio::test]
+async fn durable_metadata_lists_page_without_losing_history_or_crossing_runs() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    store.save_run(&run("other", "/project", true)).unwrap();
+    for index in 0..3 {
+        let id = format!("item-{index}");
+        for namespace in ["analyses", "scenarios"] {
+            store
+                .save_document(
+                    namespace,
+                    &id,
+                    &json!({"id":id,"name":id,"created_at_us":index}),
+                )
+                .unwrap();
+        }
+        store.save_document("analysis-results", &id, &json!({"id":id,"run_id":"recording","analysis_id":"analyzer","created_at_us":index,"status":"failed"})).unwrap();
+        store
+            .add_artifact_bytes("recording", &id, "control", id.as_bytes())
+            .unwrap();
+    }
+    store
+        .save_document(
+            "analysis-results",
+            "foreign",
+            &json!({"id":"foreign","run_id":"other","status":"failed","created_at_us":99}),
+        )
+        .unwrap();
+    store
+        .add_artifact_bytes("other", "foreign", "control", b"other run")
+        .unwrap();
+    let ops = Operations::new(store);
+    for (operation, key, owned) in [
+        ("analyses.list", "analyses", false),
+        ("scenarios.list", "scenarios", false),
+        ("analyses.results", "results", true),
+        ("artifacts.list", "artifacts", true),
+    ] {
+        let mut params = json!({"limit":2});
+        if owned {
+            params["run_id"] = json!("recording");
+        }
+        let first = ops.call(operation, params.clone()).await.unwrap();
+        assert_eq!(first[key].as_array().unwrap().len(), 2, "{operation}");
+        assert_eq!(first["next_cursor"], "2", "{operation}");
+        params["cursor"] = first["next_cursor"].clone();
+        let second = ops.call(operation, params).await.unwrap();
+        assert_eq!(second[key].as_array().unwrap().len(), 1, "{operation}");
+        assert!(second["next_cursor"].is_null(), "{operation}");
+        let ids: std::collections::HashSet<_> = first[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(second[key].as_array().unwrap())
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 3, "{operation}: pages repeated an item");
+        assert!(
+            !ids.contains("foreign"),
+            "{operation}: crossed run ownership"
+        );
+        let mut invalid = json!({"limit":501});
+        if owned {
+            invalid["run_id"] = json!("recording");
+        }
+        assert!(
+            ops.call(operation, invalid).await.is_err(),
+            "{operation}: accepted an unbounded page"
+        );
+    }
+}
+
+#[tokio::test]
 async fn comparison_accepts_source_changes_but_rejects_changed_inputs_environment_and_recipe() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

@@ -43,6 +43,33 @@ impl Store {
             .collect()
     }
 
+    /// Page in SQL before decoding payloads; completed attempts keep creation order.
+    pub fn documents_page(
+        &self,
+        namespace: &str,
+        run_id: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Value>> {
+        let c = self.connection()?;
+        let mut statement = c.prepare("SELECT payload FROM documents WHERE namespace=?1 AND (?2 IS NULL OR owner_run_id=?2) ORDER BY COALESCE(json_extract(payload,'$.created_at_us'),updated_at_us) DESC,id LIMIT ?3 OFFSET ?4")?;
+        statement
+            .query_map(params![namespace, run_id, limit.min(501), offset], |r| {
+                r.get::<_, String>(0)
+            })?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
+
+    pub fn documents_with_status(&self, namespace: &str, status: &str) -> Result<Vec<Value>> {
+        let c = self.connection()?;
+        let mut statement = c.prepare("SELECT payload FROM documents WHERE namespace=?1 AND json_extract(payload,'$.status')=?2 ORDER BY updated_at_us,id")?;
+        statement
+            .query_map(params![namespace, status], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
+
     pub fn save_document(&self, namespace: &str, id: &str, value: &Value) -> Result<()> {
         write_document(&self.connection()?, namespace, id, value)
     }
@@ -139,7 +166,9 @@ impl Store {
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let text: String = tx
-            .query_row("SELECT manifest FROM runs WHERE id=?1", [run_id], |r| r.get(0))
+            .query_row("SELECT manifest FROM runs WHERE id=?1", [run_id], |r| {
+                r.get(0)
+            })
             .with_context(|| format!("run removed before import completion: {run_id}"))?;
         let mut run: Run = serde_json::from_str(&text)?;
         anyhow::ensure!(
@@ -531,6 +560,25 @@ impl Store {
             c.prepare("SELECT metadata FROM artifacts WHERE run_id=?1 ORDER BY id")?;
         statement
             .query_map([run_id], |r| r.get::<_, String>(0))?
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect()
+    }
+
+    pub fn artifacts_page(
+        &self,
+        run_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Artifact>> {
+        self.run(run_id)?;
+        let c = self.connection()?;
+        let mut statement = c.prepare(
+            "SELECT metadata FROM artifacts WHERE run_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3",
+        )?;
+        statement
+            .query_map(params![run_id, limit.min(501), offset], |r| {
+                r.get::<_, String>(0)
+            })?
             .map(|r| Ok(serde_json::from_str(&r?)?))
             .collect()
     }

@@ -70,6 +70,8 @@ export type OperationInputs = {
 };
   "artifacts.list": {
   "run_id": string;
+  "limit"?: number;
+  "cursor"?: string;
 };
   "artifacts.read": {
   "run_id": string;
@@ -96,6 +98,8 @@ export type OperationInputs = {
 };
   "analyses.list": {
   "run_id"?: string;
+  "limit"?: number;
+  "cursor"?: string;
 };
   "analyses.register": {
   "name": string;
@@ -113,9 +117,12 @@ export type OperationInputs = {
 };
   "analyses.results": {
   "run_id": string;
+  "limit"?: number;
+  "cursor"?: string;
 };
   "scenarios.list": {
-
+  "limit"?: number;
+  "cursor"?: string;
 };
   "scenarios.save": {
   "id"?: string;

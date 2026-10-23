@@ -120,7 +120,12 @@ impl Operations {
                     json!({"records":records.iter().filter(|r|wanted.contains(&r["id"])).collect::<Vec<_>>()}),
                 )
             }
-            "artifacts.list" => Ok(json!({"artifacts":store.artifacts(id()?)?})),
+            "artifacts.list" => Ok(metadata_page(
+                "artifacts",
+                store.artifacts_page(id()?, limit + 1, cursor)?,
+                limit,
+                cursor,
+            )),
             "artifacts.read" => {
                 let path = store.artifact_path(id()?, params["artifact_id"].as_str().unwrap())?;
                 let mut file = fs::File::open(path)?;
@@ -158,7 +163,12 @@ impl Operations {
                 params["before"].as_str().unwrap(),
                 params["after"].as_str().unwrap(),
             ),
-            "scenarios.list" => Ok(json!({"scenarios":store.documents("scenarios")?})),
+            "scenarios.list" => Ok(metadata_page(
+                "scenarios",
+                store.documents_page("scenarios", None, limit + 1, cursor)?,
+                limit,
+                cursor,
+            )),
             "scenarios.save" => {
                 let mut scenario = params;
                 let id = scenario["id"]
@@ -179,15 +189,18 @@ impl Operations {
                 let request = serde_json::from_value(scenario)?;
                 Ok(json!({"run":self.engine.start(request).await?}))
             }
-            "analyses.list" => Ok(json!({"analyses":store.documents("analyses")?})),
+            "analyses.list" => Ok(metadata_page(
+                "analyses",
+                store.documents_page("analyses", None, limit + 1, cursor)?,
+                limit,
+                cursor,
+            )),
             "analyses.results" => {
                 self.analyses.recover()?;
                 let run_id = id()?;
-                let mut results = store
-                    .documents("analysis-results")?
-                    .into_iter()
-                    .filter(|r| r["run_id"] == run_id)
-                    .collect::<Vec<_>>();
+                store.run(run_id)?;
+                let mut results =
+                    store.documents_page("analysis-results", Some(run_id), limit + 1, cursor)?;
                 for row in &mut results {
                     let selected = store.selected_result_id(
                         run_id,
@@ -196,7 +209,7 @@ impl Operations {
                     let result_id = row["result_set_id"].as_str().or_else(|| row["id"].as_str());
                     row["selected"] = json!(selected.as_deref() == result_id);
                 }
-                Ok(json!({"results":results}))
+                Ok(metadata_page("results", results, limit, cursor))
             }
             "analyses.register" => self.analyses.register(&params),
             "analyses.run" => self.analyses.run(&params).await,
@@ -235,9 +248,8 @@ impl Operations {
             Ok(publication) => publication,
             Err(error) => {
                 if params["run_id"].is_null() {
-                    let diagnostic = format!(
-                        "Import failed; any preserved inputs remain available: {error:#}"
-                    );
+                    let diagnostic =
+                        format!("Import failed; any preserved inputs remain available: {error:#}");
                     store.finish_recording_import(&run.id, &[diagnostic], false)?;
                 }
                 return Err(error);
@@ -252,4 +264,17 @@ impl Operations {
             json!({"run":run,"accepted":publication.accepted,"summary":query::summary(&store.records(&run.id)?)}),
         )
     }
+}
+
+fn metadata_page<T: serde::Serialize>(
+    key: &str,
+    mut rows: Vec<T>,
+    limit: usize,
+    cursor: usize,
+) -> Value {
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    let mut result = json!({"next_cursor":more.then(||(cursor + limit).to_string())});
+    result[key] = json!(rows);
+    result
 }

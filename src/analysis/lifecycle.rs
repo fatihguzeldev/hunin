@@ -50,7 +50,10 @@ impl Engine {
     }
     pub fn recover(&self) -> Result<usize> {
         let mut count = 0;
-        for mut row in self.store.documents("analysis-results")? {
+        for mut row in self
+            .store
+            .documents_with_status("analysis-results", "running")?
+        {
             if row["status"] != "running"
                 || row["owner"]["instance_id"] == self.owner.instance_id
                 || !is_proven_absent(&row["owner"])
