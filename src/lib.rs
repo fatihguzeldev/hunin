@@ -6,3 +6,4 @@ pub mod collection;
 pub mod importers;
 pub mod execution;
 mod source;
+pub mod analysis;
