@@ -19,7 +19,7 @@ await withContext('request', () => withSpan('decode', async () => {
 flush();
 ```
 
-`withSpan` preserves synchronous values, promises and thrown exceptions. AsyncLocalStorage isolates concurrent request scopes. A receiver uses `withContext(token, callback)` to restore a propagated context. `startSpan(name)` provides manual `end()` and `run(callback)` methods. `event(name, attributes)` and `relation(fromId, toId, name, evidenceIds)` add explicit observations. A span callback receives its span handle while collection is active; check its optional `id` when supporting disabled operation.
+`withSpan` preserves synchronous values, promises and thrown exceptions. AsyncLocalStorage isolates concurrent request scopes within one JavaScript isolate. Carry `captureContext()` explicitly across a worker or process boundary, and restore it at the receiver with `withContext(token, callback)`. The same ESM package is used with Node, Bun and Deno through their Node-compatible APIs; Deno's environment and write permissions still apply. `startSpan(name)` provides manual `end()` and `run(callback)` methods. `event(name, attributes)` and `relation(fromId, toId, name, evidenceIds)` add explicit observations. A span callback receives its span handle while collection is active; check its optional `id` when supporting disabled operation.
 
 ## Python
 
@@ -114,7 +114,11 @@ Copy a native context into a job to propagate it across threads. Its public stri
 
 A counter observation is a delta with its stated unit. Contexts group explicit work; they do not allocate process CPU or RSS to a request. A propagated parent identifies the producing span even when a queued child executes after the parent's interval ends. Propagate tokens within the same Hunin run; SDKs ignore tokens for a different run.
 
-Each process lifetime has a distinct producer identity. Thread IDs preserve their source namespace: Node worker ID, Python `threading.get_ident`, Rust `ThreadId`, C `pthread_self` or Windows thread ID. Go leaves the thread ID empty because goroutines can migrate. These values do not establish a mapping to an OS profiler thread without additional evidence.
+A propagation token carries record IDs, not copies of the originating observations. Its referenced context and parent span must also be available in accepted observations for that same recording. Finish the parent span and flush participating producers at shutdown boundaries; a token does not make an unfinished parent span into a completed observation. Explicit context membership and parent links describe declared work relationships, rather than an inferred allocation of sampled CPU or RSS.
+
+Each participating process lifetime has a distinct producer identity; JavaScript worker isolates also have separate producers within a shared PID. Do not merge producer identities merely because numeric PID or thread values match. Thread IDs preserve their source namespace: Node worker ID, Python `threading.get_ident`, Rust `ThreadId`, C `pthread_self` or Windows thread ID. Go leaves the thread ID empty because goroutines can migrate. These values do not establish a mapping to an OS profiler thread without additional evidence.
+
+`contexts.query` returns contexts and relationships from a shared paginated sequence. Follow `next_cursor` until it is null when reconstructing the complete graph; an empty contexts array on a page does not mean that no relationships remain.
 
 Timestamps use epoch microseconds; span durations use monotonic clocks. Records retain clock and thread-source metadata and are validated against `protocol/record.schema.json` during ingestion. Completed records from all participating processes are accepted together, so child records may arrive before their parents. Missing references reject that result set with diagnostics; raw files remain available.
 
