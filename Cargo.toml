@@ -1,0 +1,27 @@
+[package]
+name = "hunin"
+version = "0.1.0"
+edition = "2024"
+description = "profiling and observability for coding agents. (and developers too)"
+repository = "https://github.com/fatihguzeldev/hunin"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+flate2 = "1"
+jsonschema = { version = "0.33", default-features = false }
+libc = "0.2"
+prost = "0.14"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = "0.37"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
