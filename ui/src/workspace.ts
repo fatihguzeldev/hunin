@@ -88,18 +88,22 @@ export class Workspace {
       this.rail.append(item);
     }
     if (!shown.length) this.rail.append(el('p', { class: 'sidebar-empty' }, this.runs.length ? 'No matching recordings.' : 'No recordings yet. Record a workload to begin.'));
-    if (this.nextCursor) this.rail.append(button('Load older recordings', () => {
-      const cursor = this.nextCursor;
-      const generation = this.reloadEpoch;
-      void operation('runs.list', { limit: 100, cursor }).then(data => {
-        if (generation !== this.reloadEpoch) return;
-        const unique = new Map(this.runs.map(run => [run.id, run]));
-        for (const run of data.runs) if (!unique.has(run.id)) unique.set(run.id, run);
-        this.runs = [...unique.values()];
-        this.nextCursor = data.next_cursor;
-        this.renderRail();
-      }).catch(error => this.rail.append(errorView(error, () => { void this.reload(); })));
-    }, 'button subtle small'));
+    if (this.nextCursor) {
+      const older = button('Load older recordings', () => {
+        older.disabled = true;
+        const cursor = this.nextCursor;
+        const generation = this.reloadEpoch;
+        void operation('runs.list', { limit: 100, cursor }).then(data => {
+          if (generation !== this.reloadEpoch) return;
+          const unique = new Map(this.runs.map(run => [run.id, run]));
+          for (const run of data.runs) if (!unique.has(run.id)) unique.set(run.id, run);
+          this.runs = [...unique.values()];
+          this.nextCursor = data.next_cursor;
+          this.renderRail();
+        }).catch(error => { if (generation === this.reloadEpoch) this.rail.append(errorView(error, () => { void this.reload(); })); }).finally(() => { older.disabled = false; });
+      }, 'button subtle small');
+      this.rail.append(older);
+    }
   }
 
   private navigate(id: string, tab: string): void {
@@ -139,6 +143,9 @@ export class Workspace {
         return;
       }
       const { run, summary } = await operation('runs.get', { run_id: this.selected });
+      if (epoch !== this.epoch) return;
+      // A deep link can select a run outside the first bounded list page.
+      if (!this.runs.some(value => value.id === run.id)) { this.runs.push(run); this.renderRail(); }
       const header = this.header(run);
       const view = el('section', { class: 'view', role: 'tabpanel', id: 'view-panel', 'aria-labelledby': `tab-${this.tab}`, tabindex: -1 }, loading('Loading view…'));
       if (epoch !== this.epoch) return;
