@@ -4,6 +4,7 @@ mod graal;
 mod javascript_sources;
 mod native_identity;
 mod native_lifetimes;
+mod native_sampling;
 mod pprof;
 mod python_cpu;
 mod v8;
@@ -72,7 +73,7 @@ fn import_inner(
     let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let sidecars = sidecars(path, format);
     let mut digest = Sha256::new();
-    digest.update(b"hunin-import-v7\0");
+    digest.update(b"hunin-import-v8\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);
@@ -153,7 +154,7 @@ fn import_inner(
     } else {
         None
     };
-    let (records, diagnostics) = match format {
+    let (records, mut diagnostics) = match format {
         "firefox" | "firefox-profile" | "samply" => firefox::decode_with_lifetimes(
             path,
             native_raw.as_ref().unwrap(),
@@ -195,6 +196,15 @@ fn import_inner(
             "unsupported profile format {other}; expected v8-cpuprofile, firefox, vmprof, graal-cpusampler, pprof or hunin-jsonl"
         ),
     };
+    if lifetimes.is_none()
+        && native_raw.as_ref().is_some_and(|raw| {
+            raw["meta"]["oscpu"]
+                .as_str()
+                .is_some_and(|os| os.to_ascii_lowercase().starts_with("windows"))
+        })
+    {
+        diagnostics.push(native_sampling::LEGACY_DIAGNOSTIC.into());
+    }
     let native_image_context = images.as_ref().map(|images| images.context(&raw_sha256));
     let binary_snapshots = images
         .map(native_identity::Images::into_snapshots)

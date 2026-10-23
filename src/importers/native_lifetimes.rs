@@ -26,6 +26,7 @@ pub(super) struct Timeline {
     instances_by_id: HashMap<String, Vec<usize>>,
     complete: bool,
     diagnostics: Vec<String>,
+    sampling: super::native_sampling::Evidence,
 }
 
 #[cfg(test)]
@@ -181,6 +182,7 @@ impl Timeline {
             collector: input["collector"].clone(),
             epoch_ms: epoch,
             complete: input["truncated"] == false,
+            sampling: super::native_sampling::Evidence::load(events, raw)?,
             ..Self::default()
         };
         if let Some(outcome) = input.get("target_outcome").filter(|v| !v.is_null()) {
@@ -443,6 +445,12 @@ impl Timeline {
         if !result.complete {
             result.diagnostics.push("Native lifetime evidence is incomplete (lost events, unavailable snapshots or bounded sidecar truncation); intervals are collector observations, not proof of continuous mapping".into());
         }
+        result.diagnostics.extend(result.sampling.diagnostics());
+        if result.collector["os"] == "windows" && result.sampling.is_empty() {
+            result
+                .diagnostics
+                .push(super::native_sampling::LEGACY_DIAGNOSTIC.into());
+        }
         if result.collector["patch_sha256"].is_null() {
             result.diagnostics.push("Native lifetime collector has no build-time patch digest; retain its binary/source provenance before trusting a distribution identity".into());
         }
@@ -616,7 +624,7 @@ impl Timeline {
         record: &mut Value,
         key: &str,
     ) -> Result<Vec<Value>> {
-        let Some(sample) = self.samples.get(&sample_key(
+        let sample = self.samples.get(&sample_key(
             thread["pid"]
                 .as_str()
                 .context("native sample pid missing")?,
@@ -624,7 +632,9 @@ impl Timeline {
                 .as_str()
                 .context("native sample tid missing")?,
             time,
-        )) else {
+        ));
+        self.sampling.annotate(thread, time, record, sample)?;
+        let Some(sample) = sample else {
             record["attributes"]["native_mapping_status"] = json!("sample_link_unavailable");
             return Ok(Vec::new());
         };
