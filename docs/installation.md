@@ -69,4 +69,6 @@ Run `hunin ui` and open `http://127.0.0.1:7878`. See [the local UI guide](ui.md)
 
 The SDKs are installable from the bundled sources: JavaScript through the local package directory, Python through `pip install /path/to/sdk/python`, Go through its module with a local `replace` when using a checkout, Rust through a path dependency, and C/C++ through the bundled headers and implementation. The [SDK guide](sdk.md) covers APIs, context propagation, installation, and flush/exit semantics.
 
+The [extension guide](extensions.md) describes external collector spools, raw and normalized imports, the common acceptance boundary, and paged metadata navigation. The [analyzer guide](analysis.md) covers durable packages that derive additional observations from retained inputs.
+
 Upgrading the executable does not require deleting recordings. Keep old bundles until the replacement has opened your data successfully. Do not remove Hunin's data directory as part of upgrading or uninstalling the executable.
