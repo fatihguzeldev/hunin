@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "samply-hunin",
+  "version": "0.13.1-hunin-native1",
+  "upstream": {
+    "repository": "https://github.com/mstange/samply",
+    "revision": "da75c28f367454c621e690eeb4e44ec2ebb29a78",
+    "archive_url": "https://codeload.github.com/mstange/samply/tar.gz/da75c28f367454c621e690eeb4e44ec2ebb29a78",
+    "archive_sha256": "baad0472c39a2528aeb0f799502b6011a79330f30df3e86660f67d7674c365b9",
+    "license": "MIT OR Apache-2.0"
+  },
+  "patches": "patches/*.patch",
+  "extension": {
+    "flag": "--lifetime-output",
+    "schema_version": 1
+  },
+  "cargo_package": "samply"
+}

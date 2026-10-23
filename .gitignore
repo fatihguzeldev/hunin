@@ -7,3 +7,4 @@ __pycache__/
 /.hunin/
 /dist/
 /sdk-c-build/
+/collectors/native/bin/

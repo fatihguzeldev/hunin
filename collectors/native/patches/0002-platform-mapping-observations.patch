@@ -1,0 +1,445 @@
+--- a/samply/src/linux/profiler.rs
++++ b/samply/src/linux/profiler.rs
+@@ -592,6 +592,7 @@
+     let mut pending_lost_events = 0;
+     let mut total_lost_events = 0;
+     let mut last_timestamp = 0;
++    let mut hunin_last_maps = std::time::Instant::now() - Duration::from_secs(1);
+     loop {
+         if stop_receiver.try_recv().is_ok() {
+             break;
+@@ -721,10 +722,18 @@
+             }
+         });
+ 
++        if hunin_last_maps.elapsed() >= Duration::from_millis(20) {
++            let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
++            if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) } == 0 {
++                converter.hunin_observe_maps(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64);
++            }
++            hunin_last_maps = std::time::Instant::now();
++        }
+         perf.wait();
+     }
+ 
+     if total_lost_events > 0 {
++        converter.hunin_lost(total_lost_events);
+         eprintln!("Lost {total_lost_events} events.");
+     }
+ 
+--- a/samply/src/linux_shared/converter.rs
++++ b/samply/src/linux_shared/converter.rs
+@@ -277,6 +277,16 @@
+             should_emit_jit_markers: profile_creation_props.should_emit_jit_markers,
+             should_emit_cswitch_markers: profile_creation_props.should_emit_cswitch_markers,
+         }
++    }
++
++    pub fn hunin_observe_maps(&mut self, now: u64) {
++        self.processes
++            .hunin_observe_maps(&mut self.profile, self.timestamp_converter, now);
++    }
++    pub fn hunin_lost(&mut self, count: u64) {
++        self.profile.hunin_record(
++            serde_json::json!({"kind":"loss","basis":"perf_lost_events","count":count}),
++        );
+     }
+ 
+     pub fn finish(mut self) -> Profile {
+@@ -1007,6 +1017,7 @@
+     /// FORK records are emitted if a new thread is started or if a new
+     /// process is created. The name is inherited from the forking thread.
+     pub fn handle_fork(&mut self, e: ForkOrExitRecord) {
++        self.profile.hunin_record(serde_json::json!({"kind":"lifecycle","event":"perf_fork","pid":e.pid,"tid":e.tid,"time_ms":self.timestamp_converter.convert_time(e.timestamp)}));
+         let start_time = self.timestamp_converter.convert_time(e.timestamp);
+ 
+         let is_main = e.pid == e.tid;
+@@ -1044,6 +1055,7 @@
+ 
+     /// Called for an EXIT record.
+     pub fn handle_exit(&mut self, e: ForkOrExitRecord) {
++        self.profile.hunin_record(serde_json::json!({"kind":"lifecycle","event":"perf_exit","pid":e.pid,"tid":e.tid,"time_ms":self.timestamp_converter.convert_time(e.timestamp)}));
+         let is_main = e.pid == e.tid;
+         let end_time = self.timestamp_converter.convert_time(e.timestamp);
+         if is_main {
+--- a/samply/src/linux_shared/process.rs
++++ b/samply/src/linux_shared/process.rs
+@@ -26,6 +26,9 @@
+     pub unwinder: U,
+     pub jitdump_manager: JitDumpManager,
+     pub lib_mapping_ops: LibMappingOpQueue,
++    hunin_last_maps: Option<u64>,
++    hunin_seen_ops: usize,
++    hunin_live_mappings: std::collections::HashMap<u64, u64>,
+     pub name: Option<String>,
+     pub threads: ProcessThreads,
+     pub pid: i32,
+@@ -66,6 +69,9 @@
+             unwinder: U::default(),
+             jitdump_manager: JitDumpManager::new(unlink_aux_files, should_emit_jit_markers),
+             lib_mapping_ops: Default::default(),
++            hunin_last_maps: None,
++            hunin_seen_ops: 0,
++            hunin_live_mappings: Default::default(),
+             name: name.clone(),
+             pid,
+             threads: ProcessThreads::new(
+@@ -86,6 +92,77 @@
+             prev_mm_shmempages_size: 0,
+             mem_counter: None,
+         }
++    }
++
++    pub fn hunin_observe_maps(
++        &mut self,
++        profile: &mut Profile,
++        clock: TimestampConverter,
++        now: u64,
++    ) {
++        use std::io::Read;
++        if !profile.hunin_enabled() {
++            return;
++        }
++        let path = format!("/proc/{}/maps", self.pid);
++        let maps = std::fs::File::open(&path).and_then(|f| {
++            let mut s = String::new();
++            f.take(8 * 1024 * 1024 + 1).read_to_string(&mut s)?;
++            Ok(s)
++        });
++        let maps = match maps {
++            Ok(m) if m.len() <= 8 * 1024 * 1024 => m,
++            _ => {
++                profile.hunin_record(serde_json::json!({"kind":"loss","basis":"proc_maps_snapshot_unavailable","process":profile.hunin_process_identity(self.profile_process),"time_ms":clock.convert_time(now)}));
++                return;
++            }
++        };
++        let ranges: Vec<(u64, u64)> = maps
++            .lines()
++            .filter_map(|line| {
++                let mut fields = line.split_whitespace();
++                let range = fields.next()?;
++                if !fields.next()?.contains('x') {
++                    return None;
++                }
++                let (a, b) = range.split_once('-')?;
++                Some((
++                    u64::from_str_radix(a, 16).ok()?,
++                    u64::from_str_radix(b, 16).ok()?,
++                ))
++            })
++            .collect();
++        for (_, op) in &self.lib_mapping_ops.hunin_ops()[self.hunin_seen_ops..] {
++            match op {
++                LibMappingOp::Add(a) => {
++                    self.hunin_live_mappings.insert(a.start_avma, a.end_avma);
++                }
++                LibMappingOp::Remove(r) => {
++                    self.hunin_live_mappings.remove(&r.start_avma);
++                }
++                LibMappingOp::Clear => self.hunin_live_mappings.clear(),
++                _ => {}
++            }
++        }
++        let removed: Vec<_> = self
++            .hunin_live_mappings
++            .iter()
++            .filter(|(start, end)| !ranges.iter().any(|(a, b)| **start < *b && *a < **end))
++            .map(|(start, _)| *start)
++            .collect();
++        for start in removed {
++            self.hunin_live_mappings.remove(&start);
++            self.lib_mapping_ops.push(
++                now,
++                LibMappingOp::Remove(crate::shared::lib_mappings::LibMappingRemove {
++                    start_avma: start,
++                }),
++            );
++            self.unwinder.remove_module(start);
++        }
++        self.hunin_seen_ops = self.lib_mapping_ops.hunin_ops().len();
++        profile.hunin_record(serde_json::json!({"kind":"snapshot","basis":"proc_maps_snapshot","process":profile.hunin_process_identity(self.profile_process),"time_ms":clock.convert_time(now),"previous_observation_ms":self.hunin_last_maps.map(|t|clock.convert_time(t)),"ranges":ranges.iter().map(|(a,b)|serde_json::json!([format!("0x{a:x}"),format!("0x{b:x}")])).collect::<Vec<_>>() }));
++        self.hunin_last_maps = Some(now);
+     }
+ 
+     /// Called when this process forks and creates a child process.
+--- a/samply/src/linux_shared/processes.rs
++++ b/samply/src/linux_shared/processes.rs
+@@ -145,6 +145,17 @@
+         }
+     }
+ 
++    pub fn hunin_observe_maps(
++        &mut self,
++        profile: &mut Profile,
++        clock: TimestampConverter,
++        now: u64,
++    ) {
++        for process in self.processes_by_pid.values_mut() {
++            process.hunin_observe_maps(profile, clock, now);
++        }
++    }
++
+     pub fn get_by_pid(&mut self, pid: i32, profile: &mut Profile) -> &mut Process<U> {
+         self.processes_by_pid.entry(pid).or_insert_with(|| {
+             let fake_start_time = Timestamp::from_millis_since_reference(0.0);
+--- a/samply/src/mac/proc_maps.rs
++++ b/samply/src/mac/proc_maps.rs
+@@ -89,6 +89,7 @@
+     memory: ForeignMemory,
+     all_image_info_addr: Option<u64>,
+     last_change_timestamp: Option<u64>,
++    pub hunin_observation_complete: bool,
+     saved_image_info: Vec<DyldInfo>,
+ }
+ 
+@@ -99,6 +100,7 @@
+             memory: ForeignMemory::new(task),
+             all_image_info_addr: None,
+             last_change_timestamp: None,
++            hunin_observation_complete: false,
+             saved_image_info: Vec::new(),
+         }
+     }
+@@ -108,6 +110,7 @@
+     }
+ 
+     pub fn check_for_changes(&mut self) -> kernel_error::Result<Vec<Modification<DyldInfo>>> {
++        self.hunin_observation_complete = false;
+         // Avoid suspending the task if we know that the image info array hasn't changed.
+         // The process-wide dyld_all_image_infos instance always stays in the same place,
+         // so we can keep its memory mapped and just check the timestamp in the mapped memory.
+@@ -118,6 +121,7 @@
+                 unsafe { self.memory.get_type_ref_at_address(info_addr) }?;
+             // infoArrayChangeTimestamp is 10.12+. TODO: check version
+             if image_infos.infoArrayChangeTimestamp == last_change_timestamp {
++                self.hunin_observation_complete = true;
+                 return Ok(Vec::new());
+             }
+         }
+@@ -157,6 +161,9 @@
+                 return Ok(Vec::new());
+             }
+ 
++            // Image mappings may have been replaced at the same virtual address.
++            // A cached mach_vm_remap still references the old memory object.
++            self.memory.clear();
+             let new_image_info = enumerate_dyld_images(
+                 &mut self.memory,
+                 info_array_addr,
+@@ -172,6 +179,7 @@
+                 });
+ 
+             self.last_change_timestamp = Some(info_array_change_timestamp);
++            self.hunin_observation_complete = true;
+             self.saved_image_info = new_image_info;
+ 
+             Ok(diff)
+--- a/samply/src/mac/task_profiler.rs
++++ b/samply/src/mac/task_profiler.rs
+@@ -102,6 +102,7 @@
+     pid: u32,
+     live_threads: HashMap<thread_act_t, ThreadProfiler>,
+     lib_info_manager: DyldInfoManager,
++    hunin_last_snapshot_mono: Option<u64>,
+     executable_name: String,
+     profile_process: ProcessHandle,
+     main_thread_handle: ThreadHandle,
+@@ -296,6 +297,7 @@
+             pid,
+             live_threads,
+             lib_info_manager,
++            hunin_last_snapshot_mono: None,
+             executable_name,
+             profile_process,
+             main_thread_handle,
+@@ -317,6 +319,7 @@
+         };
+ 
+         task_profiler.process_lib_modifications(start_time_mono, initial_lib_mods, profile);
++        task_profiler.hunin_snapshot(start_time_mono, profile);
+ 
+         Ok(task_profiler)
+     }
+@@ -371,6 +374,11 @@
+         // First, check for any newly-loaded libraries.
+         if let Ok(changes) = self.lib_info_manager.check_for_changes() {
+             self.process_lib_modifications(now_mono, changes, profile);
++            if self.lib_info_manager.hunin_observation_complete {
++                self.hunin_snapshot(now_mono, profile);
++            } else {
++                profile.hunin_record(serde_json::json!({"kind":"loss","basis":"dyld_snapshot_incomplete","process":profile.hunin_process_identity(self.profile_process),"time_ms":now}));
++            }
+         }
+ 
+         // Enumerate threads.
+@@ -458,6 +466,14 @@
+         Ok(())
+     }
+ 
++    fn hunin_snapshot(&mut self, now: u64, profile: &mut Profile) {
++        if profile.hunin_enabled() {
++            let completed = super::time::get_monotonic_timestamp();
++            profile.hunin_record(serde_json::json!({"kind":"snapshot","basis":"dyld_snapshot","process":profile.hunin_process_identity(self.profile_process),"time_ms":self.timestamp_converter.convert_time(now),"previous_observation_ms":self.hunin_last_snapshot_mono.map(|t|self.timestamp_converter.convert_time(t)),"observation_completed_ms":self.timestamp_converter.convert_time(completed)}));
++            self.hunin_last_snapshot_mono = Some(now);
++        }
++    }
++
+     fn process_lib_modifications(
+         &mut self,
+         now_mono: u64,
+--- a/samply/src/windows/etw_gecko.rs
++++ b/samply/src/windows/etw_gecko.rs
+@@ -96,6 +96,15 @@
+                 }
+ 
+                 context.handle_header(timestamp_raw, perf_freq, clock_type);
++                if events_lost != 0 {
++                    context.hunin_event(
++                        timestamp_raw,
++                        "events_lost",
++                        0,
++                        None,
++                        serde_json::json!({"count":events_lost}),
++                    );
++                }
+ 
+                 if log::log_enabled!(log::Level::Info) {
+                     for i in 0..s.property_count() {
+@@ -118,22 +127,51 @@
+                 let tid: u32 = parser.parse("TThreadId");
+                 let pid: u32 = parser.parse("ProcessId");
+                 let thread_name: Option<String> = parser.try_parse("ThreadName").ok();
+-                context.handle_thread_dcstart(timestamp_raw, tid, pid, thread_name)
++                context.handle_thread_dcstart(timestamp_raw, tid, pid, thread_name);
++                context.hunin_event(
++                    timestamp_raw,
++                    "thread_dcstart",
++                    pid,
++                    Some(tid),
++                    serde_json::json!({}),
++                );
+             }
+             "MSNT_SystemTrace/Thread/Start" => {
+                 let tid: u32 = parser.parse("TThreadId");
+                 let pid: u32 = parser.parse("ProcessId");
+                 let thread_name: Option<String> = parser.try_parse("ThreadName").ok();
+                 context.handle_thread_start(timestamp_raw, tid, pid, thread_name);
++                context.hunin_event(
++                    timestamp_raw,
++                    "thread_start",
++                    pid,
++                    Some(tid),
++                    serde_json::json!({}),
++                );
+             }
+             "MSNT_SystemTrace/Thread/End" => {
+                 let tid: u32 = parser.parse("TThreadId");
+                 let pid: u32 = parser.parse("ProcessId");
+                 context.handle_thread_end(timestamp_raw, pid, tid);
++                context.hunin_event(
++                    timestamp_raw,
++                    "thread_end",
++                    pid,
++                    Some(tid),
++                    serde_json::json!({}),
++                );
+             }
+             "MSNT_SystemTrace/Thread/DCEnd" => {
+                 let tid: u32 = parser.parse("TThreadId");
+                 context.handle_thread_dcend(timestamp_raw, tid);
++                let pid: u32 = parser.parse("ProcessId");
++                context.hunin_event(
++                    timestamp_raw,
++                    "thread_dcend",
++                    pid,
++                    Some(tid),
++                    serde_json::json!({}),
++                );
+             }
+             "MSNT_SystemTrace/Process/DCStart" => {
+                 // note: the event's e.EventHeader.process_id here is the parent (i.e. the process that spawned
+@@ -176,7 +214,9 @@
+                 context.handle_process_dcend(timestamp_raw, pid);
+             }
+             "MSNT_SystemTrace/Process/Terminate" => {
+-                // nothing, but we don't want a marker for it
++                let pid: u32 = parser.parse("ProcessId");
++                let image_base: u64 = parser.parse("ImageBase");
++                context.hunin_image_unload(timestamp_raw, pid, image_base);
+             }
+             "MSNT_SystemTrace/StackWalk/Stack" => {
+                 if !context.is_in_time_range(timestamp_raw) {
+@@ -317,10 +357,32 @@
+                     }
+                 }
+ 
++                context.hunin_event(
++                    timestamp_raw,
++                    if s.name().ends_with("DCStart") {
++                        "image_dcstart"
++                    } else {
++                        "image_load"
++                    },
++                    pid,
++                    None,
++                    serde_json::json!({"start_avma":format!("0x{image_base:x}")}),
++                );
+                 context.handle_image_load(timestamp_raw, pid, image_base, path, info);
+             }
+             "MSNT_SystemTrace/Image/UnLoad" => {
+                 // nothing, but we don't want a marker for it
++            }
++            "MSNT_SystemTrace/Image/DCEnd" => {
++                let pid: u32 = parser.parse("ProcessId");
++                let image_base: u64 = parser.parse("ImageBase");
++                context.hunin_event(
++                    timestamp_raw,
++                    "image_dcend",
++                    pid,
++                    None,
++                    serde_json::json!({"start_avma":format!("0x{image_base:x}")}),
++                );
+             }
+             "Microsoft-Windows-DxgKrnl/VSyncDPC/Info " => {
+                 if !context.is_in_time_range(timestamp_raw) {
+--- a/samply/src/windows/profile_context.rs
++++ b/samply/src/windows/profile_context.rs
+@@ -1513,6 +1513,38 @@
+         (lib_handle, known_category)
+     }
+ 
++    pub fn hunin_event(
++        &mut self,
++        timestamp_raw: u64,
++        event: &str,
++        pid: u32,
++        tid: Option<u32>,
++        data: serde_json::Value,
++    ) {
++        let process = self
++            .processes
++            .get_by_pid_and_timestamp(pid, timestamp_raw)
++            .map(|p| p.handle);
++        self.profile.hunin_record(serde_json::json!({"kind":"lifecycle","event":event,"time_ms":self.timestamp_converter.convert_time(timestamp_raw),"raw_timestamp":timestamp_raw.to_string(),"pid":pid,"tid":tid,"process":process.map(|p|self.profile.hunin_process_identity(p)),"data":data}));
++    }
++    pub fn hunin_image_unload(&mut self, timestamp_raw: u64, pid: u32, base: u64) {
++        if let Some(process) = self.processes.get_by_pid_and_timestamp(pid, timestamp_raw) {
++            process.regular_lib_mapping_ops.push(
++                timestamp_raw,
++                LibMappingOp::Remove(crate::shared::lib_mappings::LibMappingRemove {
++                    start_avma: base,
++                }),
++            );
++        }
++        self.hunin_event(
++            timestamp_raw,
++            "image_unload",
++            pid,
++            None,
++            serde_json::json!({"start_avma":format!("0x{base:x}")}),
++        );
++    }
++
+     pub fn handle_image_load(
+         &mut self,
+         timestamp_raw: u64,

@@ -1,0 +1,511 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2127,6 +2127,7 @@
+  "platform-dirs",
+  "plist",
+  "rand",
++ "ring",
+  "rangemap",
+  "runas",
+  "samply-quota-manager",
+--- a/fxprof-processed-profile/src/global_lib_table.rs
++++ b/fxprof-processed-profile/src/global_lib_table.rs
+@@ -55,6 +55,10 @@
+             self.used_libs_seen_rvas.push(BTreeSet::new());
+             index
+         })
++    }
++
++    pub fn hunin_library(&self, handle: LibraryHandle) -> &LibraryInfo {
++        &self.all_libs[handle.0]
+     }
+ 
+     pub fn get_lib(&self, index: GlobalLibIndex) -> Option<&LibraryInfo> {
+--- a/fxprof-processed-profile/src/profile.rs
++++ b/fxprof-processed-profile/src/profile.rs
+@@ -133,7 +133,12 @@
+     pub(crate) symbolicated: bool,
+     used_pids: FastHashMap<u32, u32>,
+     used_tids: FastHashMap<u32, u32>,
++    hunin_events: Vec<serde_json::Value>,
++    hunin_bytes: usize,
++    hunin_truncated: bool,
+ }
++
++static HUNIN_CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+ 
+ impl Profile {
+     /// Create a new profile.
+@@ -170,7 +175,47 @@
+             used_pids: FastHashMap::default(),
+             used_tids: FastHashMap::default(),
+             counters: Vec::new(),
++            hunin_events: Vec::new(),
++            hunin_bytes: 0,
++            hunin_truncated: false,
+         }
++    }
++
++    /// Hunin's opt-in bounded evidence sidecar; never infer exact events from snapshots.
++    pub fn enable_hunin_lifetimes() {
++        HUNIN_CAPTURE.store(true, std::sync::atomic::Ordering::Relaxed);
++    }
++    pub fn hunin_enabled(&self) -> bool {
++        HUNIN_CAPTURE.load(std::sync::atomic::Ordering::Relaxed)
++    }
++    pub fn hunin_record(&mut self, event: serde_json::Value) {
++        if !self.hunin_enabled() {
++            return;
++        }
++        let size = serde_json::to_vec(&event).map_or(0, |v| v.len());
++        if self.hunin_bytes.saturating_add(size) > 128 * 1024 * 1024 {
++            self.hunin_truncated = true;
++            return;
++        }
++        self.hunin_bytes += size;
++        self.hunin_events.push(event);
++    }
++    pub fn hunin_process_identity(&self, process: ProcessHandle) -> serde_json::Value {
++        let p = &self.processes[process.0];
++        serde_json::json!({"key":format!("p{}",process.0),"pid":p.pid(),"start_time_ms":p.start_time(),"end_time_ms":p.end_time()})
++    }
++    pub fn hunin_thread_identity(&self, thread: ThreadHandle) -> serde_json::Value {
++        let t = &self.threads[thread.0];
++        let mut result = t.hunin_identity();
++        result["key"] = serde_json::json!(format!("t{}", thread.0));
++        result["process"] = self.hunin_process_identity(t.process());
++        result
++    }
++    pub fn hunin_library(&self, library: LibraryHandle) -> serde_json::Value {
++        serde_json::to_value(self.global_libs.hunin_library(library)).unwrap()
++    }
++    pub fn hunin_lifetime_data(&self) -> serde_json::Value {
++        serde_json::json!({"schema_version":1,"epoch_start_ms":self.reference_timestamp,"events":self.hunin_events,"truncated":self.hunin_truncated})
+     }
+ 
+     /// Change the declared sampling interval.
+--- a/fxprof-processed-profile/src/thread.rs
++++ b/fxprof-processed-profile/src/thread.rs
+@@ -86,6 +86,10 @@
+ 
+     pub fn set_show_markers_in_timeline(&mut self, v: bool) {
+         self.show_markers_in_timeline = v;
++    }
++
++    pub fn hunin_identity(&self) -> serde_json::Value {
++        serde_json::json!({"tid":self.tid,"register_time_ms":self.start_time,"unregister_time_ms":self.end_time})
+     }
+ 
+     pub fn process(&self) -> ProcessHandle {
+--- a/samply/Cargo.toml
++++ b/samply/Cargo.toml
+@@ -29,6 +29,7 @@
+ memchr = "2.7.2"
+ memmap2 = "0.9.4"
+ serde_json = "1"
++ring = "=0.17.8"
+ thiserror = "2"
+ tempfile = "3.13"
+ uuid = { version = "1.11", features = ["v4"] }
+--- a/samply/src/linux_shared/process.rs
++++ b/samply/src/linux_shared/process.rs
+@@ -237,6 +237,8 @@
+         }
+ 
+         let process_sample_data = ProcessSampleData::new(
++            self.profile_process,
++            *timestamp_converter,
+             std::mem::take(&mut self.unresolved_samples),
+             std::mem::take(&mut self.lib_mapping_ops),
+             jitdump_ops,
+--- a/samply/src/mac/task_profiler.rs
++++ b/samply/src/mac/task_profiler.rs
+@@ -687,6 +687,8 @@
+             }
+         }
+         let process_sample_data = ProcessSampleData::new(
++            self.profile_process,
++            self.timestamp_converter,
+             self.unresolved_samples,
+             self.lib_mapping_ops,
+             jitdump_lib_ops,
+--- a/samply/src/main.rs
++++ b/samply/src/main.rs
+@@ -44,7 +44,7 @@
+ #[derive(Debug, Parser)]
+ #[command(
+     name = "samply",
+-    version,
++    version = "0.13.1-hunin-native1",
+     about = r#"
+ samply is a sampling CPU profiler.
+ Run a command, record a CPU profile of its execution, and open the profiler UI.
+@@ -112,6 +112,10 @@
+ 
+ #[derive(Debug, Args)]
+ struct ImportArgs {
++    /// Export bounded native mapping observations and sample load-instance links.
++    #[arg(long)]
++    lifetime_output: Option<PathBuf>,
++
+     /// Path to the profile file that should be imported.
+     file: PathBuf,
+ 
+@@ -191,6 +195,10 @@
+ #[allow(unused)]
+ #[derive(Debug, Args)]
+ struct RecordArgs {
++    /// Export bounded native mapping observations and sample load-instance links.
++    #[arg(long)]
++    lifetime_output: Option<PathBuf>,
++
+     /// Sampling rate, in Hz
+     #[arg(short, long, default_value = "1000")]
+     rate: f64,
+@@ -444,6 +452,9 @@
+         }
+ 
+         Action::Import(import_args) => {
++            if let Some(path) = &import_args.lifetime_output {
++                shared::lifetimes::configure(path.clone());
++            }
+             let input_file = match File::open(&import_args.file) {
+                 Ok(file) => file,
+                 Err(err) => {
+@@ -475,6 +486,9 @@
+             target_os = "windows"
+         ))]
+         Action::Record(record_args) => {
++            if let Some(path) = &record_args.lifetime_output {
++                shared::lifetimes::configure(path.clone());
++            }
+             let recording_props = record_args.recording_props();
+             let recording_mode = record_args.recording_mode();
+             let profile_creation_props = record_args.profile_creation_props();
+--- a/samply/src/shared/lib_mappings.rs
++++ b/samply/src/shared/lib_mappings.rs
+@@ -7,6 +7,7 @@
+ #[derive(Debug, Clone)]
+ pub struct LibMappingInfo {
+     pub lib_handle: LibraryHandle,
++    pub hunin_load_id: u64,
+     pub category: Option<CategoryPairHandle>,
+     pub js_frame: Option<JsFrame>,
+     pub art_info: Option<AndroidArtInfo>,
+@@ -26,6 +27,7 @@
+     pub fn new_lib(lib_handle: LibraryHandle) -> Self {
+         Self {
+             lib_handle,
++            hunin_load_id: 0,
+             category: None,
+             js_frame: None,
+             art_info: None,
+@@ -36,6 +38,7 @@
+     pub fn new_lib_with_category(lib_handle: LibraryHandle, category: CategoryPairHandle) -> Self {
+         Self {
+             lib_handle,
++            hunin_load_id: 0,
+             category: Some(category),
+             js_frame: None,
+             art_info: None,
+@@ -49,6 +52,7 @@
+     ) -> Self {
+         Self {
+             lib_handle,
++            hunin_load_id: 0,
+             category: Some(category),
+             js_frame,
+             art_info: None,
+@@ -58,6 +62,7 @@
+     pub fn new_libart_mapping(lib_handle: LibraryHandle) -> Self {
+         Self {
+             lib_handle,
++            hunin_load_id: 0,
+             category: None,
+             js_frame: None,
+             art_info: Some(AndroidArtInfo::LibArt),
+@@ -70,6 +75,7 @@
+     ) -> Self {
+         Self {
+             lib_handle,
++            hunin_load_id: 0,
+             category,
+             js_frame: None,
+             art_info: Some(AndroidArtInfo::JavaFrame),
+@@ -135,15 +141,24 @@
+ pub struct LibMappingOpQueue(Vec<(u64, LibMappingOp)>);
+ 
+ impl LibMappingOpQueue {
+-    pub fn push(&mut self, timestamp: u64, op: LibMappingOp) {
++    pub fn push(&mut self, timestamp: u64, mut op: LibMappingOp) {
++        if let LibMappingOp::Add(add) = &mut op {
++            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++            add.info.hunin_load_id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        }
+         self.0.push((timestamp, op));
++    }
++
++    pub fn hunin_ops(&self) -> &[(u64, LibMappingOp)] {
++        &self.0
+     }
+ 
+     pub fn is_empty(&self) -> bool {
+         self.0.is_empty()
+     }
+ 
+-    pub fn into_iter(self) -> LibMappingOpQueueIter {
++    pub fn into_iter(mut self) -> LibMappingOpQueueIter {
++        self.0.sort_by_key(|(time, _)| *time);
+         LibMappingOpQueueIter(self.0.into_iter().peekable())
+     }
+ }
+--- /dev/null
++++ b/samply/src/shared/lifetimes.rs
+@@ -0,0 +1,107 @@
++//! Hunin evidence export, pinned to upstream samply 0.13.1. No target injection.
++use super::{
++    lib_mappings::{LibMappingOp, LibMappingOpQueue, LibMappingsHierarchy},
++    timestamp_converter::TimestampConverter,
++    types::{StackFrame, StackMode},
++};
++use fxprof_processed_profile::{ProcessHandle, Profile, ThreadHandle, Timestamp};
++use serde_json::json;
++use std::{
++    fs::File,
++    io::{Read, Write},
++    path::Path,
++};
++
++static OUTPUT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
++pub fn configure(path: std::path::PathBuf) {
++    let _ = OUTPUT.set(path);
++    Profile::enable_hunin_lifetimes();
++}
++
++pub fn mappings(
++    profile: &mut Profile,
++    process: ProcessHandle,
++    clock: TimestampConverter,
++    queue: &LibMappingOpQueue,
++) {
++    if !profile.hunin_enabled() {
++        return;
++    }
++    for (time, op) in queue.hunin_ops() {
++        let mut event = json!({"kind":"mapping","process":profile.hunin_process_identity(process),"time_ms":clock.convert_time(*time),"raw_timestamp":time.to_string(),"clock_reference_raw":clock.reference_raw.to_string(),"raw_to_ns_factor":clock.raw_to_ns_factor});
++        match op {
++            LibMappingOp::Add(add) => {
++                event["op"] = json!("add");
++                event["load_id"] = json!(add.info.hunin_load_id.to_string());
++                event["start_avma"] = json!(format!("0x{:x}", add.start_avma));
++                event["end_avma"] = json!(format!("0x{:x}", add.end_avma));
++                event["relative_address_at_start"] = json!(add.relative_address_at_start);
++                event["library"] = profile.hunin_library(add.info.lib_handle);
++            }
++            LibMappingOp::Remove(remove) => {
++                event["op"] = json!("remove");
++                event["start_avma"] = json!(format!("0x{:x}", remove.start_avma));
++            }
++            LibMappingOp::Move(m) => {
++                event["op"] = json!("move");
++                event["old_start_avma"] = json!(format!("0x{:x}", m.old_start_avma));
++                event["start_avma"] = json!(format!("0x{:x}", m.new_start_avma));
++                event["end_avma"] = json!(format!("0x{:x}", m.new_end_avma));
++            }
++            LibMappingOp::Clear => {
++                event["op"] = json!("clear");
++            }
++        }
++        profile.hunin_record(event);
++    }
++}
++
++pub fn sample(
++    profile: &mut Profile,
++    thread: ThreadHandle,
++    timestamp: Timestamp,
++    mapping_time: Timestamp,
++    frames: &[StackFrame],
++    mappings: &LibMappingsHierarchy,
++) {
++    if !profile.hunin_enabled() {
++        return;
++    }
++    let frames: Vec<_> = frames.iter().filter_map(|frame| {
++        let (address, lookup, mode) = match frame { StackFrame::InstructionPointer(a,m) | StackFrame::AdjustedReturnAddress(a,m) => (*a,*a,*m), StackFrame::ReturnAddress(a,m) => (*a,a.saturating_sub(1),*m), StackFrame::TruncatedStackMarker => return None };
++        let info = if mode == StackMode::User { mappings.convert_address(lookup) } else { None };
++        Some(json!({"address":format!("0x{address:x}"),"lookup_address":format!("0x{lookup:x}"),"mode":if mode==StackMode::User {"user"}else{"kernel"},"load_id":info.and_then(|(_,i)|(i.hunin_load_id>0).then(||i.hunin_load_id.to_string())),"relative_address":info.map(|(a,_)|a)}))
++    }).collect();
++    profile.hunin_record(json!({"kind":"sample","thread":profile.hunin_thread_identity(thread),"time_ms":timestamp,"mapping_time_ms":mapping_time,"frames":frames}));
++}
++
++fn sha256(path: &Path) -> std::io::Result<String> {
++    let mut input = File::open(path)?;
++    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
++    let mut buffer = [0; 65536];
++    loop {
++        let n = input.read(&mut buffer)?;
++        if n == 0 {
++            break;
++        }
++        hash.update(&buffer[..n]);
++    }
++    Ok(hash
++        .finish()
++        .as_ref()
++        .iter()
++        .map(|b| format!("{b:02x}"))
++        .collect())
++}
++
++pub fn save(profile: &Profile, path: &Path) -> std::io::Result<()> {
++    let Some(output) = OUTPUT.get() else {
++        return Ok(());
++    };
++    let mut data = profile.hunin_lifetime_data();
++    data["raw_profile_sha256"] = json!(sha256(path)?);
++    data["collector"] = json!({"upstream_commit":"da75c28f367454c621e690eeb4e44ec2ebb29a78","revision":"hunin-native1","patch_sha256":option_env!("HUNIN_NATIVE_PATCH_SHA256"),"binary_sha256":sha256(&std::env::current_exe()?)?,"os":std::env::consts::OS});
++    let mut output = std::io::BufWriter::new(File::create(output)?);
++    serde_json::to_writer(&mut output, &data)?;
++    output.flush()
++}
+--- a/samply/src/shared/mod.rs
++++ b/samply/src/shared/mod.rs
+@@ -6,6 +6,7 @@
+ pub mod jit_function_recycler;
+ pub mod jitdump_manager;
+ pub mod lib_mappings;
++pub mod lifetimes;
+ pub mod marker_file;
+ pub mod per_cpu;
+ pub mod perf_map;
+--- a/samply/src/shared/process_sample_data.rs
++++ b/samply/src/shared/process_sample_data.rs
+@@ -30,6 +30,8 @@
+ 
+ #[derive(Debug, Clone)]
+ pub struct ProcessSampleData {
++    process: fxprof_processed_profile::ProcessHandle,
++    clock: super::timestamp_converter::TimestampConverter,
+     unresolved_samples: UnresolvedSamples,
+     regular_lib_mapping_op_queue: LibMappingOpQueue,
+     jitdump_lib_mapping_op_queues: Vec<LibMappingOpQueue>,
+@@ -39,6 +41,8 @@
+ 
+ impl ProcessSampleData {
+     pub fn new(
++        process: fxprof_processed_profile::ProcessHandle,
++        clock: super::timestamp_converter::TimestampConverter,
+         unresolved_samples: UnresolvedSamples,
+         regular_lib_mapping_op_queue: LibMappingOpQueue,
+         jitdump_lib_mapping_op_queues: Vec<LibMappingOpQueue>,
+@@ -46,6 +50,8 @@
+         marker_spans: Vec<MarkerSpanOnThread>,
+     ) -> Self {
+         Self {
++            process,
++            clock,
+             unresolved_samples,
+             regular_lib_mapping_op_queue,
+             jitdump_lib_mapping_op_queues,
+@@ -55,7 +61,7 @@
+     }
+ 
+     pub fn is_empty(&self) -> bool {
+-        self.unresolved_samples.is_empty()
++        self.unresolved_samples.is_empty() && self.regular_lib_mapping_op_queue.is_empty()
+     }
+ 
+     #[allow(clippy::too_many_arguments)]
+@@ -68,12 +74,15 @@
+         stacks: &UnresolvedStacks,
+     ) {
+         let ProcessSampleData {
++            process,
++            clock,
+             unresolved_samples,
+             regular_lib_mapping_op_queue,
+             jitdump_lib_mapping_op_queues,
+             perf_map_mappings,
+             marker_spans,
+         } = self;
++        super::lifetimes::mappings(profile, process, clock, &regular_lib_mapping_op_queue);
+         let mut lib_mappings_hierarchy = LibMappingsHierarchy::new(regular_lib_mapping_op_queue);
+         for jitdump_lib_mapping_ops in jitdump_lib_mapping_op_queues {
+             lib_mappings_hierarchy.add_jitdump_lib_mappings_ops(jitdump_lib_mapping_ops);
+@@ -96,6 +105,16 @@
+ 
+             stack_frame_scratch_buf.clear();
+             stacks.convert_back(stack, stack_frame_scratch_buf);
++            if matches!(&sample_or_marker, SampleOrMarker::Sample(_)) {
++                super::lifetimes::sample(
++                    profile,
++                    thread_handle,
++                    timestamp,
++                    clock.convert_time(sample.timestamp_mono),
++                    &stack_frame_scratch_buf,
++                    &lib_mappings_hierarchy,
++                );
++            }
+             let frames = stack_converter.convert_stack(
+                 stack_frame_scratch_buf,
+                 &lib_mappings_hierarchy,
+--- a/samply/src/shared/save_profile.rs
++++ b/samply/src/shared/save_profile.rs
+@@ -1,6 +1,6 @@
+ use std::ffi::OsStr;
+ use std::fs::File;
+-use std::io::BufWriter;
++use std::io::{BufWriter, Write};
+ use std::path::Path;
+ 
+ use flate2::{Compression, GzBuilder};
+@@ -25,10 +25,16 @@
+         let name_without_gz = output_path.file_stem().unwrap().to_string_lossy();
+         let builder = GzBuilder::new().filename(name_without_gz.as_bytes());
+         let gz = builder.write(writer, Compression::new(GZIP_COMPRESSION_LEVEL));
+-        let gz = BufWriter::new(gz);
+-        serde_json::to_writer(gz, &profile)?;
++        let mut gz = BufWriter::new(gz);
++        serde_json::to_writer(&mut gz, &profile)?;
++        gz.flush()?;
++        let mut writer = gz.into_inner()?.finish()?;
++        writer.flush()?;
+     } else {
+-        serde_json::to_writer(writer, &profile)?;
++        let mut writer = writer;
++        serde_json::to_writer(&mut writer, &profile)?;
++        writer.flush()?;
+     }
++    super::lifetimes::save(profile, output_path)?;
+     Ok(())
+ }
+--- a/samply/src/windows/profile_context.rs
++++ b/samply/src/windows/profile_context.rs
+@@ -206,7 +206,7 @@
+             .insert((pid, start_timestamp_raw), index);
+     }
+ 
+-    pub fn finish(self) -> Vec<ProcessSampleData> {
++    pub fn finish(self, clock: TimestampConverter) -> Vec<ProcessSampleData> {
+         self.processes
+             .into_iter()
+             .map(|process| {
+@@ -217,6 +217,8 @@
+                 };
+ 
+                 ProcessSampleData::new(
++                    process.handle,
++                    clock,
+                     process.unresolved_samples,
+                     process.regular_lib_mapping_ops,
+                     jitdump_lib_mapping_op_queues,
+@@ -2053,7 +2055,7 @@
+             .finish_and_set_symbol_table(&mut self.profile);
+         self.coreclr_jit_lib
+             .finish_and_set_symbol_table(&mut self.profile);
+-        let process_sample_datas = self.processes.finish();
++        let process_sample_datas = self.processes.finish(self.timestamp_converter);
+ 
+         let user_category = self.categories.get(KnownCategory::User, &mut self.profile);
+         let kernel_category = self
