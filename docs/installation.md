@@ -53,13 +53,13 @@ On Windows, run `py install.py`. The default is `%LOCALAPPDATA%\hunin\<version>-
 
 Always inspect capabilities before recording on a new host. Missing permissions and collectors must remain visible rather than producing an apparently successful empty CPU profile.
 
-The bundle also includes `fetch_samply.py`, an optional helper for the unmodified official samply 0.13.1 release. This upstream binary lacks Hunin's lifetime sidecar extension; use the bundled patched profiler for that collection contract. The helper verifies the release archive against a checked-in SHA256, retains its license files, and installs into the explicit directory you provide:
+The bundle also includes `fetch_samply.py`, a standalone helper for obtaining the unmodified official samply 0.13.1 release for upstream comparisons. This upstream binary lacks Hunin's required lifetime sidecar extension and cannot serve as Hunin's native collector. The helper verifies the release archive against a checked-in SHA256, retains its license files, and installs into the explicit directory you provide:
 
 ```sh
 python3 fetch_samply.py --platform macos-arm64 --destination /your/user-owned/tools/samply
 ```
 
-Set `HUNIN_SAMPLY` to the printed executable path, or put its directory on PATH. A matching verified installation is reused; another existing directory is preserved. The helper does not change profiler permissions. Its source and pinned releases are available in [samply's official repository](https://github.com/mstange/samply/releases/tag/samply-v0.13.1).
+For Hunin recording, use the bundled patched profiler. `HUNIN_SAMPLY` can select another compatible Hunin-built profiler with its adjacent provenance receipt; pointing it at the helper's unmodified binary is rejected. The helper reuses a matching verified upstream installation and preserves another existing directory. It does not change profiler permissions. Its source and pinned releases are available in [samply's official repository](https://github.com/mstange/samply/releases/tag/samply-v0.13.1).
 
 ## UI, agents, and data
 
