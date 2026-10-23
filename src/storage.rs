@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -359,13 +360,16 @@ impl Store {
     }
 
     pub fn add_artifact(&self, run_id: &str, source: &Path, format: &str) -> Result<Artifact> {
-        let bytes =
-            fs::read(source).with_context(|| format!("read artifact {}", source.display()))?;
         let name = source
             .file_name()
             .context("artifact filename missing")?
             .to_string_lossy();
-        self.add_artifact_bytes(run_id, &name, format, &bytes)
+        validate_artifact_name(&name)?;
+        self.run(run_id)?;
+        let mut input = fs::File::open(source)
+            .with_context(|| format!("read artifact {}", source.display()))?;
+        let pending = self.stage_artifact(&mut input, format)?;
+        self.publish_artifact(run_id, &name, format, pending)
     }
 
     pub fn add_artifact_bytes(
@@ -375,12 +379,64 @@ impl Store {
         format: &str,
         bytes: &[u8],
     ) -> Result<Artifact> {
-        anyhow::ensure!(
-            !name.is_empty() && !matches!(name, "." | "..") && !name.contains(['/', '\\', '\0']),
-            "artifact name must be a filename"
-        );
+        validate_artifact_name(name)?;
         self.run(run_id)?;
-        let sha256 = format!("{:x}", Sha256::digest(bytes));
+        let pending = self.stage_artifact(&mut std::io::Cursor::new(bytes), format)?;
+        self.publish_artifact(run_id, name, format, pending)
+    }
+
+    fn stage_artifact(&self, input: &mut impl Read, format: &str) -> Result<PendingArtifact> {
+        let path = self
+            .root
+            .join("artifacts")
+            .join(format!(".pending-{}", uuid::Uuid::new_v4()));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let mut pending = PendingArtifact {
+            path,
+            file: Some(file),
+            sha256: String::new(),
+            size: 0,
+        };
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = input.read(&mut buffer).context("read artifact bytes")?;
+            if count == 0 {
+                break;
+            }
+            pending.size = pending
+                .size
+                .checked_add(count as u64)
+                .context("artifact size overflow")?;
+            anyhow::ensure!(
+                format != "resolved-source" || pending.size <= 2 * 1024 * 1024,
+                "resolved source exceeds the 2 MiB file limit"
+            );
+            hash.update(&buffer[..count]);
+            pending
+                .file
+                .as_mut()
+                .expect("staged artifact is open")
+                .write_all(&buffer[..count])
+                .context("write artifact bytes")?;
+        }
+        pending.file.as_ref().unwrap().sync_all()?;
+        // Close before rename or cleanup, including on Windows.
+        pending.file.take();
+        pending.sha256 = format!("{:x}", hash.finalize());
+        Ok(pending)
+    }
+
+    fn publish_artifact(
+        &self,
+        run_id: &str,
+        name: &str,
+        format: &str,
+        pending: PendingArtifact,
+    ) -> Result<Artifact> {
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = tx.query_row(
@@ -390,38 +446,39 @@ impl Store {
         )?;
         anyhow::ensure!(exists, "run was removed before artifact publication");
         if format == "resolved-source" {
-            anyhow::ensure!(
-                bytes.len() <= 2 * 1024 * 1024,
-                "resolved source exceeds the 2 MiB file limit"
-            );
             let (retained, duplicate): (u64, bool) = tx.query_row(
                 "SELECT COALESCE(SUM(size),0),COALESCE(MAX(sha256=?2),0) FROM (SELECT sha256,MAX(CAST(json_extract(metadata,'$.size') AS INTEGER)) AS size FROM artifacts WHERE run_id=?1 AND json_extract(metadata,'$.format')='resolved-source' GROUP BY sha256)",
-                params![run_id, sha256],
+                params![run_id, pending.sha256],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
             anyhow::ensure!(
-                duplicate || retained.saturating_add(bytes.len() as u64) <= 32 * 1024 * 1024,
+                duplicate || retained.saturating_add(pending.size) <= 32 * 1024 * 1024,
                 "resolved source snapshots exceed the 32 MiB recording limit"
             );
         }
-        let dest = self.root.join("artifacts").join(&sha256);
-        // An atomic rename publishes complete bytes; identical concurrent writers agree.
+        let dest = self.root.join("artifacts").join(&pending.sha256);
+        // Stage large inputs before taking the run/GC write lock. Publish only
+        // complete bytes while that lock excludes deletion and other writers.
         if !dest.exists() {
-            let temp = dest.with_extension(uuid::Uuid::new_v4().to_string());
-            fs::write(&temp, bytes)?;
-            fs::rename(&temp, &dest)?;
-        } else if fs::read(&dest)? != bytes {
+            fs::rename(&pending.path, &dest)?;
+            // The file is already synced. Also persist the directory entry on
+            // Unix filesystems that support syncing directories.
+            #[cfg(unix)]
+            if let Ok(directory) = fs::File::open(self.root.join("artifacts")) {
+                let _ = directory.sync_all();
+            }
+        } else if !same_artifact_contents(&pending.path, &dest)? {
             bail!("artifact identity mismatch");
         }
         let reference_id = format!(
             "{:x}",
-            Sha256::digest(serde_json::to_vec(&(&sha256, &name, format))?)
+            Sha256::digest(serde_json::to_vec(&(&pending.sha256, &name, format))?)
         );
         let artifact = Artifact {
             id: reference_id,
             name: name.to_owned(),
-            size: bytes.len() as u64,
-            sha256,
+            size: pending.size,
+            sha256: pending.sha256.clone(),
             format: format.into(),
         };
         tx.execute(
@@ -501,6 +558,50 @@ impl Store {
         }
         Ok(())
     }
+}
+
+struct PendingArtifact {
+    path: PathBuf,
+    file: Option<fs::File>,
+    sha256: String,
+    size: u64,
+}
+
+impl Drop for PendingArtifact {
+    fn drop(&mut self) {
+        self.file.take();
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn validate_artifact_name(name: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.is_empty() && !matches!(name, "." | "..") && !name.contains(['/', '\\', '\0']),
+        "artifact name must be a filename"
+    );
+    Ok(())
+}
+
+fn same_artifact_contents(first: &Path, second: &Path) -> Result<bool> {
+    let mut first = fs::File::open(first)?;
+    let mut second = fs::File::open(second)?;
+    let size = first.metadata()?.len();
+    if size != second.metadata()?.len() {
+        return Ok(false);
+    }
+    let mut remaining = size;
+    let mut a = [0u8; 64 * 1024];
+    let mut b = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let count = remaining.min(a.len() as u64) as usize;
+        first.read_exact(&mut a[..count])?;
+        second.read_exact(&mut b[..count])?;
+        if a[..count] != b[..count] {
+            return Ok(false);
+        }
+        remaining -= count as u64;
+    }
+    Ok(true)
 }
 
 fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Value) -> Result<()> {

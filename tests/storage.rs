@@ -1,5 +1,7 @@
 use hunin::{model::runs::Run, storage::Store};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
 
 fn run() -> Run {
     Run {
@@ -64,6 +66,173 @@ fn shared_raw_artifacts_survive_removing_one_run() {
     assert_eq!(
         std::fs::read(store.artifact_path("run-2", &b.id).unwrap()).unwrap(),
         b"immutable input"
+    );
+}
+
+#[test]
+fn large_artifacts_stream_to_immutable_shared_bytes_and_preserve_reference_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let source = root.path().join("capture.etl");
+    let chunk: Vec<u8> = (0..65536).map(|n| (n % 251) as u8).collect();
+    let mut output = std::fs::File::create(&source).unwrap();
+    let mut expected = Sha256::new();
+    for _ in 0..256 {
+        output.write_all(&chunk).unwrap();
+        expected.update(&chunk);
+    }
+    drop(output);
+    let artifact = store.add_artifact("run-1", &source, "etl").unwrap();
+    assert_eq!(artifact.size, 16 * 1024 * 1024);
+    assert_eq!(artifact.sha256, format!("{:x}", expected.finalize()));
+    let path = store.artifact_path("run-1", &artifact.id).unwrap();
+    let mut retained = std::fs::File::open(&path).unwrap();
+    let mut actual = vec![0u8; chunk.len()];
+    for _ in 0..256 {
+        retained.read_exact(&mut actual).unwrap();
+        assert_eq!(actual, chunk);
+    }
+    assert_eq!(retained.read(&mut actual).unwrap(), 0);
+
+    let small = root.path().join("control.raw");
+    std::fs::write(&small, &chunk).unwrap();
+    let file_reference = store.add_artifact("run-1", &small, "raw").unwrap();
+    let byte_reference = store
+        .add_artifact_bytes("run-1", "control.raw", "raw", &chunk)
+        .unwrap();
+    assert_eq!(file_reference.id, byte_reference.id);
+    assert_eq!(file_reference.sha256, byte_reference.sha256);
+    assert_eq!(store.artifacts("run-1").unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn artifact_failures_remove_staging_files_and_preserve_existing_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let source = root.path().join("source.ts");
+    std::fs::File::create(&source)
+        .unwrap()
+        .set_len(2 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(
+        store
+            .add_artifact("run-1", &source, "resolved-source")
+            .is_err()
+    );
+    assert!(
+        store
+            .add_artifact_bytes(
+                "run-1",
+                "source.ts",
+                "resolved-source",
+                &vec![0; 2 * 1024 * 1024 + 1]
+            )
+            .is_err()
+    );
+    assert!(store.add_artifact("run-1", root.path(), "raw").is_err());
+    assert_eq!(
+        std::fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(store.artifacts("run-1").unwrap().is_empty());
+
+    std::fs::write(&source, b"immutable").unwrap();
+    let artifact = store.add_artifact("run-1", &source, "raw").unwrap();
+    let path = store.artifact_path("run-1", &artifact.id).unwrap();
+    std::fs::write(&path, b"corrupted").unwrap();
+    let mut second = run();
+    second.id = "run-2".into();
+    store.save_run(&second).unwrap();
+    assert!(
+        store
+            .add_artifact("run-2", &source, "raw")
+            .unwrap_err()
+            .to_string()
+            .contains("identity mismatch")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"corrupted");
+    assert!(store.artifacts("run-2").unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn artifact_publication_and_run_collection_share_the_same_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let mut second = run();
+    second.id = "run-2".into();
+    store.save_run(&second).unwrap();
+    let source = root.path().join("capture.raw");
+    std::fs::write(&source, vec![42; 256 * 1024]).unwrap();
+    store.add_artifact("run-1", &source, "raw").unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let other = store.clone();
+    let ready = barrier.clone();
+    let remove = std::thread::spawn(move || {
+        ready.wait();
+        other.remove_run("run-1").unwrap();
+    });
+    barrier.wait();
+    let artifact = store.add_artifact("run-2", &source, "raw").unwrap();
+    remove.join().unwrap();
+    assert_eq!(
+        std::fs::read(store.artifact_path("run-2", &artifact.id).unwrap()).unwrap(),
+        vec![42; 256 * 1024]
+    );
+    assert_eq!(
+        std::fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn removing_the_owner_during_a_stream_cleans_unpublished_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let source = root.path().join("stream.raw");
+    let path = std::ffi::CString::new(source.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let other = store.clone();
+    let import = std::thread::spawn(move || other.add_artifact("run-1", &source, "raw"));
+    // Opening the writer proves the importer passed its initial ownership
+    // check and opened the input. Keep EOF blocked until its owner is removed.
+    let mut writer = std::fs::File::create(root.path().join("stream.raw")).unwrap();
+    writer.write_all(b"partial capture").unwrap();
+    store.remove_run("run-1").unwrap();
+    drop(writer);
+    assert!(
+        import
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("removed before artifact publication")
+    );
+    assert_eq!(
+        std::fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .count(),
+        0
     );
 }
 
