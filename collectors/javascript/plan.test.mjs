@@ -38,3 +38,46 @@ for (const [runtime, executable] of [['node', process.execPath], ['bun', process
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 }
+
+if (process.env.HUNIN_TEST_DENO) {
+  test('Deno calibrates its CPU clock with only scoped Inspector access', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hunin-deno-clock-'));
+    try {
+      const main = join(directory, 'main.mjs');
+      writeFileSync(main, `console.log((await Deno.permissions.query({name:'sys',kind:'hostname'})).state); const end=Date.now()+100; while(Date.now()<end) Math.sqrt(42);`);
+      const capture = plan({ command: [process.env.HUNIN_TEST_DENO, 'run', main], cwd: directory, artifact_dir: directory, run_id: 'calibrated-clock', runtime: 'deno' });
+      const before = Date.now() * 1000;
+      const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+      const after = Date.now() * 1000;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), 'prompt');
+      assert.equal(result.stderr, '');
+      const names = readdirSync(directory);
+      const clockName = names.find(name => name.startsWith('clock-') && name.endsWith('-0.meta.json'));
+      assert.ok(clockName, 'missing per-process epoch calibration');
+      const clock = JSON.parse(readFileSync(join(directory, clockName), 'utf8'));
+      const profileName = names.find(name => name.endsWith(`.${clock.pid}.cpuprofile`));
+      assert.ok(profileName, 'calibration has no matching process profile');
+      const profile = JSON.parse(readFileSync(join(directory, profileName), 'utf8'));
+      assert.ok(profile.startTime + clock.profile_time_origin_us >= before - clock.uncertainty_us);
+      assert.ok(profile.endTime + clock.profile_time_origin_us <= after + clock.uncertainty_us);
+      assert.ok(clock.uncertainty_us >= 0 && Number.isSafeInteger(clock.uncertainty_us));
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+  for (const deny of ['--deny-sys', '--deny-sys=inspector']) {
+    test(`Deno preserves explicit ${deny} and captures with an unmapped clock`, () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hunin-deno-denied-clock-'));
+      try {
+        const main = join(directory, 'main.mjs');
+        writeFileSync(main, `console.log((await Deno.permissions.query({name:'sys',kind:'inspector'})).state);`);
+        const capture = plan({ command: [process.env.HUNIN_TEST_DENO, 'run', deny, main], cwd: directory, artifact_dir: directory, run_id: 'denied-clock', runtime: 'deno' });
+        const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), 'denied');
+        assert.match(result.stderr, /CPU clock calibration failed/);
+        assert.ok(readdirSync(directory).some(name => name.endsWith('.cpuprofile')));
+        assert.ok(!readdirSync(directory).some(name => name.endsWith('.meta.json')));
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+  }
+}

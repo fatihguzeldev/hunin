@@ -35,9 +35,11 @@ export function plan(request) {
   } else {
     const preload = fileURLToPath(new URL('./clock-preload.mjs', import.meta.url));
     // Keep the target's explicit permissions. Hunin only adds access needed by its preload.
+    const inspectorDenied = command.some(value => value === '--deny-sys' || value.startsWith('--deny-sys=') && value.slice('--deny-sys='.length).split(',').includes('inspector'));
     const index = ['run', 'eval', 'test', 'bench'].includes(command[1]) ? 2 : 1;
     launched = [...command.slice(0, index), '--cpu-prof', `--cpu-prof-dir=${directory}`, '--preload', preload,
-      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, `--allow-write=${directory}`, ...command.slice(index)];
+      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-write=${directory}`, ...command.slice(index)];
+    if (inspectorDenied) diagnostics.push('The target denies Inspector access; CPU samples retain an unmapped runtime clock when epoch calibration is unavailable.');
     diagnostics.push('Deno TypeScript CPU profile positions refer to generated JavaScript when the runtime omits source maps. Worker profiles are emitted by Deno itself. Child Deno processes need their own collection plan.');
   }
   return { command: launched, env, profiles: [{ path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' }], diagnostics, runtime_version };
