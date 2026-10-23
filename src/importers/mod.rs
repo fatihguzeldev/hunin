@@ -3,6 +3,7 @@ mod go_trace;
 mod graal;
 mod javascript_sources;
 mod native_identity;
+mod native_lifetimes;
 mod pprof;
 mod python_cpu;
 mod v8;
@@ -71,7 +72,7 @@ fn import_inner(
     let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let sidecars = sidecars(path, format);
     let mut digest = Sha256::new();
-    digest.update(b"hunin-import-v4\0");
+    digest.update(b"hunin-import-v5\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);
@@ -109,11 +110,32 @@ fn import_inner(
     } else {
         bytes
     };
-    let native_raw = if matches!(format, "firefox" | "firefox-profile" | "samply") {
+    let mut native_raw = if matches!(format, "firefox" | "firefox-profile" | "samply") {
         Some(serde_json::from_slice::<Value>(&raw)?)
     } else {
         None
     };
+    let lifetimes = if let Some(raw) = &native_raw {
+        let sidecar = path.with_extension("lifetimes.json");
+        native_lifetimes::Timeline::load(
+            &sidecar,
+            &raw_sha256,
+            sidecar_sha256.get(&sidecar).map(String::as_str),
+            raw,
+        )?
+    } else {
+        None
+    };
+    if let (Some(timeline), Some(raw)) = (&lifetimes, &mut native_raw) {
+        let libraries = raw["libs"]
+            .as_array_mut()
+            .context("native library dictionary missing")?;
+        for library in timeline.libraries() {
+            if !libraries.contains(library) {
+                libraries.push(library.clone());
+            }
+        }
+    }
     let images = native_raw
         .as_ref()
         .map(|raw| match native_context {
@@ -132,12 +154,13 @@ fn import_inner(
         None
     };
     let (records, diagnostics) = match format {
-        "firefox" | "firefox-profile" | "samply" => firefox::decode(
+        "firefox" | "firefox-profile" | "samply" => firefox::decode_with_lifetimes(
             path,
             native_raw.as_ref().unwrap(),
             run_id,
             &key,
             images.as_ref().unwrap(),
+            lifetimes.as_ref(),
         )?,
         "v8" | "v8-cpuprofile" | "cpuprofile" => v8::decode(
             path,
@@ -195,7 +218,10 @@ fn import_inner(
 
 fn sidecars(path: &Path, format: &str) -> Vec<PathBuf> {
     let candidates = match format {
-        "firefox" | "firefox-profile" | "samply" => vec![path.with_extension("syms.json")],
+        "firefox" | "firefox-profile" | "samply" => vec![
+            path.with_extension("syms.json"),
+            path.with_extension("lifetimes.json"),
+        ],
         "v8" | "v8-cpuprofile" | "cpuprofile" => v8::metadata_paths(path)
             .into_iter()
             .chain(v8::script_paths(path))

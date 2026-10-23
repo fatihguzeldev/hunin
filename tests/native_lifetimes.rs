@@ -1,0 +1,179 @@
+use hunin::{importers, model::runs::Run, storage::Store};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{fs, io::Read, path::PathBuf};
+
+fn fixture() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("cpu.json");
+    fs::write(
+        &path,
+        include_bytes!("../src/importers/fixtures/native-lifetimes/cpu.json"),
+    )
+    .unwrap();
+    fs::write(
+        path.with_extension("syms.json"),
+        include_bytes!("../src/importers/fixtures/native-lifetimes/cpu.syms.json"),
+    )
+    .unwrap();
+    let mut sidecar = Vec::new();
+    flate2::read::GzDecoder::new(
+        include_bytes!("../src/importers/fixtures/native-lifetimes/cpu.lifetimes.json.gz")
+            .as_slice(),
+    )
+    .read_to_end(&mut sidecar)
+    .unwrap();
+    fs::write(path.with_extension("lifetimes.json"), sidecar).unwrap();
+    (directory, path)
+}
+
+#[test]
+fn actual_same_address_a_b_a_maps_samples_to_distinct_instances_and_store() {
+    let (_directory, path) = fixture();
+    let profile = importers::import(&path, "samply", "native-lifetime").unwrap();
+    let phases: Vec<_> = profile
+        .records
+        .iter()
+        .filter(|r| {
+            r["name"] == "module.observed_lifetime"
+                && r["attributes"]["module"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("phase_"))
+        })
+        .collect();
+    assert_eq!(phases.len(), 3);
+    assert_eq!(
+        phases
+            .iter()
+            .map(|r| &r["attributes"]["start_avma"])
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        1
+    );
+    assert_eq!(
+        phases
+            .iter()
+            .map(|r| &r["id"])
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3
+    );
+    for phase in &phases {
+        assert_eq!(phase["kind"], "span");
+        assert_eq!(
+            phase["attributes"]["boundary_basis"]["start"],
+            "dyld_snapshot"
+        );
+        assert_eq!(
+            phase["attributes"]["boundary_basis"]["end"],
+            "dyld_snapshot"
+        );
+        assert_eq!(phase["attributes"]["exact_event_timestamps"], false);
+        assert_eq!(phase["attributes"]["evidence_complete"], true);
+        assert!(phase["attributes"]["end_window_ms"][0].is_number());
+        assert!(
+            profile
+                .records
+                .iter()
+                .any(|r| r["relation"] == "sampled_in_code_instance" && r["to"] == phase["id"])
+        );
+    }
+    assert_ne!(
+        phases[0]["attributes"]["library"]["codeId"],
+        phases[1]["attributes"]["library"]["codeId"]
+    );
+    let first_end =
+        phases[0]["timestamp_us"].as_u64().unwrap() + phases[0]["duration_us"].as_u64().unwrap();
+    let second_start = phases[1]["timestamp_us"].as_u64().unwrap();
+    assert!(
+        second_start - first_end > 40_000,
+        "actual fixture preserves the deliberately unloaded gap"
+    );
+    let midpoint = first_end + (second_start - first_end) / 2;
+    assert!(phases.iter().all(|r| {
+        let start = r["timestamp_us"].as_u64().unwrap();
+        let end = start + r["duration_us"].as_u64().unwrap();
+        midpoint < start || midpoint >= end
+    }));
+    let store_root = tempfile::tempdir().unwrap();
+    let store = Store::open(store_root.path()).unwrap();
+    store
+        .save_run(&Run {
+            id: "native-lifetime".into(),
+            name: "A/B/A".into(),
+            status: "completed".into(),
+            command: vec!["fixture".into()],
+            cwd: ".".into(),
+            runtime: "native".into(),
+            started_at_us: 1,
+            finished_at_us: Some(2),
+            exit_code: Some(0),
+            diagnostics: vec![],
+            source: json!({}),
+            correctness: json!({}),
+        })
+        .unwrap();
+    store
+        .accept(
+            "native-lifetime",
+            "actual-native-lifetime",
+            &profile.records,
+        )
+        .unwrap();
+    assert_eq!(
+        profile.records,
+        importers::import(&path, "samply", "native-lifetime")
+            .unwrap()
+            .records
+    );
+}
+
+#[test]
+fn unrelated_or_tampered_sample_mapping_cannot_be_accepted() {
+    let (_directory, path) = fixture();
+    let sidecar = path.with_extension("lifetimes.json");
+    let original: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    let mut unrelated = original.clone();
+    unrelated["raw_profile_sha256"] = json!("0".repeat(64));
+    fs::write(&sidecar, serde_json::to_vec(&unrelated).unwrap()).unwrap();
+    assert!(importers::import(&path, "samply", "run").is_err());
+    let mut bad_address = original.clone();
+    let sample = bad_address["events"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| {
+            e["kind"] == "sample"
+                && e["frames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|f| f["load_id"].is_string())
+        })
+        .unwrap();
+    let frame = sample["frames"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|f| f["load_id"].is_string())
+        .unwrap();
+    frame["lookup_address"] = json!("0x1");
+    fs::write(&sidecar, serde_json::to_vec(&bad_address).unwrap()).unwrap();
+    assert!(importers::import(&path, "samply", "run").is_err());
+    let mut lost = original;
+    lost["truncated"] = json!(true);
+    fs::write(&sidecar, serde_json::to_vec(&lost).unwrap()).unwrap();
+    let partial = importers::import(&path, "samply", "run").unwrap();
+    assert!(partial.diagnostics.iter().any(|d| d.contains("incomplete")));
+    assert!(
+        partial
+            .records
+            .iter()
+            .filter(|r| r["name"] == "module.observed_lifetime")
+            .all(|r| r["attributes"]["evidence_complete"] == false)
+    );
+    assert_eq!(
+        partial.sidecar_sha256[&sidecar],
+        format!("{:x}", Sha256::digest(fs::read(&sidecar).unwrap()))
+    );
+}

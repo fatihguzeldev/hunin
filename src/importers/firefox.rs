@@ -7,12 +7,24 @@ use std::{
     path::Path,
 };
 
+#[cfg(test)]
 pub(super) fn decode(
     path: &Path,
     raw: &Value,
     run_id: &str,
     key: &str,
     images: &Images,
+) -> Result<(Vec<Value>, Vec<String>)> {
+    decode_with_lifetimes(path, raw, run_id, key, images, None)
+}
+
+pub(super) fn decode_with_lifetimes(
+    path: &Path,
+    raw: &Value,
+    run_id: &str,
+    key: &str,
+    images: &Images,
+    lifetimes: Option<&super::native_lifetimes::Timeline>,
 ) -> Result<(Vec<Value>, Vec<String>)> {
     let sidecar = path.with_extension("syms.json");
     let symbols: Option<Value> = fs::read(&sidecar)
@@ -29,8 +41,13 @@ pub(super) fn decode(
         &mut records,
         &mut unresolved,
         images,
+        lifetimes,
     )?;
     let mut diagnostics = images.diagnostics();
+    if let Some(lifetimes) = lifetimes {
+        records.extend(lifetimes.records(run_id, key)?);
+        diagnostics.extend(lifetimes.diagnostics());
+    }
     if unresolved > 0 {
         diagnostics.push(format!(
             "{unresolved} sampled native frames remain unresolved; retain measured binaries/debug data or the samply symbol sidecar"
@@ -47,6 +64,7 @@ fn decode_process(
     records: &mut Vec<Value>,
     unresolved: &mut usize,
     images: &Images,
+    lifetimes: Option<&super::native_lifetimes::Timeline>,
 ) -> Result<()> {
     let epoch_ms = raw["meta"]["startTime"].as_f64();
     let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
@@ -67,13 +85,16 @@ fn decode_process(
             .map(|v| v.to_string())
             .unwrap_or_else(|| "unknown".into());
         let producer = format!("profile:{key}:{pid}:{lifetime}");
-        let thread_lifetime = thread_lifetime(
+        let mut thread_lifetime = thread_lifetime(
             thread,
             epoch_ms,
             run_id,
             &producer,
             &format!("profile:{key}:thread:{pid}:{lifetime}:{tid}:{thread_index}"),
         )?;
+        if let (Some(timeline), Some(record)) = (lifetimes, &mut thread_lifetime) {
+            timeline.thread_basis(thread, record);
+        }
         let thread_instance_id = thread_lifetime.as_ref().map(|r| r["id"].clone());
         records.extend(thread_lifetime);
         if let (Some(start), Some(end)) = (relative_start, thread["processShutdownTime"].as_f64()) {
@@ -195,11 +216,18 @@ fn decode_process(
             if let Some(interval) = interval_us {
                 record["interval_us"] = json!(interval);
             }
+            let relations = lifetimes
+                .map(|timeline| timeline.link_sample(thread, time_ms, &mut record, key))
+                .transpose()?
+                .unwrap_or_default();
             records.push(record);
+            records.extend(relations);
         }
     }
     for child in raw["processes"].as_array().into_iter().flatten() {
-        decode_process(child, symbols, run_id, key, records, unresolved, images)?;
+        decode_process(
+            child, symbols, run_id, key, records, unresolved, images, lifetimes,
+        )?;
     }
     Ok(())
 }
@@ -352,7 +380,9 @@ fn frame_info(
 }
 
 fn integer(value: &Value) -> Option<u64> {
-    value.as_u64().or_else(|| value.as_str()?.parse().ok())
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.split('.').next()?.parse().ok())
 }
 
 fn same_library(lib: &Value, symbols: &Value) -> bool {

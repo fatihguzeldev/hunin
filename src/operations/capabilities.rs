@@ -177,7 +177,7 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             diagnostics.push("Availability applies to the probed GraalPy mode; native-image and JVM-hosted distributions can expose different tools.".into());
         }
         _ => {
-            mechanism = "samply-os-sampling";
+            mechanism = "samply-os-sampling-with-module-lifetimes";
             basis = "OS stack sample weight; CPU/off-CPU semantics and permissions differ by host";
             let sampler = if runtime == "native" {
                 found.clone()
@@ -185,27 +185,19 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                 tool("samply")
             };
             if sampler.is_none() {
-                availability = "samply_missing";
-            } else if runtime == "go" && version.is_some() {
-                match checked(Command::new(sampler.as_ref().unwrap()).arg("--version")) {
-                    Ok(sampler_version)
-                        if version_pair(&sampler_version).is_some_and(|v| v >= (0, 13)) => {}
-                    Ok(_) => {
-                        availability = "sampler_version_unsupported";
-                    }
-                    Err(error) => {
-                        availability = "sampler_probe_failed";
-                        diagnostics.push(format!("{error:#}"));
-                    }
-                }
-            }
-            if runtime == "native"
-                && version
-                    .as_deref()
-                    .and_then(version_pair)
-                    .is_some_and(|v| v < (0, 13))
-            {
-                availability = "sampler_version_unsupported";
+                availability = "native_lifetime_collector_missing";
+                diagnostics.push("Install Hunin's bundled samply0.13.1-hunin-native1 collector; stock samply lacks the required native module lifetime extension.".into());
+            } else if let Err(error) = crate::collection::native_tool::check(
+                sampler.as_ref().unwrap(),
+                if runtime == "native" {
+                    version.as_deref()
+                } else {
+                    None
+                },
+                std::time::Duration::from_secs(2),
+            ) {
+                availability = "native_lifetime_extension_missing_or_unverified";
+                diagnostics.push(format!("{error:#}"));
             }
             if availability == "prerequisites_ready"
                 && !matches!(

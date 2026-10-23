@@ -1,4 +1,5 @@
 pub use crate::importers::ImportedProfile;
+pub(crate) mod native_tool;
 pub(crate) mod probe;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -260,13 +261,19 @@ fn python_arguments(args: &[String]) -> Result<(Vec<String>, Vec<String>)> {
 }
 
 fn native(request: &CaptureRequest) -> Result<CapturePlan> {
-    let samply = tool("samply").context("native/Go sampling requires samply 0.13+: install the official samply release or set HUNIN_SAMPLY")?;
-    let help = probe::standard(Command::new(&samply).args(["record", "--help"]))?;
-    let help = String::from_utf8_lossy(&help.stdout);
+    let samply = tool("samply").context("native/Go sampling requires Hunin's bundled samply0.13.1-hunin-native1; reinstall collector assets or set HUNIN_SAMPLY to a patched executable (an explicit override must be an existing file)")?;
+    let runtime_version = native_tool::check(&samply, None, std::time::Duration::from_secs(10))?;
     let mut command = vec![
         samply.display().to_string(),
         "record".into(),
         "--save-only".into(),
+        "--unstable-presymbolicate".into(),
+        "--lifetime-output".into(),
+        request
+            .artifact_dir
+            .join("cpu.samply.lifetimes.json")
+            .display()
+            .to_string(),
         "-o".into(),
         request
             .artifact_dir
@@ -274,14 +281,12 @@ fn native(request: &CaptureRequest) -> Result<CapturePlan> {
             .display()
             .to_string(),
     ];
-    if help.contains("--presymbolicate") {
-        command.push("--presymbolicate".into());
-    } else if help.contains("--unstable-presymbolicate") {
-        command.push("--unstable-presymbolicate".into());
+    if cfg!(windows) {
+        command.push("--keep-etl".into());
     }
     command.push("--".into());
     command.extend(request.command.clone());
-    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: version(samply.to_str().unwrap_or("samply")), diagnostics:vec![
+    Ok(CapturePlan { command, env:BTreeMap::new(), runtime_version: Some(runtime_version), diagnostics:vec![
         "Native symbols/source require debug information for the measured build".into(),
         "Linux perf permissions, Windows ETW elevation, and macOS signing restrictions are checked by samply at capture time".into(),
         "OS samples do not imply Go goroutine/scheduler/GC tracing; import an enabled runtime pprof recording for that additional route".into()] })
@@ -342,6 +347,21 @@ pub(crate) fn tool(name: &str) -> Option<PathBuf> {
         if path.is_file() {
             return Some(path);
         }
+        if name == "samply" {
+            return None;
+        }
+    }
+    if name == "samply" {
+        let bundled = assets()
+            .join("collectors/native/bin")
+            .join(if cfg!(windows) {
+                "samply.exe"
+            } else {
+                "samply"
+            });
+        if bundled.is_file() {
+            return Some(bundled);
+        }
     }
     for directory in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
         let path = directory.join(if cfg!(windows) {
@@ -366,11 +386,4 @@ pub(crate) fn tool(name: &str) -> Option<PathBuf> {
         });
     }
     None
-}
-
-fn version(executable: &str) -> Option<String> {
-    probe::standard(Command::new(executable).arg("--version"))
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
