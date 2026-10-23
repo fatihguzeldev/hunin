@@ -1,4 +1,4 @@
-use super::{checked_us, sample};
+use super::{checked_us, javascript_sources::Scripts, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
@@ -12,6 +12,7 @@ pub(super) fn decode(
     raw: &Value,
     run_id: &str,
     key: &str,
+    sources: &Scripts,
 ) -> Result<(Vec<Value>, Vec<String>)> {
     let nodes = raw["nodes"]
         .as_array()
@@ -56,6 +57,23 @@ pub(super) fn decode(
         .as_f64()
         .context("CPU profile startTime missing")?;
     let mut records = Vec::new();
+    let mut frames = HashMap::new();
+    for (id, node) in &map {
+        let call = &node["callFrame"];
+        let name = call["functionName"].as_str().unwrap_or("[unknown]");
+        let mut frame = json!({"function":if name.is_empty(){"(anonymous)"}else{name}});
+        if let Some(url) = call["url"].as_str().filter(|s| !s.is_empty()) {
+            frame["file"] = json!(url);
+        }
+        if let Some(line) = call["lineNumber"].as_i64().filter(|n| *n >= 0) {
+            frame["line"] = json!(line + 1);
+        }
+        if let Some(column) = call["columnNumber"].as_i64().filter(|n| *n >= 0) {
+            frame["column"] = json!(column);
+        }
+        let proof = sources.frame(call, &mut frame);
+        frames.insert(*id, (frame, proof));
+    }
     for (index, leaf) in samples.iter().enumerate() {
         let delta = deltas[index]
             .as_f64()
@@ -67,45 +85,51 @@ pub(super) fn decode(
         let mut cursor = Some(leaf.as_u64().context("invalid CPU profile leaf")?);
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
+        let mut script_proofs = std::collections::BTreeMap::new();
         while let Some(id) = cursor {
             if !seen.insert(id) || seen.len() > 8192 {
                 bail!("cyclic or oversized CPU profile ancestry");
             }
-            let node = map
+            let (frame, proof) = frames
                 .get(&id)
                 .context("sample references missing CPU profile node")?;
-            let call = &node["callFrame"];
-            let name = call["functionName"].as_str().unwrap_or("[unknown]");
-            let mut frame = json!({"function":if name.is_empty(){"(anonymous)"}else{name}});
-            if let Some(url) = call["url"].as_str().filter(|s| !s.is_empty()) {
-                frame["file"] = json!(url);
+            if !proof.is_null() {
+                script_proofs.insert(id, proof.clone());
             }
-            if let Some(line) = call["lineNumber"].as_i64().filter(|n| *n >= 0) {
-                frame["line"] = json!(line + 1);
-            }
-            if let Some(column) = call["columnNumber"].as_i64().filter(|n| *n >= 0) {
-                frame["column"] = json!(column);
-            }
-            chain.push(frame);
+            chain.push(frame.clone());
             cursor = parents.get(&id).copied();
         }
         chain.reverse();
         let timestamp = checked_us(now + origin.unwrap_or(0.0), "CPU sample timestamp")?;
-        let attrs = if origin.is_some() {
+        let mut attrs = if origin.is_some() {
             json!({"source_format":"v8-cpuprofile","clock":"unix_epoch","clock_alignment":"runtime_anchor","clock_source":metadata["clock_source"]})
         } else {
             json!({"source_format":"v8-cpuprofile","clock":"runtime_monotonic","clock_alignment":"unmapped"})
         };
+        if !script_proofs.is_empty() {
+            attrs["script_sources"] = json!(script_proofs.into_values().collect::<Vec<_>>());
+        }
         records.push(sample(
             run_id, key, index, pid, &tid, timestamp, chain, 1.0, "samples", attrs,
         ));
     }
-    let diagnostics = if origin.is_none() {
+    let mut diagnostics = if origin.is_none() {
         vec!["CPU profile clock has no verified epoch anchor; sample times remain outside the shared epoch timeline".into()]
     } else {
         Vec::new()
     };
+    diagnostics.extend(sources.diagnostics.clone());
     Ok((records, diagnostics))
+}
+pub(super) fn script_paths(path: &Path) -> Vec<std::path::PathBuf> {
+    let (Some(pid), Some(tid)) = identity_from_filename(path) else {
+        return Vec::new();
+    };
+    vec![
+        path.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("scripts-{pid}-{tid}.jsonl")),
+    ]
 }
 
 pub(super) fn metadata_paths(path: &Path) -> Vec<std::path::PathBuf> {
@@ -168,7 +192,14 @@ mod tests {
     #[test]
     fn raw_profile_retains_unmapped_clock_and_root_to_leaf_stack() {
         let raw = json!({"startTime":10,"nodes":[{"id":1,"callFrame":{"functionName":"root"},"children":[2]},{"id":2,"callFrame":{"functionName":"hot","url":"work.ts","lineNumber":4}}],"samples":[2],"timeDeltas":[3]});
-        let (r, d) = decode(Path::new("absent.cpuprofile"), &raw, "run", "key").unwrap();
+        let (r, d) = decode(
+            Path::new("absent.cpuprofile"),
+            &raw,
+            "run",
+            "key",
+            &Scripts::default(),
+        )
+        .unwrap();
         assert_eq!(r[0]["timestamp_us"], 13);
         assert_eq!(r[0]["stack"][0]["function"], "root");
         assert_eq!(r[0]["stack"][1]["line"], 5);

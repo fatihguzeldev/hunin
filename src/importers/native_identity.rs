@@ -14,6 +14,7 @@ const MAX_TOTAL: u64 = 256 * 1024 * 1024;
 #[derive(Default)]
 pub(super) struct Images {
     checks: BTreeMap<String, Value>,
+    snapshots: BTreeMap<String, Vec<u8>>,
 }
 #[derive(Debug)]
 struct Identifiers {
@@ -102,10 +103,18 @@ fn identifiers(bytes: &[u8]) -> Result<Vec<Identifiers>> {
         _ => vec![thin(bytes)?],
     })
 }
-fn check(lib: &Value, total: &mut u64) -> Value {
+fn check(
+    lib: &Value,
+    total: &mut u64,
+    snapshots: &mut BTreeMap<String, Vec<u8>>,
+    retained: Option<(&Path, &str)>,
+) -> Value {
     let mut value = json!({"module":lib["name"],"path":lib["path"],"reported_code_id":lib["codeId"],"reported_debug_id":lib["breakpadId"],"status":"unverified","scope":"Local image identifiers checked at normalization; load instance/lifetime and source-content build relation remain unverified"});
     let result = (|| -> Result<()> {
-        let path = Path::new(lib["path"].as_str().context("profile has no image path")?);
+        let path = match retained {
+            Some((path, _)) => path,
+            None => Path::new(lib["path"].as_str().context("profile has no image path")?),
+        };
         let mut file = fs::File::open(path).context("image is unavailable on this host")?;
         let size = file.metadata()?.len();
         anyhow::ensure!(
@@ -128,8 +137,13 @@ fn check(lib: &Value, total: &mut u64) -> Value {
             "image grew beyond the bounded read budget"
         );
         *total += bytes.len() as u64;
-        value["image_sha256"] = json!(format!("{:x}", Sha256::digest(&bytes)));
-        let ids = identifiers(&bytes)?;
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        if let Some((_, expected)) = retained {
+            anyhow::ensure!(sha == expected, "retained native image digest mismatch");
+        }
+        value["image_sha256"] = json!(sha);
+        let image = snapshots.entry(sha).or_insert(bytes);
+        let ids = identifiers(image)?;
         value["local_identifiers"] = json!(
             ids.iter()
                 .map(|id| json!({"code_id":id.code,"debug_id":id.debug,"format":id.format}))
@@ -180,10 +194,10 @@ impl Images {
         fn walk(raw: &Value, images: &mut Images, total: &mut u64) {
             for lib in raw["libs"].as_array().into_iter().flatten() {
                 let key = lib.to_string();
-                images
-                    .checks
-                    .entry(key)
-                    .or_insert_with(|| check(lib, total));
+                if !images.checks.contains_key(&key) {
+                    let checked = check(lib, total, &mut images.snapshots, None);
+                    images.checks.insert(key, checked);
+                }
             }
             for child in raw["processes"].as_array().into_iter().flatten() {
                 walk(child, images, total);
@@ -198,6 +212,82 @@ impl Images {
     }
     pub fn fingerprint(&self) -> Value {
         json!(self.checks)
+    }
+    pub fn context(&self, raw_sha256: &str) -> Value {
+        json!({"schema_version":1,"raw_profile_sha256":raw_sha256,"checks":self.checks})
+    }
+    pub fn into_snapshots(self) -> Vec<super::BinarySnapshot> {
+        self.snapshots
+            .into_iter()
+            .map(|(sha256, content)| super::BinarySnapshot { sha256, content })
+            .collect()
+    }
+    pub fn from_context(raw: &Value, path: &Path, raw_sha256: &str) -> Result<Self> {
+        let file = fs::File::open(path)?;
+        anyhow::ensure!(
+            file.metadata()?.len() <= 16 * 1024 * 1024,
+            "native image context exceeds16MiB"
+        );
+        let mut bytes = Vec::new();
+        file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        anyhow::ensure!(
+            bytes.len() <= 16 * 1024 * 1024,
+            "native image context grew beyond16MiB"
+        );
+        let context: Value = serde_json::from_slice(&bytes)?;
+        anyhow::ensure!(
+            context["schema_version"] == 1 && context["raw_profile_sha256"] == raw_sha256,
+            "native image context belongs to another raw recording or schema"
+        );
+        fn walk(
+            raw: &Value,
+            context: &Value,
+            directory: &Path,
+            images: &mut Images,
+            total: &mut u64,
+        ) -> Result<()> {
+            for lib in raw["libs"].as_array().into_iter().flatten() {
+                let key = lib.to_string();
+                if images.checks.contains_key(&key) {
+                    continue;
+                }
+                let saved = context["checks"]
+                    .get(&key)
+                    .context("native image context is missing a reported library")?;
+                let value = if let Some(sha) = saved["image_sha256"].as_str() {
+                    anyhow::ensure!(
+                        sha.len() == 64 && sha.bytes().all(|v| v.is_ascii_hexdigit()),
+                        "invalid native image blob digest"
+                    );
+                    let image = directory.join(sha);
+                    let value = check(lib, total, &mut images.snapshots, Some((&image, sha)));
+                    anyhow::ensure!(
+                        value["image_sha256"] == sha
+                            && value["status"] == saved["status"]
+                            && value["local_identifiers"] == saved["local_identifiers"],
+                        "retained native image identity/integrity mismatch; no current-file fallback"
+                    );
+                    value
+                } else {
+                    saved.clone()
+                };
+                images.checks.insert(key, value);
+            }
+            for child in raw["processes"].as_array().into_iter().flatten() {
+                walk(child, context, directory, images, total)?;
+            }
+            Ok(())
+        }
+        let mut images = Self::default();
+        walk(
+            raw,
+            &context,
+            path.parent()
+                .context("native image context has no directory")?,
+            &mut images,
+            &mut 0,
+        )?;
+        Ok(images)
     }
     pub fn diagnostics(&self) -> Vec<String> {
         let mut result: Vec<_> = self.checks.values().filter(|c| c["status"] == "mismatch").map(|c| format!("Native image identity mismatch for {} ({}): profile code/debug identifiers disagree with the local image; function and source positions remain unresolved", c["module"].as_str().unwrap_or("[unknown]"), c["path"].as_str().unwrap_or("[unknown]"))).collect();
@@ -315,9 +405,15 @@ mod tests {
         let path = directory.path().join("image.exe");
         fs::write(&path, &pe).unwrap();
         let mut lib = json!({"name":"image.exe","path":path,"codeId":"123456782000","breakpadId":"030201000504070608090A0B0C0D0E0F2"});
-        assert_eq!(check(&lib, &mut 0)["status"], "identifier_match");
+        assert_eq!(
+            check(&lib, &mut 0, &mut BTreeMap::new(), None)["status"],
+            "identifier_match"
+        );
         lib["breakpadId"] = json!("030201000504070608090A0B0C0D0E0F3");
-        assert_eq!(check(&lib, &mut 0)["status"], "mismatch");
+        assert_eq!(
+            check(&lib, &mut 0, &mut BTreeMap::new(), None)["status"],
+            "mismatch"
+        );
     }
     #[test]
     fn missing_images_and_missing_identifiers_do_not_claim_verified_mapping() {
@@ -325,8 +421,14 @@ mod tests {
         let path = directory.path().join("image.elf");
         fs::write(&path, elf()).unwrap();
         let lib = json!({"name":"image.elf","path":path});
-        assert_eq!(check(&lib, &mut 0)["status"], "unverified");
+        assert_eq!(
+            check(&lib, &mut 0, &mut BTreeMap::new(), None)["status"],
+            "unverified"
+        );
         fs::remove_file(&path).unwrap();
-        assert_eq!(check(&lib, &mut 0)["status"], "unverified");
+        assert_eq!(
+            check(&lib, &mut 0, &mut BTreeMap::new(), None)["status"],
+            "unverified"
+        );
     }
 }

@@ -432,6 +432,47 @@ mod tests {
                 .unwrap()
                 .records
         );
+        let cache = tempfile::tempdir().unwrap();
+        for image in &profile.binary_snapshots {
+            fs::write(cache.path().join(&image.sha256), &image.content).unwrap();
+        }
+        let context = cache.path().join("images.json");
+        fs::write(
+            &context,
+            serde_json::to_vec(profile.native_image_context.as_ref().unwrap()).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(directory.path().join("phase_a.dylib")).unwrap();
+        fs::remove_file(directory.path().join("phase_b.dylib")).unwrap();
+        let offline = crate::importers::import_with_native_context(
+            &path,
+            "firefox",
+            "reload-control",
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            offline.records, profile.records,
+            "offline image context preserves symbol/identity decisions after target deletion"
+        );
+        assert_eq!(offline.input_fingerprint, profile.input_fingerprint);
+        let corrupt = profile
+            .binary_snapshots
+            .iter()
+            .find(|image| {
+                image.content == include_bytes!("fixtures/native-reload/phase_b.macho").as_slice()
+            })
+            .unwrap();
+        fs::write(cache.path().join(&corrupt.sha256), b"corrupt").unwrap();
+        assert!(
+            crate::importers::import_with_native_context(
+                &path,
+                "firefox",
+                "reload-control",
+                &context
+            )
+            .is_err()
+        );
         fs::write(
             directory.path().join("phase_b.dylib"),
             include_bytes!("fixtures/native-reload/phase_a.macho"),

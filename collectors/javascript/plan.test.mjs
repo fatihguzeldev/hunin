@@ -99,3 +99,20 @@ if (process.env.HUNIN_TEST_DENO) {
     });
   }
 }
+
+if (process.env.HUNIN_TEST_BUN) {
+  test('Bun inherited preload executes through a capture directory with spaces', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hunin bun inherited preload '));
+    try {
+      const main = join(directory, 'main.mjs');
+      writeFileSync(main, 'function inheritedHot(){const end=Date.now()+150;let value=0;while(Date.now()<end)for(let i=1;i<10000;i++)value+=Math.sqrt(i);return value;}console.log(inheritedHot());');
+      const capture = plan({ command: [process.env.HUNIN_TEST_BUN, main], cwd: directory, artifact_dir: directory, run_id: 'inherited-preload', runtime: 'bun' });
+      assert.match(capture.env.BUN_OPTIONS, /--preload=hunin-bun-preload-[\w-]+\.mjs$/);
+      // A descendant inherits env, but not its parent's explicit launch argv.
+      const result = spawnSync(process.env.HUNIN_TEST_BUN, [main], { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+      assert.equal(result.status, 0, result.stderr);
+      const profiles = readdirSync(directory).filter(name => name.endsWith('.cpuprofile')).map(name => JSON.parse(readFileSync(join(directory, name), 'utf8')));
+      assert.ok(profiles.some(profile => profile.nodes.some(node => node.callFrame.functionName === 'inheritedHot')), 'BUN_OPTIONS returned success without executing its profiler preload');
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+}

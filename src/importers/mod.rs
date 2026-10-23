@@ -1,6 +1,7 @@
 mod firefox;
 mod go_trace;
 mod graal;
+mod javascript_sources;
 mod native_identity;
 mod pprof;
 mod v8;
@@ -17,6 +18,18 @@ use std::{
 };
 
 #[derive(Debug, Clone)]
+pub struct SourceSnapshot {
+    pub uri: String,
+    pub content: String,
+    pub sha256: String,
+    pub provenance: Value,
+}
+#[derive(Debug, Clone)]
+pub struct BinarySnapshot {
+    pub sha256: String,
+    pub content: Vec<u8>,
+}
+#[derive(Debug, Clone)]
 pub struct ImportedProfile {
     pub source: PathBuf,
     pub format: String,
@@ -24,13 +37,37 @@ pub struct ImportedProfile {
     pub diagnostics: Vec<String>,
     pub input_fingerprint: String,
     pub sidecars: Vec<PathBuf>,
+    pub source_snapshots: Vec<SourceSnapshot>,
+    pub binary_snapshots: Vec<BinarySnapshot>,
+    pub native_image_context: Option<Value>,
 }
 
 pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile> {
+    import_inner(path, format, run_id, None)
+}
+pub fn import_with_native_context(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    manifest_path: &Path,
+) -> Result<ImportedProfile> {
+    anyhow::ensure!(
+        matches!(format, "firefox" | "firefox-profile" | "samply"),
+        "native image context requires a Firefox/samply recording"
+    );
+    import_inner(path, format, run_id, Some(manifest_path))
+}
+fn import_inner(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    native_context: Option<&Path>,
+) -> Result<ImportedProfile> {
     let bytes = fs::read(path).with_context(|| format!("read profile {}", path.display()))?;
+    let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let sidecars = sidecars(path, format);
     let mut digest = Sha256::new();
-    digest.update(b"hunin-import-v2\0");
+    digest.update(b"hunin-import-v3\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);
@@ -70,12 +107,23 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
     } else {
         None
     };
-    let images = native_raw.as_ref().map(native_identity::Images::inspect);
+    let images = native_raw
+        .as_ref()
+        .map(|raw| match native_context {
+            Some(path) => native_identity::Images::from_context(raw, path, &raw_sha256),
+            None => Ok(native_identity::Images::inspect(raw)),
+        })
+        .transpose()?;
     if let Some(images) = &images {
         digest.update(b"native-image-identifiers-v1\0");
         digest.update(serde_json::to_vec(&images.fingerprint())?);
     }
     let key = format!("{:x}", digest.finalize());
+    let scripts = if matches!(format, "v8" | "v8-cpuprofile" | "cpuprofile") {
+        Some(javascript_sources::Scripts::load(path)?)
+    } else {
+        None
+    };
     let (records, diagnostics) = match format {
         "firefox" | "firefox-profile" | "samply" => firefox::decode(
             path,
@@ -84,9 +132,13 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
             &key,
             images.as_ref().unwrap(),
         )?,
-        "v8" | "v8-cpuprofile" | "cpuprofile" => {
-            v8::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
-        }
+        "v8" | "v8-cpuprofile" | "cpuprofile" => v8::decode(
+            path,
+            &serde_json::from_slice(&raw)?,
+            run_id,
+            &key,
+            scripts.as_ref().unwrap(),
+        )?,
         "graal" | "graal-cpusampler" => {
             graal::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
         }
@@ -112,6 +164,10 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
             "unsupported profile format {other}; expected v8-cpuprofile, firefox, vmprof, graal-cpusampler, pprof or hunin-jsonl"
         ),
     };
+    let native_image_context = images.as_ref().map(|images| images.context(&raw_sha256));
+    let binary_snapshots = images
+        .map(native_identity::Images::into_snapshots)
+        .unwrap_or_default();
     Ok(ImportedProfile {
         source: path.to_owned(),
         format: format.to_owned(),
@@ -119,13 +175,21 @@ pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile
         diagnostics,
         input_fingerprint: key,
         sidecars,
+        source_snapshots: scripts
+            .map(javascript_sources::Scripts::into_snapshots)
+            .unwrap_or_default(),
+        binary_snapshots,
+        native_image_context,
     })
 }
 
 fn sidecars(path: &Path, format: &str) -> Vec<PathBuf> {
     let candidates = match format {
         "firefox" | "firefox-profile" | "samply" => vec![path.with_extension("syms.json")],
-        "v8" | "v8-cpuprofile" | "cpuprofile" => v8::metadata_paths(path),
+        "v8" | "v8-cpuprofile" | "cpuprofile" => v8::metadata_paths(path)
+            .into_iter()
+            .chain(v8::script_paths(path))
+            .collect(),
         "graal" | "graal-cpusampler" => vec![path.with_extension("meta.json")],
         "vmprof" => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
         "go-trace" => vec![

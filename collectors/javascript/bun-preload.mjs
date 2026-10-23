@@ -5,6 +5,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
+import { captureBunProfile } from './sources-preload.mjs';
 const require = createRequire(import.meta.url);
 const threads = require('node:worker_threads');
 const preload = fileURLToPath(import.meta.url);
@@ -41,6 +42,7 @@ if (directory) {
     pending = (async () => {
     try {
       const { profile } = await post('Profiler.stop');
+      captureBunProfile(profile, producer);
       const path = join(directory, `CPU.${process.pid}.${threads.threadId}.${producer}.${++sequence}.cpuprofile`);
       writeFileSync(path, JSON.stringify(profile), { mode: 0o600 });
       writeFileSync(path + '.meta.json', JSON.stringify({ profile: path, pid: process.pid, tid: String(threads.threadId),

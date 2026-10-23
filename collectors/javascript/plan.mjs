@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
-import { resolve, basename } from 'node:path';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { resolve, basename, join, delimiter } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -23,12 +24,19 @@ export function plan(request) {
   if (runtime === 'node' && major < 20) throw Error('Node 20 or newer is required');
   if (runtime === 'bun' && (major < 1 || major === 1 && minor < 4)) throw Error('Bun 1.4 or newer is required for per-worker profiling');
   if (runtime === 'deno' && (major < 2 || major === 2 && minor < 8)) throw Error('Deno 2.8 or newer is required for built-in CPU profiling');
-  const env = { ...targetEnv, HUNIN_RUN_ID: run_id, HUNIN_JS_PROFILE_DIR: directory };
+  const env = { ...targetEnv, HUNIN_RUN_ID: run_id, HUNIN_JS_PROFILE_DIR: directory, HUNIN_PROJECT_ROOT: resolve(cwd) };
   const diagnostics = [];
+  diagnostics.push('JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.');
   let launched;
   if (runtime === 'bun') {
     const preload = fileURLToPath(new URL('./bun-preload.mjs', import.meta.url));
-    env.BUN_OPTIONS = `${effectiveEnv.BUN_OPTIONS ?? ''} --preload=${pathToFileURL(preload).href}`.trim();
+    // BUN_OPTIONS retains quote characters in --preload= values. Resolve a
+    // whitespace-free unique shim through NODE_PATH, whose path list supports
+    // spaces, then let ESM resolve the real file URL on every host.
+    const shim = `hunin-bun-preload-${randomUUID()}.mjs`;
+    writeFileSync(join(directory, shim), `import ${JSON.stringify(pathToFileURL(preload).href)};\n`, { mode: 0o600 });
+    env.NODE_PATH = [directory, effectiveEnv.NODE_PATH].filter(Boolean).join(delimiter);
+    env.BUN_OPTIONS = `${effectiveEnv.BUN_OPTIONS ?? ''} --preload=${shim}`.trim();
     launched = [command[0], '--preload', preload, ...command.slice(1)];
     diagnostics.push('Bun workers are sampled through Inspector preloads; worker termination waits up to 100ms for a profiling flush. Forced process termination can leave the current segment incomplete.');
   } else if (runtime === 'node') {
@@ -41,7 +49,7 @@ export function plan(request) {
     const inspectorDenied = command.some(value => value === '--deny-sys' || value.startsWith('--deny-sys=') && value.slice('--deny-sys='.length).split(',').includes('inspector'));
     const index = ['run', 'eval', 'test', 'bench'].includes(command[1]) ? 2 : 1;
     launched = [...command.slice(0, index), '--cpu-prof', `--cpu-prof-dir=${directory}`, '--preload', preload,
-      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-write=${directory}`, ...command.slice(index)];
+      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_PROJECT_ROOT,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-write=${directory}`, ...command.slice(index)];
     if (inspectorDenied) diagnostics.push('The target denies Inspector access; CPU samples retain an unmapped runtime clock when epoch calibration is unavailable.');
     diagnostics.push('Deno TypeScript CPU profile positions refer to generated JavaScript when the runtime omits source maps. Worker profiles are emitted by Deno itself. Child Deno processes need their own collection plan.');
   }
