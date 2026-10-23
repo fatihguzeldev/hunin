@@ -43,7 +43,8 @@ mod tests {
         let input = json!({"schema_version":1,"raw_profile_sha256":raw_sha,"epoch_start_ms":1700000000000u64,"truncated":false,"collector":{"upstream_commit":UPSTREAM,"revision":"hunin-native1","os":"linux"},"events":[
             add(10,"1","A","0x1000","0x1800"),add(11,"2","B","0x2000","0x2800"),
             movement(20,"0x1000","0x2000","0x2800"),movement(30,"0x2000","0x2000","0x2900"),
-            {"kind":"sample","thread":{"process":process,"tid":"8"},"time_ms":30,"mapping_time_ms":30,"frames":[{"load_id":"1","lookup_address":"0x2100","relative_address":256}]}
+            {"kind":"sample","thread":{"process":process,"tid":"8"},"time_ms":30,"mapping_time_ms":30,"frames":[{"load_id":"1","lookup_address":"0x2100","relative_address":256}]},
+            {"kind":"sample","thread":{"process":process,"tid":"8"},"time_ms":29.9995,"mapping_time_ms":29.9995,"frames":[{"load_id":"1","lookup_address":"0x2100","relative_address":256}]}
         ]});
         let path = directory.path().join("profile.lifetimes.json");
         let bytes = serde_json::to_vec(&input).unwrap();
@@ -58,6 +59,10 @@ mod tests {
             .unwrap();
         assert_eq!(links.len(), 1);
         assert!(links[0]["to"].as_str().unwrap().ends_with(":g2"));
+        let before = timeline
+            .link_sample(&json!({"pid":"7","tid":"8"}), 29.9995, &mut sample, "key")
+            .unwrap();
+        assert!(before[0]["to"].as_str().unwrap().ends_with(":g1"));
         let scopes = timeline.records("run", "key").unwrap();
         let displaced = scopes
             .iter()
@@ -650,9 +655,11 @@ impl Timeline {
                 .iter()
                 .map(|i| &self.instances[*i])
                 .filter(|i| {
+                    // These times share the same collector conversion; widening either
+                    // bound can select two generations around a move or resize.
                     lookup >= i.start_avma
                         && lookup < i.end_avma
-                        && mapping_time + 0.001 >= i.start
+                        && mapping_time >= i.start
                         && i.end.is_none_or(|end| mapping_time < end)
                 })
                 .collect();
@@ -671,8 +678,7 @@ impl Timeline {
                 "sample relative address disagrees with mapping"
             );
             ensure!(
-                mapping_time + 0.001 >= instance.start
-                    && instance.end.is_none_or(|end| mapping_time < end),
+                mapping_time >= instance.start && instance.end.is_none_or(|end| mapping_time < end),
                 "sample mapping lies outside its load lifetime"
             );
             let id = Self::id(instance, key);
