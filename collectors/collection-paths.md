@@ -72,6 +72,30 @@ root, and `HUNIN_GO` selects a compatible Go trace decoder where needed.
   snapshot remain unmapped. Observed begin/end ranges can produce durations;
   temporal overlap does not create additional causal edges.
 
+## Process ownership and stopping
+
+The recording owner has a persistent PID, OS start-time and instance identity.
+CLI, MCP and UI connections request cancellation through the shared store; only
+the owning engine signals its process tree. Shutdown stops that engine's work.
+An abandoned recording is recovered only when OS absence or a changed process
+start identity proves that its owner is gone. Recovery never signals a stale PID.
+
+Cancellation first permits 1.5 seconds of collector/target cleanup, then forces
+the owned tree closed. Unix collection owns a new process group; descendants
+that deliberately create another session/group are outside that ownership
+boundary. Windows launches suspended, assigns a kill-on-close Job Object, and
+resumes the primary thread; Windows behavior still requires its host tests.
+Original partial/malformed profiles, metadata and diagnostics are preserved even
+when normalization fails. Target exit/correctness and collection outcome remain
+separate, and the recorded supervised elapsed interval labels sampler overhead.
+Native imported process spans retain the collector's observed process interval
+and distinguish process lifetimes when the raw recording supplies their starts.
+
+Outside Git, source identity uses a bounded source/config-file snapshot, excluding
+dependency/build/cache and Hunin data directories. Missing/incomplete snapshots
+remain unknown. Source and launched executable identity stay distinct; current
+editor files are not silently advertised as the measured build's exact sources.
+
 ## Exercised evidence
 
 Local macOS ARM64 checks on 2026-10-23 exercised samply 0.13.1 on C (334 samples),
@@ -88,6 +112,12 @@ run a real CPU control and an exiting module without application instrumentation
 The five proposed product hosts are Windows x64, macOS ARM64/x64 and glibc Linux
 ARM64/x64. Windows ARM64 and musl Linux are outside that proposal. Collection on
 each host requires actual execution evidence; building an adapter is insufficient.
+
+`collectors/verify.py --binary /path/to/hunin --runtime native --output evidence`
+exercises an actual recording through the CLI, checks a known automatic hotspot
+and correctness, and reopens the result. Choose each runtime explicitly; missing
+prerequisites fail rather than skipping a support cell. `--output` preserves the
+workload, store, raw recordings and success/failure evidence for CI inspection.
 
 Mechanism references: [samply](https://github.com/mstange/samply),
 [vmprof](https://vmprof.readthedocs.io/en/latest/vmprof.html),
