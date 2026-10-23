@@ -374,16 +374,40 @@ fn additional_runtime_cells_conform_with_explicit_runtime_paths() {
         ("HUNIN_TEST_PYPY", "pypy", "python.py"),
         ("HUNIN_TEST_GRAALPY", "graalpy", "python.py"),
     ] {
-        let executable = std::env::var_os(variable).unwrap_or_else(|| {
-            panic!("{variable} is required; unavailable runtimes are not verified")
-        });
-        let mut arguments = vec![executable];
-        if cell == "deno" {
-            arguments.extend(["run".into(), "--allow-all".into()]);
-        }
-        arguments.push(fixture(program));
-        verify_sdk(arguments, cell);
+        verify_additional_runtime(variable, cell, program);
     }
+}
+
+fn verify_additional_runtime(variable: &str, cell: &str, program: &str) {
+    let executable = std::env::var_os(variable)
+        .unwrap_or_else(|| panic!("{variable} is required; unavailable runtimes are not verified"));
+    let mut arguments = vec![executable];
+    if cell == "deno" {
+        arguments.extend(["run".into(), "--allow-all".into()]);
+    }
+    arguments.push(fixture(program));
+    verify_sdk(arguments, cell);
+}
+
+#[test]
+#[ignore = "Requires explicit HUNIN_TEST_BUN; unavailable runtimes are not verified"]
+fn bun_runtime_sdk_conforms() {
+    verify_additional_runtime("HUNIN_TEST_BUN", "bun", "javascript.mjs");
+}
+#[test]
+#[ignore = "Requires explicit HUNIN_TEST_DENO; unavailable runtimes are not verified"]
+fn deno_runtime_sdk_conforms() {
+    verify_additional_runtime("HUNIN_TEST_DENO", "deno", "javascript.mjs");
+}
+#[test]
+#[ignore = "Requires explicit HUNIN_TEST_PYPY; unavailable runtimes are not verified"]
+fn pypy_runtime_sdk_conforms() {
+    verify_additional_runtime("HUNIN_TEST_PYPY", "pypy", "python.py");
+}
+#[test]
+#[ignore = "Requires explicit HUNIN_TEST_GRAALPY; unavailable runtimes are not verified"]
+fn graalpy_runtime_sdk_conforms() {
+    verify_additional_runtime("HUNIN_TEST_GRAALPY", "graalpy", "python.py");
 }
 
 #[test]
