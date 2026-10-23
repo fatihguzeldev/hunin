@@ -1,6 +1,7 @@
 import { operation } from './api';
 import { button, el, field } from './dom';
 import { parseCommand } from './command';
+import { workloadFields } from './workload-fields';
 
 export function recordDialog(onRecorded: (id: string) => void): void {
   const dialog = el('dialog', { 'aria-labelledby': 'record-title' });
@@ -13,13 +14,14 @@ export function recordDialog(onRecorded: (id: string) => void): void {
     runtime.append(el('option', { value }, value || 'Detect automatically'));
   }
   const timeout = el('input', { type: 'number', min: 1, max: 86400, value: 60 });
+  const workload = workloadFields();
   const error = el('p', { class: 'metric-note', role: 'alert' });
   const submit = button('Start recording', () => { void start(); }, 'button primary');
   const form = el('form', {},
     el('div', { class: 'dialog-head' }, el('h2', { id: 'record-title' }, 'Record a workload'), button('Close', () => dialog.close(), 'button subtle small')),
     el('div', { class: 'dialog-body' }, field('Name', name), field('Working directory', cwd),
       field('Command · JSON argument array', command), el('p', { class: 'metric-note' }, 'The command runs locally with your user permissions. Arguments are passed directly to the executable.'),
-      field('Runtime', runtime), field('Timeout · seconds', timeout), error),
+      field('Runtime', runtime), field('Timeout · seconds', timeout), workload.element, error),
     el('div', { class: 'dialog-actions' }, button('Cancel', () => dialog.close(), 'button subtle'), submit));
   form.addEventListener('submit', event => { event.preventDefault(); void start(); });
   dialog.append(form);
@@ -33,9 +35,10 @@ export function recordDialog(onRecorded: (id: string) => void): void {
       const args = parseCommand(command.value);
       const seconds = Number(timeout.value);
       if (!Number.isFinite(seconds) || seconds < 1 || seconds > 86400) throw new Error('Timeout must be between 1 and 86400 seconds.');
+      const options = workload.value();
       submit.disabled = true;
       error.textContent = 'Starting collector…';
-      const result = await operation('runs.start', { name: name.value || undefined, command: args, cwd: cwd.value, runtime: runtime.value || undefined, timeout_seconds: seconds });
+      const result = await operation('runs.start', { name: name.value || undefined, command: args, cwd: cwd.value, runtime: runtime.value || undefined, timeout_seconds: seconds, ...options });
       dialog.close();
       onRecorded(result.run.id);
     } catch (failure) {

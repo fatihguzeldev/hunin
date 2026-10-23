@@ -74,6 +74,21 @@ test('recording commands retain literal arguments and reject ambiguous input', a
   for (const invalid of ['node app.js', '[]', '[""]', '["node", 1]', '{}', 'null']) assert.throws(() => parseCommand(invalid));
 });
 
+test('workload recipes preserve exact output bytes and reject invalid environment declarations', async () => {
+  const { parseWorkloadOptions } = await moduleFrom('../src/workload.ts');
+  const exact = parseWorkloadOptions('{"MODE":"literal $(value)"}', '["data/input.json"]', '0', 'text', 'result\n');
+  assert.deepEqual(exact, { env: { MODE: 'literal $(value)' }, input_files: ['data/input.json'], expected_exit_code: 0, expected_stdout: 'result\n' });
+  assert.equal(parseWorkloadOptions('{}', '[]', '1', 'text', '').expected_stdout, '');
+  const hash = parseWorkloadOptions('{}', '[]', '0', 'sha256', 'A'.repeat(64));
+  assert.equal(hash.expected_stdout_sha256, 'a'.repeat(64));
+  assert.equal('expected_stdout' in hash, false);
+  assert.equal('expected_stdout' in parseWorkloadOptions('{}', '[]', '0', 'exit', 'ignored'), false);
+  for (const environment of ['[]', 'null', '{"EMPTY":1}', '{"A=B":"value"}']) assert.throws(() => parseWorkloadOptions(environment, '[]', '0', 'exit', ''));
+  for (const files of ['{}', '[1]', '[""]']) assert.throws(() => parseWorkloadOptions('{}', files, '0', 'exit', ''));
+  assert.throws(() => parseWorkloadOptions('{}', '[]', '0', 'sha256', 'abc'));
+  assert.throws(() => parseWorkloadOptions('{}', '[]', '1.5', 'exit', ''));
+});
+
 test('virtual runtime source locations are not offered as local filesystem paths', async () => {
   const { hasLocalSource } = await moduleFrom('../src/source-path.ts');
   for (const local of ['/src/main.rs', 'src/main.py', 'file:///src/a%20b.js', 'C:\\src\\main.cpp']) assert.equal(hasLocalSource(local), true);

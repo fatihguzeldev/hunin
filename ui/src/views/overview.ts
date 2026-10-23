@@ -27,7 +27,10 @@ export async function overview(run: Run, summary: Summary, source: (file: string
     stat('Relationships', numeric(summary.relation_count), 'recorded evidence')));
   if (run.correctness?.passed === false) body.append(el('p', { class: 'notice' }, run.correctness.actual_exit_code == null
     ? `Workload check incomplete: no exit result is available for this ${run.status} recording. ${run.correctness.reason ?? ''}`
-    : `Workload check failed: expected exit ${run.correctness.expected_exit_code ?? 'unknown'}, observed ${run.correctness.actual_exit_code}. ${run.correctness.reason ?? ''}`));
+    : `Workload correctness check failed. ${run.correctness.reason ?? ''}`));
+  if (run.correctness) body.append(el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, run.correctness.validation === 'exit_code_and_stdout' ? 'Correctness · exit code and stdout checks' : 'Correctness · exit code check only'),
+    run.correctness.validation !== 'exit_code_and_stdout' ? el('p', { class: 'panel-body metric-note' }, 'The exit result does not validate the program’s output.') : null,
+    el('pre', { class: 'panel-body' }, JSON.stringify(run.correctness, null, 2))));
   const rows = el('tbody');
   for (const item of data.hotspots) {
     const name = hasLocalSource(item.file) ? el('button', { class: 'text-button mono', type: 'button' }, item.function) : el('span', { class: 'mono' }, item.function);

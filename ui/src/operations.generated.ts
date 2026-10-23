@@ -17,6 +17,10 @@ export type OperationInputs = {
   "runtime"?: string;
   "timeout_seconds"?: number;
   "expected_exit_code"?: number;
+  "env"?: Record<string, unknown>;
+  "input_files"?: Array<string>;
+  "expected_stdout"?: string;
+  "expected_stdout_sha256"?: string;
 };
   "runs.cancel": {
   "run_id": string;
@@ -33,6 +37,9 @@ export type OperationInputs = {
   "run_id": string;
   "weight_unit"?: string;
   "limit"?: number;
+  "cursor"?: string;
+  "path"?: Array<string>;
+  "depth_limit"?: number;
 };
   "timeline.query": {
   "run_id": string;
@@ -117,6 +124,10 @@ export type OperationInputs = {
   "runtime"?: string;
   "timeout_seconds"?: number;
   "expected_exit_code"?: number;
+  "env"?: Record<string, unknown>;
+  "input_files"?: Array<string>;
+  "expected_stdout"?: string;
+  "expected_stdout_sha256"?: string;
 };
   "scenarios.run": {
   "scenario_id": string;

@@ -1,6 +1,7 @@
 import { operation } from '../api';
 import { parseCommand } from '../command';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
+import { workloadFields } from '../workload-fields';
 
 export async function scenarios(onRun: (id: string) => void): Promise<HTMLElement> {
   const list = el('div');
@@ -11,10 +12,10 @@ export async function scenarios(onRun: (id: string) => void): Promise<HTMLElemen
   const cwd = el('input', { required: true, placeholder: 'Absolute project directory' });
   const runtime = el('input', { placeholder: 'Detect automatically' });
   const timeout = el('input', { type: 'number', min: 1, max: 86400, value: 60 });
-  const expected = el('input', { type: 'number', min: 0, max: 255, value: 0 });
+  const workload = workloadFields();
   const submit = button('Save scenario', () => { void save(); }, 'button primary');
   const form = el('form', { class: 'stack panel-body' }, field('Name', name), field('Working directory', cwd), field('Command · JSON argument array', command),
-    el('div', { class: 'toolbar' }, field('Runtime', runtime), field('Timeout · seconds', timeout), field('Expected exit code', expected)), submit);
+    el('div', { class: 'toolbar' }, field('Runtime', runtime), field('Timeout · seconds', timeout)), workload.element, submit);
   form.addEventListener('submit', event => { event.preventDefault(); void save(); });
   const body = el('div', { class: 'stack' }, el('div', { class: 'view-title' }, el('h1', {}, 'Workload scenarios')),
     el('p', { class: 'muted' }, 'Retain the command, working directory, timeout, and correctness expectation for repeatable recordings.'), feedback, list,
@@ -33,7 +34,8 @@ export async function scenarios(onRun: (id: string) => void): Promise<HTMLElemen
           }).finally(() => { run.disabled = false; });
         }, 'button small');
         return el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h2', {}, scenario.name), badge(scenario.runtime || 'auto'), el('span', { class: 'spacer' }), run),
-          el('p', { class: 'mono' }, scenario.command.join(' ')), el('p', {}, `${scenario.cwd} · timeout ${scenario.timeout_seconds}s · expected exit ${scenario.expected_exit_code}`));
+          el('p', { class: 'mono' }, scenario.command.join(' ')), el('p', {}, `${scenario.cwd} · timeout ${scenario.timeout_seconds}s · expected exit ${scenario.expected_exit_code}`),
+          el('details', {}, el('summary', {}, 'Workload input and output expectations'), el('pre', {}, JSON.stringify({ env: scenario.env ?? {}, input_files: scenario.input_files ?? [], expected_stdout: scenario.expected_stdout, expected_stdout_sha256: scenario.expected_stdout_sha256 }, null, 2))));
       })));
     } catch (error) { list.replaceChildren(errorView(error, () => { void load(); })); }
   }
@@ -41,8 +43,9 @@ export async function scenarios(onRun: (id: string) => void): Promise<HTMLElemen
     if (submit.disabled || !form.reportValidity()) return;
     try {
       const args = parseCommand(command.value);
+      const options = workload.value();
       submit.disabled = true;
-      await operation('scenarios.save', { name: name.value, command: args, cwd: cwd.value, runtime: runtime.value || undefined, timeout_seconds: Number(timeout.value), expected_exit_code: Number(expected.value) });
+      await operation('scenarios.save', { name: name.value, command: args, cwd: cwd.value, runtime: runtime.value || undefined, timeout_seconds: Number(timeout.value), ...options });
       feedback.replaceChildren(el('p', { class: 'notice' }, 'Scenario saved. Recording executes the command with your local user permissions.'));
       await load();
     } catch (error) { feedback.replaceChildren(errorView(error, () => { void save(); })); }

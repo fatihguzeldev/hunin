@@ -6,18 +6,18 @@ export type Run = {
   command: string[]; cwd: string; runtime: string; started_at_us: number;
   finished_at_us?: number; exit_code?: number; diagnostics: string[];
   source: { revision?: string; dirty?: boolean; fingerprint: string; executable_sha256?: string | null; runtime_version?: string | null; build_source_verified?: boolean };
-  correctness: { passed: boolean | null; expected_exit_code?: number; actual_exit_code?: number | null; reason?: string };
+  correctness: { passed: boolean | null; expected_exit_code?: number; actual_exit_code?: number | null; reason?: string; validation?: 'exit_code_only' | 'exit_code_and_stdout'; checks?: unknown[]; stdout_sha256?: string; stdout_bytes?: number; canceled?: boolean; timed_out?: boolean };
 };
 export type Summary = { sample_count: number; total_weight: number; weight_unit: string; span_count: number; metric_count: number; relation_count: number; diagnostics: string[] };
 export type Capability = { runtime: string; available: boolean; version?: string; capabilities: string[]; diagnostics: string[] };
 export type Hotspot = { function: string; file?: string; line?: number; self_weight: number; inclusive_weight: number; weight_unit: string };
-export type TreeNode = { name: string; file?: string; line?: number; self_weight: number; total_weight: number; children: TreeNode[] };
+export type TreeNode = { id: string; name: string; file?: string; line?: number; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
 export type Artifact = { id: string; name: string; size: number; sha256: string; format: string };
 export type Analysis = { id: string; name: string; version: string; command: string[]; requirements: unknown; dependencies?: unknown; status?: string };
 export type AnalysisResult = { id: string; result_set_id?: string; analysis_id: string; version: string; status: string; selected?: boolean; diagnostics: string[]; created_at_us: number; finished_at_us?: number; input_fingerprint: string };
 export type Series = { id: string; name: string; unit: string; scope: string; pid: number; tid?: string | null; producer_id?: string | null; context_id?: string | null; thread_id_source?: string | null; clock?: string | null; clock_alignment?: string | null; process_started_at_seconds?: number | null; process_role?: string | null; point_count?: number; returned_points?: number; truncated?: boolean; points: { id: string; timestamp_us: number; value: number }[] };
-export type Comparison = { before: Run; after: Run; comparable: boolean; reasons: string[]; metrics: { name: string; unit: string; before: number; after: number; delta: number; percent_change?: number | null }[]; correctness: { before: unknown; after: unknown }; hotspots: unknown; limitations?: string[] };
-export type Scenario = { id: string; name: string; command: string[]; cwd: string; runtime: string; timeout_seconds: number; expected_exit_code: number };
+export type Comparison = { before: Run; after: Run; comparable: boolean; reasons: string[]; metrics: { name: string; unit: string; before: number; after: number; delta: number | null; percent_change?: number | null; comparable?: boolean; measurement_quality?: string; diagnostic?: string; before_observations?: number; after_observations?: number }[]; correctness: { before: unknown; after: unknown }; hotspots: unknown; limitations?: string[] };
+export type Scenario = { id: string; name: string; command: string[]; cwd: string; runtime: string; timeout_seconds: number; expected_exit_code: number; env?: Record<string,string>; input_files?: string[]; expected_stdout?: string; expected_stdout_sha256?: string };
 
 type Responses = {
   capabilities: { host: { os: string; arch: string }; runtimes: Capability[]; schema_version: number };
@@ -26,7 +26,7 @@ type Responses = {
   'runs.start': { run: Run };
   'runs.cancel': { run: Run };
   'profiles.hotspots': { hotspots: Hotspot[]; total_weight: number; weight_unit: string };
-  'profiles.tree': { roots: TreeNode[]; weight_unit: string };
+  'profiles.tree': { roots: TreeNode[]; weight_unit: string; next_cursor?: string | null; returned_nodes?: number; node_limit?: number; depth_limit?: number; diagnostics?: string[] };
   'timeline.query': { records: Observation[]; unaligned_records?: Observation[]; next_cursor?: string; unaligned_count?: number; bounds: { start_us: number; end_us: number } | null };
   'resources.query': { series: Series[]; next_cursor?: string; returned_points?: number; total_points?: number };
   'contexts.query': { contexts: Observation[]; relations: Observation[]; next_cursor?: string };

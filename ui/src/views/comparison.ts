@@ -5,7 +5,9 @@ import type { ViewContext } from '../workspace';
 
 function correctness(value: unknown): HTMLElement {
   const passed = value && typeof value === 'object' && 'passed' in value ? value.passed : null;
+  const validation = value && typeof value === 'object' && 'validation' in value ? value.validation : null;
   return el('div', { class: 'stack' }, badge(passed === true ? 'correctness passed' : passed === false ? 'correctness failed' : 'correctness unknown', passed === true ? 'good' : passed === false ? 'bad' : 'warn'),
+    validation === 'exit_code_and_stdout' ? el('p', { class: 'metric-note' }, 'Declared exit code and stdout checks') : el('p', { class: 'metric-note' }, 'Exit code check only; output correctness is unvalidated.'),
     el('pre', {}, JSON.stringify(value, null, 2)));
 }
 
@@ -20,9 +22,11 @@ function results(data: Comparison): HTMLElement {
     el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Measured changes'), badge(data.comparable ? 'comparable' : 'limited', data.comparable ? 'good' : 'warn')),
       el('div', { class: 'table-scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Metric / unit'), el('th', { class: 'numeric' }, 'Before'), el('th', { class: 'numeric' }, 'After'), el('th', { class: 'numeric' }, 'Delta'), el('th', { class: 'numeric' }, 'Change'))),
         el('tbody', {}, ...data.metrics.map(metric => el('tr', {},
-          el('td', {}, metric.name, el('small', { class: 'source-label' }, metric.unit)),
+          el('td', {}, metric.name, el('small', { class: 'source-label' }, metric.unit), metric.measurement_quality ? badge(metric.measurement_quality, metric.comparable === false ? 'warn' : '') : null,
+            metric.diagnostic ? el('small', { class: 'source-label' }, metric.diagnostic) : null,
+            metric.before_observations !== undefined ? el('small', { class: 'source-label' }, `${metric.before_observations} before / ${metric.after_observations ?? 'unknown'} after observations`) : null),
           el('td', { class: 'numeric' }, numeric(metric.before)), el('td', { class: 'numeric' }, numeric(metric.after)),
-          el('td', { class: 'numeric' }, `${metric.delta > 0 ? '+' : ''}${numeric(metric.delta)}`),
+          el('td', { class: 'numeric' }, metric.delta == null ? '—' : `${metric.delta > 0 ? '+' : ''}${numeric(metric.delta)}`),
           el('td', { class: 'numeric' }, percentage(metric.percent_change)))))))),
     el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, 'Hotspot differences · backend result'), el('pre', { class: 'panel-body' }, JSON.stringify(data.hotspots, null, 2))));
 }
