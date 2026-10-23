@@ -151,8 +151,13 @@ impl Engine {
         directory: &Path,
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
+        timings: &mut Value,
     ) -> Result<Vec<Value>> {
-        let source = package::verify(analysis)?;
+        let phase = Instant::now();
+        let source = package::verify(analysis);
+        timings["package_verification"] = json!(phase.elapsed().as_micros() as u64);
+        let source = source?;
+        let phase = Instant::now();
         let workspace = directory.join("workspace");
         fs::create_dir_all(&workspace)?;
         for (path, identity) in analysis["files"]
@@ -168,13 +173,18 @@ impl Engine {
             fs::write(&destination, bytes)?;
             fs::set_permissions(destination, fs::metadata(source.join(path))?.permissions())?;
         }
+        timings["workspace_copy"] = json!(phase.elapsed().as_micros() as u64);
         let control = process::Control::new(cancellation, deadline);
-        let (command, metadata) =
-            dependencies::prepare(analysis, &workspace, directory, control.clone()).await?;
+        let phase = Instant::now();
+        let prepared =
+            dependencies::prepare(analysis, &workspace, directory, control.clone()).await;
+        timings["dependency_setup"] = json!(phase.elapsed().as_micros() as u64);
+        let (command, metadata) = prepared?;
         fs::write(
             directory.join("dependencies.json"),
             serde_json::to_vec_pretty(&metadata)?,
         )?;
+        let phase = Instant::now();
         let status = process::execute(
             &command,
             &workspace,
@@ -183,13 +193,16 @@ impl Engine {
             &directory.join("stderr.txt"),
             control,
         )
-        .await?;
+        .await;
+        timings["subprocess"] = json!(phase.elapsed().as_micros() as u64);
+        let status = status?;
         if !status.success() {
             bail!(
                 "analyzer exited unsuccessfully ({:?}); inspect its retained stdout/stderr",
                 status.code()
             );
         }
+        let phase = Instant::now();
         let text = fs::read_to_string(directory.join("stdout.jsonl"))
             .context("analyzer output must be UTF-8 JSONL")?;
         let inputs: HashSet<_> = input.value["records"]
@@ -231,14 +244,17 @@ impl Engine {
             record["attributes"]["analysis_package_digest"] = analysis["package_digest"].clone();
             records.push(record);
         }
-        if self
-            .input(analysis, input.value["run"]["id"].as_str().unwrap())?
-            .fingerprint
-            != input.fingerprint
-        {
+        timings["output_validation"] = json!(phase.elapsed().as_micros() as u64);
+        let phase = Instant::now();
+        let current = self.input(analysis, input.value["run"]["id"].as_str().unwrap());
+        timings["input_recheck"] = json!(phase.elapsed().as_micros() as u64);
+        if current?.fingerprint != input.fingerprint {
             bail!("analysis inputs changed during execution; no stale output was published");
         }
-        package::verify(analysis)?;
+        let phase = Instant::now();
+        let verified = package::verify(analysis);
+        timings["final_package_verification"] = json!(phase.elapsed().as_micros() as u64);
+        verified?;
         Ok(records)
     }
     async fn complete(
@@ -250,6 +266,7 @@ impl Engine {
         cancellation: watch::Receiver<bool>,
         deadline: Instant,
     ) {
+        let mut timings = json!({});
         let result = self
             .analyze(
                 &analysis,
@@ -257,8 +274,10 @@ impl Engine {
                 &directory,
                 cancellation.clone(),
                 deadline,
+                &mut timings,
             )
             .await;
+        document["phase_timings_us"] = timings;
         let id = document["id"].as_str().unwrap().to_owned();
         let requested = self
             .store

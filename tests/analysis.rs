@@ -83,6 +83,9 @@ async fn managed_package_recomputes_relations_and_replays_without_double_countin
     assert_eq!(started["status"], "running");
     let accepted = fixture.wait(&started).await;
     assert_eq!(accepted["status"], "accepted", "{accepted}");
+    assert!(accepted["phase_timings_us"]["package_verification"].is_u64());
+    assert!(accepted["phase_timings_us"]["subprocess"].is_u64());
+    assert!(accepted["phase_timings_us"]["final_package_verification"].is_u64());
     let rows = fixture.store.records("recording").unwrap();
     assert_eq!(rows.len(), 3);
     let relation = rows.iter().find(|r| r["kind"] == "relation").unwrap();
@@ -318,10 +321,34 @@ async fn locked_node_dependencies_and_non_target_language_analyzer_execute_from_
     fs::write(fixture.package.join("package-lock.json"),r#"{"name":"hunin-analyzer-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"hunin-analyzer-fixture","version":"1.0.0"}}}"#).unwrap();
     fs::write(fixture.package.join("analyze.mjs"),r#"import {readFileSync} from 'node:fs';import{randomUUID}from'node:crypto';const v=JSON.parse(readFileSync(0,'utf8'));const[a,b]=v.records;console.log(JSON.stringify({schema_version:1,kind:'relation',id:randomUUID(),run_id:v.run.id,producer_id:'node-analyzer',pid:0,tid:'',timestamp_us:a.timestamp_us,basis:'derived',from:a.id,to:b.id,relation:'links',evidence:[a.id,b.id]}));"#).unwrap();
     let node = std::env::var("HUNIN_TEST_NODE").unwrap_or_else(|_| "node".into());
+    let phase = std::time::Instant::now();
     let analysis=fixture.engine.register(&json!({"name":"Node custom analysis","command":[node,"analyze.mjs"],"cwd":fixture.package,"requirements":{"runtime":"fixture","source_fingerprint":"build-v1"},"dependencies":{"node_lockfile":"package-lock.json"}})).unwrap()["analysis"].clone();
-    let started = fixture.start(&analysis, 10.0).await;
-    let accepted = fixture.wait(&started).await;
-    assert_eq!(accepted["status"], "accepted", "{accepted}");
+    let registration = phase.elapsed();
+    let phase = std::time::Instant::now();
+    // Real interpreter hashing and npm setup use the normal service budget.
+    // Deadline enforcement has a separate short, controlled-process test.
+    let started = fixture
+        .engine
+        .run(&json!({"run_id":"recording","analysis_id":analysis["id"]}))
+        .await
+        .unwrap();
+    let admission = phase.elapsed();
+    let phase = std::time::Instant::now();
+    let accepted = tokio::time::timeout(
+        Duration::from_secs(65),
+        fixture
+            .engine
+            .wait(started["result_set_id"].as_str().unwrap()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        accepted["status"],
+        "accepted",
+        "registration={registration:?}, admission={admission:?}, execution={:?}: {accepted}",
+        phase.elapsed()
+    );
     assert_eq!(fixture.store.records("recording").unwrap().len(), 3);
     assert!(!fixture.package.join("node_modules").exists());
 }
