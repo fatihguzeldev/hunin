@@ -279,6 +279,53 @@ async fn source_urls_are_decoded_but_cannot_escape_the_recorded_project() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn retained_source_resolves_existing_parent_alias_after_file_removal() {
+    let directory = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let alias = directory.path().join("alias");
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+    let source = project.join("app.js");
+    std::fs::write(&source, "function retainedHotspot() {}\n").unwrap();
+    let store = Store::open(data.path()).unwrap();
+    let mut recorded = run(
+        "alias-source",
+        project.canonicalize().unwrap().to_str().unwrap(),
+        true,
+    );
+    store.save_run(&recorded).unwrap();
+    let artifact = store
+        .add_artifact(&recorded.id, &source, "source-snapshot")
+        .unwrap();
+    recorded.source["retained_sources"] =
+        json!([{"path":"app.js","artifact_id":artifact.id,"sha256":artifact.sha256}]);
+    store.save_run(&recorded).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    let ops = Operations::new(store);
+    let response = ops
+        .call(
+            "source.read",
+            json!({"run_id":recorded.id,"path":alias.join("app.js")}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response["content"], "function retainedHotspot() {}");
+    assert_eq!(response["source_kind"], "recorded_snapshot");
+    let outside = directory.path().join("outside");
+    std::os::unix::fs::symlink(data.path(), &outside).unwrap();
+    assert!(
+        ops.call(
+            "source.read",
+            json!({"run_id":recorded.id,"path":outside.join("app.js")})
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn recorded_source_survives_edits_and_project_removal_without_claiming_build_mapping() {
     let project = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();

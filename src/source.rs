@@ -97,7 +97,7 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
         );
     }
     let root = PathBuf::from(&run.cwd);
-    let root = normalize(&root.canonicalize().unwrap_or(root));
+    let root = retained_path(&root);
     let requested = params["path"].as_str().unwrap();
     let requested = if requested.starts_with("file:") {
         url::Url::parse(requested)?
@@ -107,7 +107,7 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
         PathBuf::from(requested)
     };
     let joined = root.join(requested);
-    let path = normalize(&joined.canonicalize().unwrap_or(joined));
+    let path = retained_path(&joined);
     let relative = path
         .strip_prefix(&root)
         .context("source path is outside the measured project")?;
@@ -171,13 +171,29 @@ fn source_key(uri: &str) -> String {
         None
     };
     path.map(|p| {
-        normalize(&p)
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_start_matches("//?/")
-            .to_owned()
+        (if p.is_absolute() {
+            retained_path(&p)
+        } else {
+            normalize(&p)
+        })
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("//?/")
+        .to_owned()
     })
     .unwrap_or_else(|| uri.to_owned())
+}
+
+// A retained file can be gone while its parent still resolves through an OS or
+// user symlink (for example /tmp -> /private/tmp). Resolve that existing prefix
+// before comparing project boundaries or immutable source identities.
+fn retained_path(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = ancestor.canonicalize() {
+            return normalize(&canonical.join(path.strip_prefix(ancestor).unwrap()));
+        }
+    }
+    normalize(path)
 }
 
 fn normalize(path: &Path) -> PathBuf {
