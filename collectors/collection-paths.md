@@ -130,6 +130,10 @@ unconfirmed cleanup. An unknown cleanup state is not a claim that ETW stopped.
 Native imported process spans retain the collector's observed process interval
 and distinguish process lifetimes when the raw recording supplies their starts.
 
+On macOS, failure to resume a task after a native image snapshot aborts sampling.
+For a launched target, the collector kills and waits for its retained owned child;
+attach mode does not kill the attached process.
+
 Outside Git, source identity uses a bounded source/config-file snapshot, excluding
 dependency/build/cache and Hunin data directories. Missing/incomplete snapshots
 remain unknown. Source and launched executable identity stay distinct; current
