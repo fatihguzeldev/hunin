@@ -1,9 +1,11 @@
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -11,6 +13,29 @@ HERE = Path(__file__).resolve().parent
 
 
 class CpuProgressTest(unittest.TestCase):
+    def test_owned_interrupt_flushes_raw_counters_and_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="hunin-cpu-cancel-") as directory:
+            work=Path(directory)
+            script=work/"work.py"
+            script.write_text("from pathlib import Path\nPath('ready').write_text('ready')\nwhile True: sum(range(10000))\n")
+            raw=work/"cpu.pythoncpu.jsonl"
+            options={"creationflags":subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=="nt" else {}
+            child=subprocess.Popen([sys.executable,str(HERE/"cpu.py"),str(raw),"--",str(script)],cwd=work,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**options)
+            try:
+                deadline=time.monotonic()+5
+                while not (work/"ready").exists() and time.monotonic()<deadline:
+                    time.sleep(.01)
+                self.assertTrue((work/"ready").exists(),"controlled target never started")
+                child.send_signal(signal.CTRL_BREAK_EVENT if os.name=="nt" else signal.SIGINT)
+                child.communicate(timeout=5)
+                metadata=json.loads(raw.with_suffix(raw.suffix+".meta.json").read_text())
+                self.assertNotEqual(child.returncode,0)
+                self.assertFalse(metadata["errors"])
+                self.assertTrue(raw.read_text().strip())
+            finally:
+                if child.poll() is None:
+                    child.kill();child.wait()
+
     def capture(self, source):
         with tempfile.TemporaryDirectory(prefix="hunin-cpu-progress-") as directory:
             work = Path(directory)

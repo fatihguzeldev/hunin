@@ -238,11 +238,15 @@ pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
 
 fn decode_vmprof(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
     let python = crate::collection::vmprof_decoder();
-    let output = Command::new(&python)
-        .arg(crate::collection::assets().join("collectors/python/decode.py"))
-        .arg(path)
-        .output()
-        .with_context(|| format!("run vmprof decoder with {}", python.display()))?;
+    let output = crate::collection::probe::output(
+        Command::new(&python)
+            .arg(crate::collection::assets().join("collectors/python/decode.py"))
+            .arg(path),
+        None,
+        std::time::Duration::from_secs(60),
+        64 * 1024 * 1024,
+    )
+    .with_context(|| format!("run vmprof decoder with {}", python.display()))?;
     if !output.status.success() {
         bail!(
             "vmprof decoding failed: {}",

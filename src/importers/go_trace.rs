@@ -19,17 +19,29 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
         .context(
             "Go execution trace import requires a compatible Go toolchain on PATH or HUNIN_GO",
         )?;
-    let mut output = Command::new(&go)
-        .args(["tool", "trace", "-d=parsed"])
-        .arg(path)
-        .output()?;
+    let began = std::time::Instant::now();
+    let deadline = std::time::Duration::from_secs(60);
+    let mut output = crate::collection::probe::output(
+        Command::new(&go)
+            .args(["tool", "trace", "-d=parsed"])
+            .arg(path),
+        None,
+        deadline,
+        64 * 1024 * 1024,
+    )?;
     if !output.status.success()
         && String::from_utf8_lossy(&output.stderr).contains("invalid debug mode")
     {
-        output = Command::new(&go)
-            .args(["tool", "trace", "-d=1"])
-            .arg(path)
-            .output()?;
+        let remaining = deadline
+            .checked_sub(began.elapsed())
+            .filter(|time| !time.is_zero())
+            .context("Go trace decoder deadline elapsed before legacy-format fallback")?;
+        output = crate::collection::probe::output(
+            Command::new(&go).args(["tool", "trace", "-d=1"]).arg(path),
+            None,
+            remaining,
+            64 * 1024 * 1024,
+        )?;
     }
     if !output.status.success() {
         bail!(
