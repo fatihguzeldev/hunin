@@ -1,0 +1,643 @@
+[
+  {
+    "name": "capabilities",
+    "description": "Discover installed runtime collection prerequisites",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runs.list",
+    "description": "List persisted recordings",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runs.get",
+    "description": "Inspect a recording and prepared summary",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runs.start",
+    "description": "Launch a command under automatic collection",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "expected_exit_code": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runs.cancel",
+    "description": "Cancel an owned recording and its processes",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "runs.remove",
+    "description": "Remove a completed recording and release artifact references",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "profiles.hotspots",
+    "description": "Query self and inclusive sampled stack weights",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "weight_unit": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "profiles.tree",
+    "description": "Query a sampled call tree",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "weight_unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "timeline.query",
+    "description": "Query aligned observations without inventing causal relationships",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignment": {
+          "enum": [
+            "aligned",
+            "unmapped",
+            "all"
+          ]
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "resources.query",
+    "description": "Inspect scoped resource observations",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "point_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "contexts.query",
+    "description": "Inspect explicit contexts and accepted relationships",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "evidence.get",
+    "description": "Resolve exact evidence record IDs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "run_id",
+        "ids"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "artifacts.list",
+    "description": "List retained original inputs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "artifacts.read",
+    "description": "Read a bounded UTF-8 raw artifact excerpt",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "run_id",
+        "artifact_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "source.read",
+    "description": "Inspect source with explicit measured-build identity limits",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "run_id",
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "recordings.import",
+    "description": "Import an original profiler recording",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "path",
+        "format"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "comparisons.create",
+    "description": "Compare equivalent workloads and correctness outcomes",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "string",
+          "minLength": 1
+        },
+        "after": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "before",
+        "after"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "analyses.list",
+    "description": "List durable registered analyzers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "analyses.register",
+    "description": "Store an analyzer package and declared applicability",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirements": {
+          "type": "object"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "dependencies": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "command",
+        "requirements"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "analyses.run",
+    "description": "Check applicability then execute and atomically accept analyzer output",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "analysis_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "run_id",
+        "analysis_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "analyses.results",
+    "description": "Inspect accepted or rejected analysis executions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "scenarios.list",
+    "description": "List reusable workload recipes",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "scenarios.save",
+    "description": "Save a reusable command, environment and correctness recipe",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "expected_exit_code": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "scenarios.run",
+    "description": "Run a stored workload recipe",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scenario_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "scenario_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "analyses.cancel",
+    "description": "Cancel an active analyzer execution",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+]
