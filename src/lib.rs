@@ -1,9 +1,11 @@
+pub mod analysis;
+pub mod collection;
+pub mod execution;
+pub mod importers;
 pub mod ingestion;
+pub mod interfaces;
 pub mod model;
+pub mod operations;
 pub mod query;
 pub mod storage;
-pub mod collection;
-pub mod importers;
-pub mod execution;
 mod source;
-pub mod analysis;
