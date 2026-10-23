@@ -60,7 +60,27 @@ def main():
             command = [str(target)]
         elif runtime in ("cpython", "pypy", "python-cpu", "graalpy"):
             source = work / "cpu.py"
-            source.write_text("def huninSmokeHotspot():\n    x=1\n    for n in range(10_000_000):\n        x=((x^n)*1664525+1013904223)&0xffffffff\n    return x\nprint(huninSmokeHotspot())\n")
+            # GraalPy CE Native currently reports zero for thread_time(). Keep
+            # its existing iteration control; do not claim a thread CPU budget.
+            source.write_text(
+                "def huninSmokeHotspot():\n    x=1\n    for n in range(10_000_000):\n        x=((x^n)*1664525+1013904223)&0xffffffff\n    return x\nprint(huninSmokeHotspot())\n"
+                if runtime == "graalpy" else """import json,time
+from pathlib import Path
+def huninSmokeHotspot():
+    cpu_start=time.thread_time()
+    wall_start=time.perf_counter()
+    x=1
+    iterations=0
+    while time.thread_time()-cpu_start<0.6:
+        for n in range(10000):
+            x=((x^n)*1664525+1013904223)&0xffffffff
+        iterations+=10000
+    window={'function':'huninSmokeHotspot','thread_cpu_seconds':time.thread_time()-cpu_start,'wall_seconds':time.perf_counter()-wall_start,'iterations':iterations}
+    return x,window
+value,window=huninSmokeHotspot()
+Path(__file__).with_name('workload.json').write_text(json.dumps(window))
+print(value)
+""")
             command = [executable, str(source)]
             if runtime != "graalpy":
                 env["HUNIN_VMPROF_PYTHON"] = executable
@@ -86,6 +106,11 @@ def main():
         result = json.loads(execute([binary, "--data-dir", str(data), "run", "--runtime", runtime,
                                      "--cwd", str(work), "--timeout", "45", "--", *command], env=env))
         run = result["run"]
+        workload = None
+        if runtime in ("cpython", "pypy", "python-cpu"):
+            workload = json.loads((work / "workload.json").read_text())
+            if workload["thread_cpu_seconds"] < 0.6:
+                raise RuntimeError(f"Python control did not complete its measured CPU budget: {workload}")
         if run["status"] != "completed" or run["correctness"]["passed"] is not True:
             raise RuntimeError(f"recording did not complete correctly: {result}")
         if runtime == "go-trace":
@@ -103,6 +128,8 @@ def main():
         evidence={"host": platform.platform(), "architecture": platform.machine(),
                           "runtime": runtime, "runtime_version": run["source"].get("runtime_version"),
                           "run_id":run["id"],"summary": result["summary"], "diagnostics": run["diagnostics"]}
+        if workload is not None:
+            evidence["workload"] = workload
         if args.output:
             (work / "evidence.json").write_text(json.dumps(evidence,indent=2))
             (work / "run.json").write_text(json.dumps(result,indent=2))

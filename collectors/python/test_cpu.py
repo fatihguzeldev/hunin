@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 import os
 import signal
 from pathlib import Path
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -63,32 +65,67 @@ class CpuProgressTest(unittest.TestCase):
                     child.kill();child.wait()
 
     def capture(self, source):
-        with tempfile.TemporaryDirectory(prefix="hunin-cpu-progress-") as directory:
+        evidence = os.environ.get("HUNIN_PYTHON_CPU_EVIDENCE")
+        if evidence:
+            root = Path(evidence).resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            directory = tempfile.mkdtemp(prefix=self._testMethodName + "-", dir=root)
+            capture_directory = nullcontext(directory)
+        else:
+            capture_directory = tempfile.TemporaryDirectory(prefix="hunin-cpu-progress-")
+        with capture_directory as directory:
             work = Path(directory)
             script = work / "work.py"
             script.write_text(source)
             raw = work / "cpu.pythoncpu.jsonl"
             result = subprocess.run([sys.executable, str(HERE / "cpu.py"), str(raw), "--", str(script)],
                                     capture_output=True, text=True, timeout=30)
+            (work / "stdout.txt").write_text(result.stdout)
+            (work / "stderr.txt").write_text(result.stderr)
+            (work / "execution.json").write_text(json.dumps({"command":result.args,"returncode":result.returncode,"interpreter":sys.version}))
+            if evidence:
+                print(f"CPU progress evidence: {work}", file=sys.stderr)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "expected\n")
             rows = [json.loads(line) for line in raw.read_text().splitlines()]
             metadata = json.loads(raw.with_suffix(raw.suffix + ".meta.json").read_text())
+            self.workload = json.loads((work / "workload.json").read_text()) if (work / "workload.json").exists() else None
             self.assertFalse(metadata["errors"])
             return rows, metadata
 
+    def test_failed_capture_preserves_raw_execution_and_target_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="hunin-cpu-evidence-") as directory:
+            with patch.dict(os.environ, {"HUNIN_PYTHON_CPU_EVIDENCE": directory}):
+                with self.assertRaises(AssertionError):
+                    self.capture("print('unexpected stdout')\n")
+            work, = Path(directory).iterdir()
+            self.assertTrue((work / "cpu.pythoncpu.jsonl").is_file())
+            self.assertTrue((work / "cpu.pythoncpu.jsonl.meta.json").is_file())
+            self.assertEqual((work / "stdout.txt").read_text(), "unexpected stdout\n")
+            self.assertEqual((work / "stderr.txt").read_text(), "")
+            self.assertEqual(json.loads((work / "execution.json").read_text())["returncode"], 0)
+            self.assertTrue((work / "work.py").is_file())
+
     def test_measured_cpu_progress_distinguishes_hot_work_idle_and_thread_identity(self):
         rows, metadata = self.capture("""
-import threading,time
+import json,threading,time
+from pathlib import Path
+ready=threading.Barrier(2)
+windows=[]
 def cpu_hot():
-    end=time.perf_counter()+0.45
+    ready.wait()
+    cpu_start=time.thread_time()
+    wall_start=time.perf_counter()
+    end=cpu_start+0.45
     value=1
-    while time.perf_counter()<end:
+    while time.thread_time()<end:
         for n in range(10000): value=(value+n)%10000007
+    windows.append({'native_tid':threading.get_native_id(),'thread_cpu_seconds':time.thread_time()-cpu_start,'wall_start_seconds':wall_start,'wall_end_seconds':time.perf_counter()})
 def idle_wait(): time.sleep(0.5)
 hot=threading.Thread(target=cpu_hot)
 idle=threading.Thread(target=idle_wait)
 hot.start(); idle.start(); cpu_hot(); hot.join(); idle.join()
+Path(__file__).with_name('workload.json').write_text(json.dumps(windows))
 print('expected')
 """)
         samples = [row for row in rows if row["attribution"] == "sample"]
@@ -98,7 +135,10 @@ print('expected')
         self.assertGreater(cpu, 0)
         self.assertLess(idle, cpu * 0.1)
         hot_threads = {row["native_tid"] for row in samples if any(frame["function"] == "cpu_hot" for frame in row["stack"])}
-        self.assertGreaterEqual(len(hot_threads), 2)
+        self.assertGreaterEqual(len(hot_threads), 2, f"captured hot native TIDs: {sorted(hot_threads)}; raw evidence: {os.environ.get('HUNIN_PYTHON_CPU_EVIDENCE', 'not configured')}")
+        self.assertEqual(hot_threads, {window["native_tid"] for window in self.workload})
+        self.assertEqual(len(self.workload), 2)
+        self.assertTrue(all(window["thread_cpu_seconds"] >= 0.45 for window in self.workload))
         self.assertTrue(all(row["thread_ident"] and row["thread_lifetime"] for row in samples))
         self.assertGreaterEqual(metadata["observed_cpu_ns"], metadata["attributed_cpu_ns"])
         self.assertGreater(metadata["attributed_cpu_ns"], 0)
