@@ -103,7 +103,7 @@ def prepare_source(cache, archive, patches):
     return workspace / "source", workspace, identity
 
 
-def build(output, cache, archive=None, toolchain="stable"):
+def build(output, cache, archive=None, toolchain="stable", test_filters=()):
     output = output.parent.resolve() / output.name
     if output.is_symlink():
         raise ValueError(f"Preserving existing native collector symlink: {output}")
@@ -123,6 +123,9 @@ def build(output, cache, archive=None, toolchain="stable"):
     # Build the host explicitly; an inherited cross target must not change the bundle.
     subprocess.run(["cargo", f"+{toolchain}", "build", "--locked", "--release", "--target", host, "-p", MANIFEST["cargo_package"]],
                    cwd=source, env=environment, check=True, timeout=1800)
+    for test_filter in test_filters:
+        subprocess.run(["cargo", f"+{toolchain}", "test", "--locked", "--release", "--target", host, "-p", MANIFEST["cargo_package"], test_filter],
+                       cwd=source, env=environment, check=True, timeout=600)
     binary = target / host / "release" / ("samply.exe" if os.name == "nt" else "samply")
     if not binary.is_file():
         raise ValueError(f"Native collector build produced no executable: {binary}")
@@ -159,11 +162,12 @@ if __name__ == "__main__":
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--archive", type=Path, help="Reuse a local archive after verifying the pinned digest")
     parser.add_argument("--rust-toolchain", default="stable")
+    parser.add_argument("--test-filter", action="append", default=[], help="Run a focused source test filter before publishing the collector")
     parser.add_argument("--github-env", action="store_true")
     args = parser.parse_args()
     if args.github_env and not os.environ.get("GITHUB_ENV"):
         parser.error("--github-env requires a GitHub Actions job environment")
-    binary = build(args.output.absolute(), args.cache.resolve(), args.archive.resolve() if args.archive else None, args.rust_toolchain)
+    binary = build(args.output.absolute(), args.cache.resolve(), args.archive.resolve() if args.archive else None, args.rust_toolchain, args.test_filter)
     if args.github_env:
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
             environment.write(f"HUNIN_SAMPLY={binary}\n")

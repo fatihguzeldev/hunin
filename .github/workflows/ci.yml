@@ -120,7 +120,7 @@ jobs:
       - name: Build pinned native lifetime collector
         if: always() && steps.build.outcome == 'success'
         id: samply
-        run: python collectors/native/build.py --output "collectors/native/bin/samply${{ runner.os == 'Windows' && '.exe' || '' }}" --cache "${{ runner.temp }}/hunin-native-cache" --github-env
+        run: python collectors/native/build.py --output "collectors/native/bin/samply${{ runner.os == 'Windows' && '.exe' || '' }}" --cache "${{ runner.temp }}/hunin-native-cache" --github-env ${{ runner.os == 'Windows' && '--test-filter=windows::sample_correlation --test-filter=sample_stack_tests' || '' }}
       - name: Enable process profiling in the ephemeral Linux runner
         if: always() && runner.os == 'Linux' && steps.build.outcome == 'success'
         run: sudo sysctl kernel.perf_event_paranoid=1

@@ -1,0 +1,712 @@
+diff --git a/samply/src/windows/mod.rs b/samply/src/windows/mod.rs
+--- a/samply/src/windows/mod.rs
++++ b/samply/src/windows/mod.rs
+@@ -12,6 +12,7 @@
+ pub mod profiler;
+ mod utility_process;
+ mod winutils;
++mod sample_correlation;
+ mod startup;
+ mod xperf;
+ mod xperf_session;
+diff --git a/samply/src/windows/profile_context.rs b/samply/src/windows/profile_context.rs
+--- a/samply/src/windows/profile_context.rs
++++ b/samply/src/windows/profile_context.rs
+@@ -37,11 +37,15 @@
+ };
+ 
+ /// An on- or off-cpu-sample for which the user stack is not known yet.
+-/// Consumed once the user stack arrives.
++/// Consumed by the stack for this original timestamp, or preserved as an
++/// observed instruction-pointer leaf if that stack never arrives.
+ #[derive(Debug, Clone)]
+ pub struct SampleWithPendingStack {
+     /// The timestamp of the SampleProf or CSwitch event
+     pub timestamp: u64,
++    pub pid: u32,
++    pub tid: u32,
++    pub instruction_pointer: Option<u64>,
+     /// Starts out as None. Once we encounter the kernel stack (if any), we put it here.
+     pub kernel_stack: Option<Vec<StackFrame>>,
+     pub off_cpu_sample_group: Option<OffCpuSampleGroup>,
+@@ -1076,6 +1080,7 @@
+     }
+ 
+     pub fn handle_thread_end(&mut self, timestamp_raw: u64, pid: u32, tid: u32) {
++        self.flush_pending_thread(tid, timestamp_raw);
+         let Some(thread) = self.threads.get_by_tid(tid) else {
+             return;
+         };
+@@ -1171,6 +1176,7 @@
+     pub fn handle_stack_x86(
+         &mut self,
+         timestamp_raw: u64,
++        emitted_timestamp_raw: u64,
+         pid: u32,
+         tid: u32,
+         stack_len: usize,
+@@ -1192,21 +1198,29 @@
+         }));
+ 
+         match first_frame_stack_mode {
+-            StackMode::Kernel => self.handle_kernel_stack(timestamp_raw, pid, tid, stack),
+-            StackMode::User => self.handle_user_stack(timestamp_raw, pid, tid, stack),
++            StackMode::Kernel => {
++                self.handle_kernel_stack(timestamp_raw, emitted_timestamp_raw, pid, tid, stack)
++            }
++            StackMode::User => {
++                self.handle_user_stack(timestamp_raw, emitted_timestamp_raw, pid, tid, stack)
++            }
+         }
+     }
+ 
+     fn handle_kernel_stack(
+         &mut self,
+         timestamp_raw: u64,
++        emitted_timestamp_raw: u64,
+         pid: u32,
+         tid: u32,
+         stack: Vec<StackFrame>,
+     ) {
+-        let Some(thread) = self.threads.get_by_tid(tid) else {
+-            return;
+-        };
++        let Some(thread) = self.threads.get_by_tid_and_timestamp(tid, timestamp_raw) else {
++            return;
++        };
++        if thread.process_id != pid {
++            return;
++        }
+         let Some(index) = thread
+             .samples_with_pending_stacks
+             .iter_mut()
+@@ -1227,8 +1241,41 @@
+             let sample_info = thread.samples_with_pending_stacks.remove(index).unwrap();
+             let thread_handle = thread.handle;
+             let thread_label_frame = thread.label_frame.clone();
++            let kernel_leaf = match sample_info
++                .kernel_stack
++                .as_ref()
++                .and_then(|stack| stack.first())
++            {
++                Some(StackFrame::InstructionPointer(ip, _)) => Some(*ip),
++                _ => None,
++            };
++            let is_user = sample_info
++                .instruction_pointer
++                .map(|ip| self.address_classifier.get_stack_mode(ip) == StackMode::User)
++                .unwrap_or(false);
++            if !super::sample_correlation::leaf_matches(
++                sample_info.instruction_pointer,
++                is_user,
++                None,
++                kernel_leaf,
++            ) {
++                self.consume_missing_stack(
++                    sample_info,
++                    thread_handle,
++                    thread_label_frame,
++                    Some((timestamp_raw, emitted_timestamp_raw)),
++                    "matching_timestamp_instruction_pointer_mismatch",
++                );
++                return;
++            }
++            self.record_sample_stack(
++                &sample_info,
++                "kernel_stack_only",
++                Some((timestamp_raw, emitted_timestamp_raw)),
++                0,
++                "system_process_has_no_user_stack",
++            );
+             self.consume_sample(
+-                pid,
+                 sample_info,
+                 UnresolvedStackHandle::EMPTY,
+                 thread_handle,
+@@ -1240,53 +1287,168 @@
+     fn handle_user_stack(
+         &mut self,
+         timestamp_raw: u64,
++        emitted_timestamp_raw: u64,
+         pid: u32,
+         tid: u32,
+         user_stack: Vec<StackFrame>,
+     ) {
+-        let Some(thread) = self.threads.get_by_tid(tid) else {
+-            return;
+-        };
+-
+-        // User stacks always come last. Consume any samples with pending stacks with matching timestamp.
+-        let user_stack_index = self.unresolved_stacks.convert(user_stack.into_iter().rev());
+-
+-        // the number of pending stacks at or before our timestamp
+-        let num_samples_with_pending_stacks = thread
+-            .samples_with_pending_stacks
+-            .iter()
+-            .take_while(|s| s.timestamp <= timestamp_raw)
+-            .count();
+-
+-        let samples_with_pending_stacks: VecDeque<_> = thread
+-            .samples_with_pending_stacks
+-            .drain(..num_samples_with_pending_stacks)
+-            .collect();
+-
++        let Some(thread) = self.threads.get_by_tid_and_timestamp(tid, timestamp_raw) else {
++            return;
++        };
++        if thread.process_id != pid {
++            return;
++        }
++        let ready = super::sample_correlation::take_ready(
++            &mut thread.samples_with_pending_stacks,
++            timestamp_raw,
++            |sample| sample.timestamp,
++        );
+         let thread_handle = thread.handle;
+-        let thread_label_frame = thread.label_frame.clone();
+-
+-        // Use this user stack for all pending stacks from this thread.
+-        for sample_info in samples_with_pending_stacks {
+-            self.consume_sample(
+-                pid,
+-                sample_info,
+-                user_stack_index,
+-                thread_handle,
+-                thread_label_frame.clone(),
++        let label = thread.label_frame.clone();
++        let user_leaf = match user_stack.first() {
++            Some(StackFrame::InstructionPointer(ip, _)) => Some(*ip),
++            _ => None,
++        };
++        let user_depth = user_stack.len();
++        let user_index = self.unresolved_stacks.convert(user_stack.into_iter().rev());
++        if !ready.iter().any(|(_, exact)| *exact) {
++            self.profile.hunin_record(serde_json::json!({
++                "kind": "sampling", "event": "unmatched_user_stack",
++                "pid": pid, "tid": tid,
++                "time_ms": self.timestamp_converter.convert_time(timestamp_raw),
++                "raw_timestamp": timestamp_raw.to_string(),
++                "stack_emitted_raw_timestamp": emitted_timestamp_raw.to_string(),
++                "reason": "no pending sample with this original event timestamp"
++            }));
++        }
++        for (sample, exact) in ready {
++            let kernel_leaf = match sample.kernel_stack.as_ref().and_then(|stack| stack.first()) {
++                Some(StackFrame::InstructionPointer(ip, _)) => Some(*ip),
++                _ => None,
++            };
++            let is_user = sample
++                .instruction_pointer
++                .map(|ip| self.address_classifier.get_stack_mode(ip) == StackMode::User)
++                .unwrap_or(true);
++            let consistent = super::sample_correlation::leaf_matches(
++                sample.instruction_pointer,
++                is_user,
++                user_leaf,
++                kernel_leaf,
+             );
++            if exact && consistent {
++                self.record_sample_stack(
++                    &sample,
++                    "matched_user_stack",
++                    Some((timestamp_raw, emitted_timestamp_raw)),
++                    user_depth,
++                    "exact_original_timestamp_and_instruction_pointer",
++                );
++                self.consume_sample(sample, user_index, thread_handle, label.clone());
++            } else {
++                self.consume_missing_stack(
++                    sample,
++                    thread_handle,
++                    label.clone(),
++                    Some((timestamp_raw, emitted_timestamp_raw)),
++                    if exact {
++                        "matching_timestamp_instruction_pointer_mismatch"
++                    } else {
++                        "later_user_stack_not_applied"
++                    },
++                );
++            }
++        }
++    }
++
++    fn record_sample_stack(
++        &mut self,
++        sample: &SampleWithPendingStack,
++        basis: &str,
++        stack: Option<(u64, u64)>,
++        depth: usize,
++        reason: &str,
++    ) {
++        self.profile.hunin_record(serde_json::json!({
++            "kind": "sampling", "event": "sample_stack",
++            "pid": sample.pid, "tid": sample.tid,
++            "time_ms": self.timestamp_converter.convert_time(sample.timestamp),
++            "raw_timestamp": sample.timestamp.to_string(),
++            "instruction_pointer": sample.instruction_pointer.map(|ip| format!("0x{ip:x}")),
++            "sample_class": if sample.has_on_cpu_sample { "on_cpu" } else { "off_cpu" },
++            "stack_capture_basis": basis, "user_stack_depth": depth,
++            "stack_event_raw_timestamp": stack.map(|pair| pair.0.to_string()),
++            "stack_emitted_raw_timestamp": stack.map(|pair| pair.1.to_string()),
++            "kernel_stack_available": sample.kernel_stack.is_some(), "reason": reason
++        }));
++    }
++
++    fn consume_missing_stack(
++        &mut self,
++        mut sample: SampleWithPendingStack,
++        handle: ThreadHandle,
++        label: FrameInfo,
++        trigger: Option<(u64, u64)>,
++        reason: &str,
++    ) {
++        // ARM64's dedicated StackWalk handler emits its samples directly.
++        // Its old pending queue is not the x86 deferred-sample path.
++        if self.is_arm64() {
++            return;
++        }
++        let basis = if sample.instruction_pointer.is_some() {
++            "sampled_instruction_pointer_only"
++        } else if sample.kernel_stack.is_some() {
++            "kernel_stack_only"
++        } else {
++            "missing_stack"
++        };
++        self.record_sample_stack(&sample, basis, trigger, 0, reason);
++        let stack = if let Some(ip) = sample.instruction_pointer {
++            // A leaf is observed independently from StackWalk. Do not invent a
++            // caller chain by appending a different stack snapshot to it.
++            sample.kernel_stack = None;
++            self.unresolved_stacks
++                .convert(std::iter::once(StackFrame::InstructionPointer(
++                    ip,
++                    self.address_classifier.get_stack_mode(ip),
++                )))
++        } else {
++            UnresolvedStackHandle::EMPTY
++        };
++        self.consume_sample(sample, stack, handle, label);
++    }
++
++    fn flush_pending_thread(&mut self, tid: u32, timestamp: u64) {
++        let Some(thread) = self.threads.get_by_tid_and_timestamp(tid, timestamp) else {
++            return;
++        };
++        let pending = std::mem::take(&mut thread.samples_with_pending_stacks);
++        let handle = thread.handle;
++        let label = thread.label_frame.clone();
++        for sample in pending {
++            self.consume_missing_stack(
++                sample,
++                handle,
++                label.clone(),
++                None,
++                "thread_end_without_matching_user_stack",
++            );
+         }
+     }
+ 
+     fn consume_sample(
+         &mut self,
+-        pid: u32,
+         sample_info: SampleWithPendingStack,
+         user_stack_index: UnresolvedStackHandle,
+         thread_handle: ThreadHandle,
+         thread_label_frame: FrameInfo,
+     ) {
+-        let Some(process) = self.processes.get_by_pid(pid) else {
++        let pid = sample_info.pid;
++        let Some(process) = self
++            .processes
++            .get_by_pid_and_timestamp(pid, sample_info.timestamp)
++        else {
+             return;
+         };
+         let SampleWithPendingStack {
+@@ -1296,6 +1458,7 @@
+             mut cpu_delta,
+             has_on_cpu_sample,
+             per_cpu_stuff,
++            ..
+         } = sample_info;
+         let timestamp = self.timestamp_converter.convert_time(timestamp_raw);
+ 
+@@ -1380,8 +1543,14 @@
+         self.stack_sample_count += 1;
+     }
+ 
+-    pub fn handle_sample(&mut self, timestamp_raw: u64, tid: u32, cpu_index: u32) {
+-        let Some(thread) = self.threads.get_by_tid(tid) else {
++    pub fn handle_sample(
++        &mut self,
++        timestamp_raw: u64,
++        tid: u32,
++        cpu_index: u32,
++        instruction_pointer: Option<u64>,
++    ) {
++        let Some(thread) = self.threads.get_by_tid_and_timestamp(tid, timestamp_raw) else {
+             return;
+         };
+ 
+@@ -1420,6 +1589,9 @@
+             .samples_with_pending_stacks
+             .push_back(SampleWithPendingStack {
+                 timestamp: timestamp_raw,
++                pid: thread.process_id,
++                tid,
++                instruction_pointer,
+                 kernel_stack: None,
+                 off_cpu_sample_group,
+                 cpu_delta,
+@@ -1684,6 +1856,9 @@
+                     .samples_with_pending_stacks
+                     .push_back(SampleWithPendingStack {
+                         timestamp: timestamp_raw,
++                        pid: new_thread.process_id,
++                        tid: new_tid,
++                        instruction_pointer: None,
+                         kernel_stack: None,
+                         off_cpu_sample_group: Some(off_cpu_sample_group),
+                         cpu_delta,
+@@ -2075,6 +2250,29 @@
+     }
+ 
+     pub fn finish(mut self) -> Profile {
++        let pending = self
++            .threads
++            .threads
++            .iter_mut()
++            .map(|thread| {
++                (
++                    thread.handle,
++                    thread.label_frame.clone(),
++                    std::mem::take(&mut thread.samples_with_pending_stacks),
++                )
++            })
++            .collect::<Vec<_>>();
++        for (handle, label, samples) in pending {
++            for sample in samples {
++                self.consume_missing_stack(
++                    sample,
++                    handle,
++                    label.clone(),
++                    None,
++                    "trace_end_without_matching_user_stack",
++                );
++            }
++        }
+         // Push queued samples into the profile.
+         // We queue them so that we can get symbolicated JIT function names. To get symbolicated JIT function names,
+         // we have to call profile.add_sample after we call profile.set_lib_symbol_table, and we don't have the
+@@ -2301,3 +2499,169 @@
+         None => path,
+     }
+ }
++
++#[cfg(test)]
++mod sample_stack_tests {
++    use super::*;
++    use fxprof_processed_profile::ReferenceTimestamp;
++
++    #[test]
++    fn observed_ip_survives_future_stack_thread_end_and_trace_end() {
++        Profile::enable_hunin_lifetimes();
++        let profile = Profile::new(
++            "sample correlation",
++            ReferenceTimestamp::from_millis_since_unix_epoch(0.0),
++            SamplingInterval::from_millis(1),
++        );
++        let props = ProfileCreationProps {
++            profile_name: None,
++            fallback_profile_name: "sample correlation".into(),
++            main_thread_only: false,
++            reuse_threads: false,
++            fold_recursive_prefix: false,
++            unlink_aux_files: false,
++            create_per_cpu_threads: false,
++            arg_count_to_include_in_process_name: 0,
++            override_arch: None,
++            unstable_presymbolicate: false,
++            coreclr: Default::default(),
++            unknown_event_markers: false,
++            time_range: None,
++            should_emit_jit_markers: false,
++            should_emit_cswitch_markers: false,
++        };
++        let arm_props = props.clone();
++        let mut context = ProfileContext::new(profile, "x86_64", None, props);
++        context.handle_header(4706700000, 10_000_000, 1);
++        context.handle_process_start(4706700000, 4660, 1, "cpu.exe".into(), "cpu.exe".into());
++        context.handle_thread_start(4706700000, 8384, 4660, Some("main".into()));
++        // Real failing ETL excerpt: missing hot stacks, followed by an exit
++        // stack whose EventTimeStamp refers only to the later sampled event.
++        let hot = [(4706798499, 0x6da960), (4710978892, 0x6da95a)];
++        for (time, ip) in hot {
++            context.handle_sample(time, 8384, 0, Some(ip));
++        }
++        let exit_time = 4710984583;
++        context.handle_sample(exit_time, 8384, 0, Some(0x7ffcbbadc110));
++        context.handle_stack_x86(
++            exit_time,
++            exit_time + 20,
++            4660,
++            8384,
++            2,
++            [0x7ffcbbadc110, 0x7ffcbc0c4b61].into_iter(),
++        );
++        // Even an equal timestamp must not attach a contradictory user leaf.
++        context.handle_sample(exit_time + 100, 8384, 0, Some(0x6da956));
++        context.handle_stack_x86(
++            exit_time + 100,
++            exit_time + 120,
++            4660,
++            8384,
++            2,
++            [0x7ffcbbadc110, 0x7ffcbc0c4b61].into_iter(),
++        );
++        context.handle_sample(exit_time + 200, 8384, 0, Some(0x6da94c));
++        context.handle_thread_end(exit_time + 300, 4660, 8384);
++        // Reused TID must not revive the previous lifetime's flushed sample.
++        context.handle_thread_start(exit_time + 400, 8384, 4660, Some("replacement".into()));
++        context.handle_stack_x86(
++            exit_time + 200,
++            exit_time + 420,
++            4660,
++            8384,
++            2,
++            [0x6da94c, 0x7ffcbc0c4b61].into_iter(),
++        );
++        context.handle_sample(exit_time + 500, 8384, 0, Some(0x6da95d));
++        // PID4 consumes kernel stacks immediately; it must preserve a
++        // contradictory original IP just like an ordinary user process.
++        context.handle_process_start(exit_time + 600, 4, 1, "System".into(), "System".into());
++        context.handle_thread_start(exit_time + 600, 1000, 4, Some("system".into()));
++        context.handle_sample(exit_time + 700, 1000, 0, Some(0xfffff80097e8f569));
++        context.handle_stack_x86(
++            exit_time + 700,
++            exit_time + 720,
++            4,
++            1000,
++            2,
++            [0xfffff800982b62b4, 0xfffff800982b6424].into_iter(),
++        );
++        let profile = context.finish();
++        let evidence = profile.hunin_lifetime_data();
++        let samples = evidence["events"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .filter(|event| event["event"] == "sample_stack")
++            .collect::<Vec<_>>();
++        assert_eq!(samples.len(), 7);
++        assert_eq!(
++            samples
++                .iter()
++                .filter(|event| event["stack_capture_basis"] == "matched_user_stack")
++                .count(),
++            1
++        );
++        assert_eq!(
++            samples
++                .iter()
++                .filter(|event| event["stack_capture_basis"] == "sampled_instruction_pointer_only")
++                .count(),
++            6
++        );
++        assert!(samples
++            .iter()
++            .any(|event| event["reason"] == "matching_timestamp_instruction_pointer_mismatch"));
++        assert!(samples
++            .iter()
++            .any(|event| event["reason"] == "thread_end_without_matching_user_stack"));
++        assert!(samples
++            .iter()
++            .any(|event| event["reason"] == "trace_end_without_matching_user_stack"));
++        let json = serde_json::to_value(&profile).unwrap();
++        let mut hot_count = 0;
++        for thread in json["threads"].as_array().unwrap() {
++            for (sample_index, time) in thread["samples"]["time"]
++                .as_array()
++                .unwrap()
++                .iter()
++                .enumerate()
++            {
++                let event = samples
++                    .iter()
++                    .find(|event| event["time_ms"] == *time)
++                    .unwrap();
++                if event["stack_capture_basis"] != "sampled_instruction_pointer_only" {
++                    continue;
++                }
++                let stack = thread["samples"]["stack"][sample_index].as_u64().unwrap() as usize;
++                let frame = thread["stackTable"]["frame"][stack].as_u64().unwrap() as usize;
++                let function = thread["frameTable"]["func"][frame].as_u64().unwrap() as usize;
++                let name = thread["funcTable"]["name"][function].as_u64().unwrap() as usize;
++                assert_eq!(thread["stringArray"][name], event["instruction_pointer"]);
++                assert!(
++                    thread["stackTable"]["prefix"][stack].is_null(),
++                    "IP-only evidence must not gain caller frames"
++                );
++                hot_count += 1;
++            }
++        }
++        assert_eq!(hot_count, 6);
++        let arm_profile = Profile::new(
++            "ARM64",
++            ReferenceTimestamp::from_millis_since_unix_epoch(0.0),
++            SamplingInterval::from_millis(1),
++        );
++        let mut arm = ProfileContext::new(arm_profile, "arm64", None, arm_props);
++        arm.handle_process_start(0, 10, 1, "arm.exe".into(), "arm.exe".into());
++        arm.handle_thread_start(0, 10, 10, None);
++        arm.handle_sample(1000, 10, 0, Some(0x1234));
++        arm.handle_stack_arm64(1000, 10, 10, [0x1234, 0x4567].into_iter());
++        let arm = serde_json::to_value(arm.finish()).unwrap();
++        assert_eq!(
++            arm["threads"][0]["samples"]["length"], 1,
++            "ARM64's direct sample must not be emitted again by EOF fallback"
++        );
++    }
++}
+diff --git a/samply/src/windows/etw_gecko.rs b/samply/src/windows/etw_gecko.rs
+--- a/samply/src/windows/etw_gecko.rs
++++ b/samply/src/windows/etw_gecko.rs
+@@ -224,8 +224,9 @@
+ 
+                 let tid: u32 = parser.parse("StackThread");
+                 let pid: u32 = parser.parse("StackProcess");
+-                // The EventTimeStamp here indicates thea ccurate time the stack was collected, and
+-                // not the time the ETW event was emitted (which is in the header). Use it instead.
++                // StackWalk.EventTimeStamp references the original sampled event;
++                // the header timestamp is only when StackWalk was emitted. Keep
++                // both, and never apply this stack to an earlier sample.
+                 let referenced_timestamp_raw: u64 = parser.parse("EventTimeStamp");
+                 let stack_len = parser.buffer.len() / 8;
+                 let stack_address_iter = parser
+@@ -242,6 +243,7 @@
+                 } else {
+                     context.handle_stack_x86(
+                         referenced_timestamp_raw,
++                        timestamp_raw,
+                         pid,
+                         tid,
+                         stack_len,
+@@ -255,7 +257,8 @@
+                 }
+                 let tid: u32 = parser.parse("ThreadId");
+                 let cpu = u32::from(unsafe { e.BufferContext.Anonymous.ProcessorIndex });
+-                context.handle_sample(timestamp_raw, tid, cpu);
++                let instruction_pointer: Address = parser.parse("InstructionPointer");
++                context.handle_sample(timestamp_raw, tid, cpu, Some(instruction_pointer.as_u64()));
+             }
+             "MSNT_SystemTrace/PageFault/DemandZeroFault" => {
+                 if !context.is_in_time_range(timestamp_raw) {
+@@ -267,7 +270,7 @@
+ 
+                 let tid: u32 = s.thread_id();
+                 let cpu = u32::from(unsafe { e.BufferContext.Anonymous.ProcessorIndex });
+-                context.handle_sample(timestamp_raw, tid, cpu);
++                context.handle_sample(timestamp_raw, tid, cpu, None);
+             }
+             "MSNT_SystemTrace/PageFault/VirtualAlloc"
+             | "MSNT_SystemTrace/PageFault/VirtualFree" => {
+diff --git a/samply/src/windows/sample_correlation.rs b/samply/src/windows/sample_correlation.rs
+new file mode 100644
+--- /dev/null
++++ b/samply/src/windows/sample_correlation.rs
+@@ -0,0 +1,95 @@
++//! Correlate StackWalk only with its original event timestamp.
++use std::collections::VecDeque;
++
++pub(super) fn take_ready<T>(
++    pending: &mut VecDeque<T>,
++    stack_timestamp: u64,
++    timestamp: impl Fn(&T) -> u64,
++) -> Vec<(T, bool)> {
++    let mut ready = Vec::new();
++    let mut future = VecDeque::new();
++    while let Some(sample) = pending.pop_front() {
++        let original = timestamp(&sample);
++        if original <= stack_timestamp {
++            ready.push((sample, original == stack_timestamp));
++        } else {
++            future.push_back(sample);
++        }
++    }
++    *pending = future;
++    ready
++}
++
++pub(super) fn leaf_matches(
++    original_ip: Option<u64>,
++    is_user: bool,
++    user_leaf: Option<u64>,
++    kernel_leaf: Option<u64>,
++) -> bool {
++    match original_ip {
++        None => true,
++        Some(ip) => Some(ip) == if is_user { user_leaf } else { kernel_leaf },
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn future_exit_stack_never_replaces_earlier_hot_sample_ips() {
++        // Excerpt of retained Windows ETL: Go's actual CPU IPs have no user
++        // StackWalk; the later RPCRT4 exit stack must only match its own event.
++        let hot: [(u64, u64); 3] = [
++            (4706798499, 0x6da960),
++            (4706808483, 0x6da94c),
++            (4710978892, 0x6da95a),
++        ];
++        let exit = (4710984583, 0x7ffcbbadc110);
++        let future = (4710994583, 0x6da956);
++        let mut pending = VecDeque::from([hot[0], hot[1], hot[2], exit, future]);
++        let ready = take_ready(&mut pending, exit.0, |sample| sample.0);
++        assert_eq!(
++            ready
++                .iter()
++                .filter(|(_, exact)| *exact)
++                .map(|(sample, _)| *sample)
++                .collect::<Vec<_>>(),
++            vec![exit]
++        );
++        assert_eq!(
++            ready
++                .iter()
++                .filter(|(_, exact)| !*exact)
++                .map(|(sample, _)| *sample)
++                .collect::<Vec<_>>(),
++            hot
++        );
++        assert_eq!(pending, VecDeque::from([future]));
++        let eof = take_ready(&mut pending, u64::MAX, |sample| sample.0);
++        assert_eq!(eof, vec![(future, false)]);
++        assert!(pending.is_empty());
++        assert!(take_ready(&mut pending, hot[0].0, |sample| sample.0).is_empty());
++    }
++    #[test]
++    fn equal_timestamp_different_user_ip_retains_original_leaf() {
++        assert!(!leaf_matches(
++            Some(0x6da960),
++            true,
++            Some(0x7ffcbbadc110),
++            None
++        ));
++        assert!(leaf_matches(Some(0x6da960), true, Some(0x6da960), None));
++        assert!(leaf_matches(
++            Some(0xfffff80097e8f569),
++            false,
++            Some(0x6da960),
++            Some(0xfffff80097e8f569)
++        ));
++        assert!(!leaf_matches(
++            Some(0xfffff80097e8f569),
++            false,
++            Some(0x6da960),
++            None
++        ));
++    }
++}
