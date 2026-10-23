@@ -12,6 +12,7 @@ use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -33,11 +34,13 @@ pub struct BinarySnapshot {
 #[derive(Debug, Clone)]
 pub struct ImportedProfile {
     pub source: PathBuf,
+    pub raw_sha256: String,
     pub format: String,
     pub records: Vec<Value>,
     pub diagnostics: Vec<String>,
     pub input_fingerprint: String,
     pub sidecars: Vec<PathBuf>,
+    pub sidecar_sha256: BTreeMap<PathBuf, String>,
     pub source_snapshots: Vec<SourceSnapshot>,
     pub binary_snapshots: Vec<BinarySnapshot>,
     pub native_image_context: Option<Value>,
@@ -80,6 +83,7 @@ fn import_inner(
                 .as_bytes(),
         );
     }
+    let mut sidecar_sha256 = BTreeMap::new();
     for sidecar in &sidecars {
         digest.update([0]);
         digest.update(
@@ -89,7 +93,9 @@ fn import_inner(
                 .to_string_lossy()
                 .as_bytes(),
         );
-        digest.update(fs::read(sidecar)?);
+        let content = fs::read(sidecar)?;
+        sidecar_sha256.insert(sidecar.clone(), format!("{:x}", Sha256::digest(&content)));
+        digest.update(content);
     }
     let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
         let mut decoded = Vec::new();
@@ -172,11 +178,13 @@ fn import_inner(
         .unwrap_or_default();
     Ok(ImportedProfile {
         source: path.to_owned(),
+        raw_sha256,
         format: format.to_owned(),
         records,
         diagnostics,
         input_fingerprint: key,
         sidecars,
+        sidecar_sha256,
         source_snapshots: scripts
             .map(javascript_sources::Scripts::into_snapshots)
             .unwrap_or_default(),
