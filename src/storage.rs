@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -27,6 +27,17 @@ impl Store {
         store
             .connection()?
             .execute_batch(include_str!("storage/schema.sql"))?;
+        let c = store.connection()?;
+        let columns: Vec<String> = c
+            .prepare("PRAGMA table_info(artifacts)")?
+            .query_map([], |r| r.get(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !columns.iter().any(|name| name == "sha256") {
+            c.execute_batch("ALTER TABLE artifacts ADD COLUMN sha256 TEXT; UPDATE artifacts SET sha256=json_extract(metadata,'$.sha256');")?;
+        }
+        c.execute_batch(
+            "CREATE INDEX IF NOT EXISTS artifact_blob ON artifacts(sha256); PRAGMA user_version=1;",
+        )?;
         Ok(store)
     }
 
@@ -85,6 +96,17 @@ impl Store {
             .query_map([run_id], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         ingestion::validate(run_id, records, &existing)?;
+        let existing_rows: HashMap<String, Value> = tx
+            .prepare("SELECT id,record FROM observations WHERE run_id=?1")?
+            .query_map([run_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .map(|row| {
+                let (id, text) = row?;
+                Ok((id, serde_json::from_str(&text)?))
+            })
+            .collect::<Result<_>>()?;
+        ingestion::validate_ownership(records, &existing_rows)?;
         let result_id = uuid::Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO result_sets(id,run_id,input_identity) VALUES(?1,?2,?3)",
@@ -134,8 +156,17 @@ impl Store {
         } else if fs::read(&dest)? != bytes {
             bail!("artifact identity mismatch");
         }
+        let name = source
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let reference_id = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(&sha256, &name, format))?)
+        );
         let artifact = Artifact {
-            id: sha256.clone(),
+            id: reference_id,
             name: source
                 .file_name()
                 .unwrap_or_default()
@@ -146,8 +177,13 @@ impl Store {
             format: format.into(),
         };
         tx.execute(
-            "INSERT OR IGNORE INTO artifacts(run_id,id,metadata) VALUES(?1,?2,?3)",
-            params![run_id, artifact.id, serde_json::to_string(&artifact)?],
+            "INSERT OR IGNORE INTO artifacts(run_id,id,metadata,sha256) VALUES(?1,?2,?3,?4)",
+            params![
+                run_id,
+                artifact.id,
+                serde_json::to_string(&artifact)?,
+                artifact.sha256
+            ],
         )?;
         tx.commit()?;
         Ok(artifact)
@@ -187,10 +223,11 @@ impl Store {
         // same write lock, so a concurrent new reference cannot lose its bytes.
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for a in candidates {
-            let referenced: i64 =
-                tx.query_row("SELECT COUNT(*) FROM artifacts WHERE id=?1", [&a.id], |r| {
-                    r.get(0)
-                })?;
+            let referenced: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM artifacts WHERE sha256=?1",
+                [&a.sha256],
+                |r| r.get(0),
+            )?;
             if referenced == 0 {
                 let path = self.root.join("artifacts").join(a.sha256);
                 if path.exists() {

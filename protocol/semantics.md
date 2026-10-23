@@ -9,6 +9,8 @@ checked atomically for the entire submitted result set.
 IDs must be unique within a run. Repeating an unchanged accepted input does not
 publish it twice. References (`parent_id`, `context_id`, relationship endpoints and
 evidence) address records in the same run, including records in the same batch.
+`parent_id` points to a span and `context_id` to a context. These ownership chains
+are acyclic. Relationship edges can express a graph and have no tree constraint.
 
 `timestamp_us` and `duration_us` use integer microseconds, capped at JavaScript's
 safe integer range. The default timestamp clock is Unix epoch. A source using an

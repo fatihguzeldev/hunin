@@ -66,3 +66,38 @@ fn shared_raw_artifacts_survive_removing_one_run() {
         b"immutable input"
     );
 }
+
+#[test]
+fn distinct_artifact_names_share_bytes_without_losing_their_roles() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let stdout = root.path().join("stdout.txt");
+    let stderr = root.path().join("stderr.txt");
+    std::fs::write(&stdout, b"").unwrap();
+    std::fs::write(&stderr, b"").unwrap();
+    let a = store.add_artifact("run-1", &stdout, "stdout").unwrap();
+    let b = store.add_artifact("run-1", &stderr, "stderr").unwrap();
+    assert_eq!(a.sha256, b.sha256);
+    assert_ne!(a.id, b.id);
+    assert_eq!(store.artifacts("run-1").unwrap().len(), 2);
+}
+
+#[test]
+fn references_preserve_kind_and_acyclic_parent_context_ownership() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let mut a = event("a");
+    a["context_id"] = json!("b");
+    let b = event("b");
+    assert!(store.accept("run-1", "bad-context", &[a, b]).is_err());
+    let mut a = event("a");
+    a["kind"] = json!("span");
+    a["duration_us"] = json!(1);
+    a["parent_id"] = json!("b");
+    let mut b = a.clone();
+    b["id"] = json!("b");
+    b["parent_id"] = json!("a");
+    assert!(store.accept("run-1", "parent-cycle", &[a, b]).is_err());
+}

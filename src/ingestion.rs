@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 pub fn validate(run_id: &str, records: &[Value], existing: &HashSet<String>) -> Result<()> {
@@ -41,6 +41,35 @@ pub fn validate(run_id: &str, records: &[Value], existing: &HashSet<String>) -> 
         }
         if record["kind"] == "sample" && record["basis"] != "sampled" {
             bail!("CPU samples must retain sampled basis");
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_ownership(records: &[Value], existing: &HashMap<String, Value>) -> Result<()> {
+    let mut all = existing.clone();
+    all.extend(
+        records
+            .iter()
+            .map(|r| (r["id"].as_str().unwrap().to_owned(), r.clone())),
+    );
+    for record in records {
+        for (field, kind) in [("parent_id", "span"), ("context_id", "context")] {
+            if let Some(id) = record[field].as_str() {
+                if all.get(id).is_none_or(|r| r["kind"] != kind) {
+                    bail!("{field} must reference a {kind}: {id}");
+                }
+            }
+        }
+        for field in ["parent_id", "context_id"] {
+            let mut seen = HashSet::new();
+            let mut current = Some(record);
+            while let Some(row) = current {
+                if !seen.insert(row["id"].as_str().unwrap()) {
+                    bail!("cyclic {field} ownership");
+                }
+                current = row[field].as_str().and_then(|id| all.get(id));
+            }
         }
     }
     Ok(())

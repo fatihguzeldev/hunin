@@ -25,5 +25,6 @@ CREATE TABLE IF NOT EXISTS artifacts (
     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     id TEXT NOT NULL,
     metadata TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
     PRIMARY KEY(run_id,id)
 );
