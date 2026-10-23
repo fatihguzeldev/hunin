@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hunin.dev/protocol/record-v1.schema.json",
+  "title": "Hunin observation v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "id",
+    "run_id",
+    "producer_id",
+    "pid",
+    "tid",
+    "timestamp_us",
+    "basis"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "sample",
+        "span",
+        "event",
+        "metric",
+        "relation",
+        "context"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "producer_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tid": {
+      "type": "string"
+    },
+    "timestamp_us": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "name": {
+      "type": "string"
+    },
+    "duration_us": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "parent_id": {
+      "type": "string"
+    },
+    "context_id": {
+      "type": "string"
+    },
+    "stack": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "function"
+        ],
+        "properties": {
+          "function": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "module": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "code_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "weight": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "weight_unit": {
+      "enum": [
+        "samples",
+        "microseconds",
+        "bytes",
+        "count"
+      ]
+    },
+    "interval_us": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "value": {
+      "type": "number"
+    },
+    "unit": {
+      "type": "string"
+    },
+    "scope": {
+      "enum": [
+        "process",
+        "thread",
+        "context",
+        "run"
+      ]
+    },
+    "from": {
+      "type": "string"
+    },
+    "to": {
+      "type": "string"
+    },
+    "relation": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "basis": {
+      "enum": [
+        "observed",
+        "sampled",
+        "explicit",
+        "derived"
+      ]
+    },
+    "attributes": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "sample"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "stack",
+          "weight",
+          "weight_unit"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "span"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name",
+          "duration_us"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "event"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "metric"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name",
+          "value",
+          "unit",
+          "scope"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "relation"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "from",
+          "to",
+          "relation",
+          "evidence"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "context"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "name"
+        ]
+      }
+    }
+  ]
+}
