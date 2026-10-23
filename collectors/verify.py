@@ -122,6 +122,10 @@ print(value)
             hotspots = json.loads(execute([binary, "--data-dir", str(data), "call", "profiles.hotspots", json.dumps({"run_id": run["id"], "limit": 1000})], env=env))
             if not any(expected in row["function"] for row in hotspots["hotspots"]):
                 raise RuntimeError(f"known source function missing from profile: {hotspots}")
+            if runtime == "go" and not any(expected in row["function"] and
+                    str(row.get("file", "")).replace("\\", "/").endswith("/" + source.name) and
+                    isinstance(row.get("line"), int) and row["line"] > 0 for row in hotspots["hotspots"]):
+                raise RuntimeError(f"ordinary Go executable has no measured hotspot source position: {hotspots}")
         reopened = json.loads(execute([binary, "--data-dir", str(data), "inspect", run["id"]], env=env))
         if reopened["summary"] != result["summary"]:
             raise RuntimeError("accepted profile changed after reopening")
