@@ -264,8 +264,22 @@ async fn locked_python_dependencies_install_into_an_isolated_managed_environment
         &format!("import sys\nassert sys.prefix!=sys.base_prefix\n{RELATION}"),
         json!({"python_requirements":"requirements.lock"}),
     );
-    let started = fixture.start(&analysis, 10.0).await;
-    let accepted = fixture.wait(&started).await;
+    // Real venv/ensurepip setup uses the normal service budget. Its cold-start
+    // time is not the timeout behavior under test.
+    let started = fixture
+        .engine
+        .run(&json!({"run_id":"recording","analysis_id":analysis["id"]}))
+        .await
+        .unwrap();
+    let accepted = tokio::time::timeout(
+        Duration::from_secs(65),
+        fixture
+            .engine
+            .wait(started["result_set_id"].as_str().unwrap()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(accepted["status"], "accepted", "{accepted}");
     assert_eq!(fixture.store.records("recording").unwrap().len(), 3);
 }
