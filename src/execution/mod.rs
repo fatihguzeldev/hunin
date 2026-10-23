@@ -179,6 +179,7 @@ impl Engine {
     ) -> Result<()> {
         let directory = self.store.root().join("captures").join(&run.id);
         fs::create_dir_all(directory.join("sdk"))?;
+        crate::source::retain(&self.store, &mut run)?;
         let capture = CaptureRequest {
             command: run.command.clone(),
             cwd: PathBuf::from(&run.cwd),

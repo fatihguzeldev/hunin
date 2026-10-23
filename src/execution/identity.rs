@@ -51,16 +51,17 @@ pub fn source(cwd: &Path, command: &[String], data_root: Option<&Path>) -> Value
     }
     let executable = command.first().and_then(|s| resolve(s, cwd));
     let executable_hash = executable.as_ref().and_then(|p| file_hash(p).ok());
+    let mut snapshot_complete = true;
+    snapshot(cwd, cwd, data_root, &mut files, &mut snapshot_complete);
     if revision.is_none() {
-        complete = true;
-        snapshot(cwd, cwd, data_root, &mut files, &mut complete);
+        complete = snapshot_complete;
         if files.is_empty() {
             complete = false;
         }
         hash = Sha256::new();
         hash.update(serde_json::to_vec(&files).unwrap());
     }
-    json!({"revision":revision,"dirty":status.as_ref().map(|s|!s.is_empty()),"fingerprint":if complete{format!("{:x}",hash.finalize())}else{"unknown".into()},"source_snapshot_complete":complete,"source_snapshot_scope":if revision.is_some(){"git revision, worktree diff and untracked files"}else{"bounded project source/config files; dependency/build/cache and Hunin data directories excluded"},"source_files":files,"executable":executable,"executable_sha256":executable_hash,"build_source_verified":false,"diagnostic":"Source snapshot identity and launched executable identity are recorded separately; their build relationship and dynamically loaded code are not assumed. Incomplete/absent source snapshots remain unknown."})
+    json!({"revision":revision,"dirty":status.as_ref().map(|s|!s.is_empty()),"fingerprint":if complete{format!("{:x}",hash.finalize())}else{"unknown".into()},"source_snapshot_complete":snapshot_complete,"source_snapshot_scope":"bounded project source/config files; dependency/build/cache and Hunin data directories excluded","source_files":files,"executable":executable,"executable_sha256":executable_hash,"build_source_verified":false,"diagnostic":"Source snapshot identity and launched executable identity are recorded separately; their build relationship and dynamically loaded code are not assumed. Incomplete/absent source snapshots remain unknown."})
 }
 
 fn file_hash(path: &Path) -> std::io::Result<String> {
