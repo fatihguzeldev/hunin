@@ -68,7 +68,25 @@ A span ends on `Drop` or explicit `end()`. Contexts are explicit values that can
 
 ## C and C++
 
-Build and install the C library with CMake. Public headers are `hunin.h` and `hunin.hpp`; link the `hunin_sdk` target and its platform thread dependency. C++ wrappers share the C implementation.
+The bundle includes the C implementation and both public headers, `hunin.h` and `hunin.hpp`. C++ wrappers share the C implementation. A CMake consumer can build the bundled source directly; `hunin_sdk` supplies the include paths and platform thread dependency:
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(my_workload LANGUAGES C CXX)
+add_subdirectory("/absolute/path/to/hunin/sdk/c" "${CMAKE_BINARY_DIR}/hunin-sdk")
+add_executable(my_workload main.cpp)
+target_compile_features(my_workload PRIVATE cxx_std_17)
+target_link_libraries(my_workload PRIVATE hunin_sdk)
+```
+
+For a C application, use `main.c` and omit `target_compile_features`; the SDK implementation uses C11. Build the application with debug information when it will also be sampled automatically:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --config RelWithDebInfo
+```
+
+Run the resulting application through `hunin run --runtime native --cwd /your/project -- /path/to/my_workload` to receive the SDK recording environment. Native CPU sampling additionally needs the profiler and OS permissions described in [installation](installation.md). The SDK remains optional for automatic CPU sampling.
 
 ```c
 hunin_context_t context = hunin_context_new("request");
