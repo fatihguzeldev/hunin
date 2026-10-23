@@ -37,6 +37,7 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
         .context("CPU sampler latency bound missing")?;
     let mut records = Vec::new();
     let mut sample_count = 0;
+    let mut ended_thread_gaps = 0;
     for (index, line) in BufReader::new(fs::File::open(path)?).lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -44,6 +45,10 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
         }
         let row: Value = serde_json::from_str(&line)
             .with_context(|| format!("CPU progress record {}", index + 1))?;
+        if row["record_type"] == "unmapped_thread_end_counter" {
+            ended_thread_gaps += 1;
+            continue;
+        }
         if row["record_type"] != "observation" {
             bail!("unexpected CPU progress record kind");
         }
@@ -94,6 +99,9 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
     let observed = metadata["observed_cpu_ns"].as_u64().unwrap_or(0);
     let attributed = metadata["attributed_cpu_ns"].as_u64().unwrap_or(0);
     diagnostics.push(format!("Python CPU attribution coverage: {attributed} of {observed} observed thread-CPU nanoseconds; {} delayed observation windows retained without stack attribution",metadata["gap_observations"].as_u64().unwrap_or(0)));
+    if ended_thread_gaps > 0 {
+        diagnostics.push(format!("{ended_thread_gaps} terminated native-thread counters retained only in raw evidence: their Python identity and final CPU delta remain unmapped, and no frame costs were assigned."));
+    }
     if sample_count == 0 {
         diagnostics.push("No positive CPU progress could be attributed within the declared bounds; CPU stack costs were not invented.".into());
     }
@@ -130,6 +138,19 @@ mod tests {
             records.len(),
             1,
             "delayed CPU remains a counter observation, never a later-frame cost"
+        );
+        let ended = json!({"record_type":"unmapped_thread_end_counter","native_tid":8,"thread_lifetime":"created-8","cpu_counter_ns":90000,"ended_filetime_100ns":99});
+        fs::write(&path, format!("{row}\n{ended}\n")).unwrap();
+        let (records, diagnostics) = decode(&path, "run", "input").unwrap();
+        assert_eq!(
+            records.len(),
+            1,
+            "an ended handle cannot acquire a new Python identity"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.contains("terminated native-thread counters"))
         );
     }
 }

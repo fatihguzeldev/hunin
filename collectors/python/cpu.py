@@ -33,6 +33,7 @@ class Sampler:
         self.observed_cpu_ns = 0
         self.attributed_cpu_ns = 0
         self.gaps = 0
+        self.ended_thread_gaps = 0
         self.errors = []
         self.output = path.open("w", encoding="utf8")
         before = self.clock.now_ns()
@@ -45,6 +46,7 @@ class Sampler:
                          "clock_uncertainty_ns": (after - before + 1) // 2,
                          "interval_ns": int(interval * 1_000_000_000),
                          "max_gap_ns": self.max_gap_ns, "max_capture_latency_ns": self.max_latency_ns,
+                         "capture_scope": "one Python thread stack and its OS thread CPU counter read",
                          "max_stack_frames": 512,
                          "weight_semantics": "OS thread CPU counter delta across preceding window, statistically attributed to captured Python stack; not a call duration",
                          "limitations": ["Python GIL scheduling and OS counter resolution limit sample coverage.", "Long GIL-holding native calls and delayed observations are retained as unattributed CPU, not assigned to a later frame.", "Only discovered Python threads with native IDs are covered; native-only threads and short-lived threads can be absent."]}
@@ -67,20 +69,27 @@ class Sampler:
         return list(reversed(result))
 
     def observe(self, final=False):
-        started = self.clock.now_ns()
         sampler_id = self.thread.ident if self.thread is not None else None
         threads = {thread.ident: thread.native_id for thread in threading.enumerate()
                    if thread.ident is not None and thread.ident != sampler_id and getattr(thread, "native_id", None) is not None}
-        frames = {} if final else sys._current_frames()
-        stacks = {ident: self.stack(frames[ident]) for ident in threads if ident in frames}
-        captured = self.clock.now_ns()
-        counters = self.clock.snapshot(set(threads.values()))
-        finished = self.clock.now_ns()
         current_ids = set(threads.values())
+        # Discover/release OS handles once using the whole live thread set.
+        # Bracket each frame+counter read independently: an unrelated thread's
+        # FFI/GIL delay must not enlarge another thread's attribution window.
+        self.clock.retain(current_ids)
         self.previous = {key: value for key, value in self.previous.items() if key[0] in current_ids}
         self.sequence += 1
         for ident, native_id in threads.items():
-            counter = counters.get(native_id)
+            started = self.clock.now_ns()
+            frame = None if final else sys._current_frames().get(ident)
+            stack = None if frame is None else self.stack(frame)
+            captured = self.clock.now_ns()
+            counter = self.clock.snapshot({native_id}).get(native_id)
+            finished = self.clock.now_ns()
+            for ended in getattr(self.clock, "take_ended_counters", lambda: [])():
+                self.emit({"record_type": "unmapped_thread_end_counter", "timestamp_ns": finished,
+                           "reason": "cached OS thread terminated; Python identity and final CPU delta remain unmapped", **ended})
+                self.ended_thread_gaps += 1
             if counter is None:
                 continue
             key = (native_id, counter["lifetime"])
@@ -89,7 +98,6 @@ class Sampler:
             delta = 0 if previous is None else counter["cpu_ns"] - previous[1]
             interval = 0 if previous is None else finished - previous[0]
             latency = finished - started
-            stack = stacks.get(ident)
             if previous is None:
                 attribution = "baseline"
             elif delta < 0:
@@ -140,6 +148,7 @@ class Sampler:
         self.metadata.update(observed_cpu_ns=self.observed_cpu_ns, attributed_cpu_ns=self.attributed_cpu_ns,
                              unattributed_cpu_ns=self.observed_cpu_ns - self.attributed_cpu_ns,
                              gap_observations=self.gaps, errors=self.errors,
+                             unmapped_ended_thread_counters=self.ended_thread_gaps,
                              coverage=self.attributed_cpu_ns / self.observed_cpu_ns if self.observed_cpu_ns else None)
         self.path.with_suffix(self.path.suffix + ".meta.json").write_text(json.dumps(self.metadata), encoding="utf8")
 

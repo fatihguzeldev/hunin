@@ -18,29 +18,48 @@ class WindowsClock:
         self.source = "python_perf_counter:" + time.get_clock_info("perf_counter").implementation
         self.handles = {}
         self.filetime = wintypes.FILETIME
+        self.unmapped_ended = []
 
     def now_ns(self):
         # Both supported interpreters implement this with QPC on Windows.
         # Calling their builtin avoids an extra PyPy ctypes GIL handoff.
         return time.perf_counter_ns()
 
-    def snapshot(self, native_ids):
-        result = {}
+    def retain(self, native_ids):
         for tid in set(self.handles) - native_ids:
             self.api.CloseHandle(self.handles.pop(tid))
         for tid in native_ids:
+            if tid not in self.handles:
+                handle = self.api.OpenThread(0x0800, False, tid)  # THREAD_QUERY_LIMITED_INFORMATION
+                if handle:
+                    self.handles[tid] = handle
+
+    def snapshot(self, native_ids):
+        self.retain(set(self.handles) | native_ids)
+        result = {}
+        for tid in native_ids:
             handle = self.handles.get(tid)
             if handle is None:
-                handle = self.api.OpenThread(0x0800, False, tid)  # THREAD_QUERY_LIMITED_INFORMATION
-                if not handle:
-                    continue
-                self.handles[tid] = handle
+                continue
             created, ended, kernel, user = (self.filetime() for _ in range(4))
             if self.api.GetThreadTimes(handle, ctypes.byref(created), ctypes.byref(ended), ctypes.byref(kernel), ctypes.byref(user)):
                 ticks = lambda item: (item.dwHighDateTime << 32) | item.dwLowDateTime
+                if ticks(ended) > 0:
+                    # A cached handle can outlive its thread. The numeric ID
+                    # may already name another Python thread; retain its final
+                    # counter without associating that thread's current frame.
+                    self.unmapped_ended.append({"native_tid": tid, "thread_lifetime": str(ticks(created)),
+                                                "cpu_counter_ns": (ticks(kernel) + ticks(user)) * 100,
+                                                "ended_filetime_100ns": ticks(ended)})
+                    self.api.CloseHandle(self.handles.pop(tid))
+                    continue
                 result[tid] = {"cpu_ns": (ticks(kernel) + ticks(user)) * 100,
                                "lifetime": str(ticks(created))}
         return result
+
+    def take_ended_counters(self):
+        counters, self.unmapped_ended = self.unmapped_ended, []
+        return counters
 
     def close(self):
         for handle in self.handles.values():
@@ -59,40 +78,57 @@ class DarwinClock:
         self.api.thread_info.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_uint)]
         self.api.mach_port_deallocate.argtypes = [ctypes.c_uint, ctypes.c_uint]
         self.api.vm_deallocate.argtypes = [ctypes.c_uint, ctypes.c_size_t, ctypes.c_size_t]
+        self.handles = {}
 
     def now_ns(self):
         return time.perf_counter_ns()
 
-    def snapshot(self, native_ids):
+    def retain(self, native_ids):
+        for tid in set(self.handles) - native_ids:
+            self.api.mach_port_deallocate(self.task, self.handles.pop(tid))
+        if native_ids.issubset(self.handles):
+            return
         ports = ctypes.POINTER(ctypes.c_uint)()
         count = ctypes.c_uint()
         if self.api.task_threads(self.task, ctypes.byref(ports), ctypes.byref(count)):
             raise OSError("task_threads failed")
-        result = {}
         try:
             for index in range(count.value):
                 port = ports[index]
+                retained = False
                 try:
                     identity = (ctypes.c_uint64 * 3)()
                     size = ctypes.c_uint(6)
                     if self.api.thread_info(port, 4, ctypes.cast(identity, ctypes.POINTER(ctypes.c_int)), ctypes.byref(size)):
                         continue
                     native_id = identity[0]
-                    if native_id not in native_ids:
-                        continue
-                    basic = (ctypes.c_int * 10)()
-                    size = ctypes.c_uint(10)
-                    if self.api.thread_info(port, 3, basic, ctypes.byref(size)) == 0:
-                        result[native_id] = {"cpu_ns": (basic[0] + basic[2]) * 1_000_000_000 + (basic[1] + basic[3]) * 1000,
-                                             "lifetime": str(native_id)}
+                    if native_id in native_ids and native_id not in self.handles:
+                        self.handles[native_id] = port
+                        retained = True
                 finally:
-                    self.api.mach_port_deallocate(self.task, port)
+                    if not retained:
+                        self.api.mach_port_deallocate(self.task, port)
         finally:
             self.api.vm_deallocate(self.task, ctypes.cast(ports, ctypes.c_void_p).value, count.value * ctypes.sizeof(ctypes.c_uint))
+
+    def snapshot(self, native_ids):
+        self.retain(set(self.handles) | native_ids)
+        result = {}
+        for tid in native_ids:
+            port = self.handles.get(tid)
+            if port is None:
+                continue
+            basic = (ctypes.c_int * 10)()
+            size = ctypes.c_uint(10)
+            if self.api.thread_info(port, 3, basic, ctypes.byref(size)) == 0:
+                result[tid] = {"cpu_ns": (basic[0] + basic[2]) * 1_000_000_000 + (basic[1] + basic[3]) * 1000,
+                               "lifetime": str(tid)}
         return result
 
     def close(self):
-        pass
+        for port in self.handles.values():
+            self.api.mach_port_deallocate(self.task, port)
+        self.handles.clear()
 
 
 class LinuxClock:
@@ -118,18 +154,23 @@ class LinuxClock:
     def now_ns(self):
         return time.perf_counter_ns()
 
-    def snapshot(self, native_ids):
-        result = {}
+    def retain(self, native_ids):
         for tid in set(self.handles) - native_ids:
             self.api.close(self.handles.pop(tid))
+        for tid in native_ids:
+            if tid not in self.handles:
+                handle = self.api.open(f"/proc/self/task/{tid}/stat".encode(), os.O_RDONLY | os.O_CLOEXEC)
+                if handle >= 0:
+                    self.handles[tid] = handle
+
+    def snapshot(self, native_ids):
+        self.retain(set(self.handles) | native_ids)
+        result = {}
         for tid in native_ids:
             try:
                 handle = self.handles.get(tid)
                 if handle is None:
-                    handle = self.api.open(f"/proc/self/task/{tid}/stat".encode(), os.O_RDONLY | os.O_CLOEXEC)
-                    if handle < 0:
-                        continue
-                    self.handles[tid] = handle
+                    continue
                 count = self.api.pread(handle, self.buffer, len(self.buffer), 0)
                 if count <= 0 or count == len(self.buffer):
                     self.api.close(self.handles.pop(tid))

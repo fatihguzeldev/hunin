@@ -10,9 +10,35 @@ import unittest
 
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 
 
 class CpuProgressTest(unittest.TestCase):
+    def test_terminated_cached_windows_handle_is_not_reused_for_a_python_frame(self):
+        from ctypes import wintypes
+        from cpu_clock import WindowsClock
+        class Api:
+            def __init__(self):
+                self.closed = []
+            def GetThreadTimes(self, handle, created, ended, kernel, user):
+                created._obj.dwLowDateTime = 17
+                ended._obj.dwLowDateTime = 99
+                kernel._obj.dwLowDateTime = 5
+                user._obj.dwLowDateTime = 7
+                return True
+            def CloseHandle(self, handle):
+                self.closed.append(handle)
+        clock = WindowsClock.__new__(WindowsClock)
+        clock.api = Api()
+        clock.handles = {8: "terminated-handle"}
+        clock.filetime = wintypes.FILETIME
+        clock.unmapped_ended = []
+        self.assertEqual(clock.snapshot({8}), {})
+        self.assertEqual(clock.handles, {})
+        self.assertEqual(clock.api.closed, ["terminated-handle"])
+        self.assertEqual(clock.take_ended_counters(), [{"native_tid":8,"thread_lifetime":"17","cpu_counter_ns":1200,"ended_filetime_100ns":99}])
+        self.assertEqual(clock.take_ended_counters(), [])
+
     def test_owned_interrupt_flushes_raw_counters_and_metadata(self):
         with tempfile.TemporaryDirectory(prefix="hunin-cpu-cancel-") as directory:
             work=Path(directory)
