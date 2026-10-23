@@ -1,0 +1,484 @@
+diff --git a/samply/src/windows/mod.rs b/samply/src/windows/mod.rs
+--- a/samply/src/windows/mod.rs
++++ b/samply/src/windows/mod.rs
+@@ -12,5 +12,6 @@
+ mod utility_process;
+ mod winutils;
+ mod xperf;
++mod xperf_session;
+ 
+ pub use elevated_helper::run_elevated_helper;
+diff --git a/samply/src/windows/xperf.rs b/samply/src/windows/xperf.rs
+--- a/samply/src/windows/xperf.rs
++++ b/samply/src/windows/xperf.rs
+@@ -3,6 +3,8 @@
+ use std::path::{Path, PathBuf};
+ 
+ use super::elevated_helper::ElevatedRecordingProps;
++use super::xperf_session::{KernelLease, Session};
++use serde_json::{json, Value};
+ 
+ const XPERF_NOT_FOUND_ERROR_MSG: &str = "\
+ Could not find an xperf installation.\n\
+@@ -13,6 +15,10 @@
+ pub struct Xperf {
+     state: XperfState,
+     xperf_path: Option<PathBuf>,
++    lease: Option<KernelLease>,
++    sessions: Vec<Session>,
++    report_path: Option<PathBuf>,
++    report: Value,
+ }
+ 
+ enum XperfState {
+@@ -26,6 +32,10 @@
+         Self {
+             state: XperfState::Stopped,
+             xperf_path: None,
++            lease: None,
++            sessions: Vec::new(),
++            report_path: None,
++            report: json!({}),
+         }
+     }
+ 
+@@ -60,7 +70,31 @@
+         props: &ElevatedRecordingProps,
+     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+         if self.is_running() {
+-            let _ = self.stop_xperf();
++            self.stop_xperf()?;
++        }
++
++        self.report_path = Some(output_path.with_extension("xperf-session.json"));
++        self.report = json!({"schema":"hunin-xperf-session-v1","helper_pid":std::process::id(),"state":"starting","sessions":[],"events":[]});
++        self.publish("preflight", json!({}));
++        self.lease = match KernelLease::acquire() {
++            Ok(lease) => Some(lease),
++            Err(error) => {
++                self.publish("refused", json!({"error":error.to_string()}));
++                return Err(error);
++            }
++        };
++        match Session::query("NT Kernel Logger") {
++            Ok(None) => {}
++            Ok(Some(session)) => {
++                self.publish("refused", json!({"error":"NT Kernel Logger is already owned by another recording. Stop it using its owning tool, then retry Hunin.","existing_session":session.evidence()}));
++                self.lease = None;
++                return Err("NT Kernel Logger is already active; Hunin did not start or stop it. Finish that recording in its owning tool, then retry".into());
++            }
++            Err(error) => {
++                self.publish("refused", json!({"error":error.to_string()}));
++                self.lease = None;
++                return Err(error);
++            }
+         }
+ 
+         // All the user providers need to be specified in a single `-on` argument
+@@ -74,7 +108,14 @@
+         user_providers.sort_unstable();
+         user_providers.dedup();
+ 
+-        let xperf_path = self.get_xperf_path()?;
++        let xperf_path = match self.get_xperf_path() {
++            Ok(path) => path,
++            Err(error) => {
++                self.publish("refused", json!({"error":error}));
++                self.lease = None;
++                return Err(error.into());
++            }
++        };
+         // start xperf.exe, logging to the same location as the output file, just with a .etl
+         // extension.
+         let mut kernel_etl_file = output_path.to_owned();
+@@ -113,6 +154,7 @@
+         xperf.arg("-BufferSize");
+         xperf.arg("1024");
+ 
++        let user_session_name = format!("HuninUser-{}", uuid::Uuid::new_v4());
+         let user_etl_file = if !user_providers.is_empty() {
+             let mut user_etl_file = output_path.to_owned();
+             if user_etl_file.extension() == Some(OsStr::new("gz")) {
+@@ -121,7 +163,7 @@
+             user_etl_file.set_extension("user.etl");
+ 
+             xperf.arg("-start");
+-            xperf.arg("SamplySession");
++            xperf.arg(&user_session_name);
+ 
+             xperf.arg("-on");
+             xperf.arg(user_providers.join("+"));
+@@ -139,16 +181,43 @@
+             None
+         };
+ 
+-        let _ = xperf.status().expect("failed to execute xperf");
+-
+-        eprintln!("xperf session running...");
+-
+-        if user_etl_file.is_some() {
+-            self.state =
+-                XperfState::RecordingKernelAndUserToFile(kernel_etl_file, user_etl_file.unwrap());
++        let status = run_bounded(&mut xperf);
++        // A combined xperf command can partially succeed. Retain only controllers
++        // whose log file matches this recording, even if the command failed.
++        let mut ownership_error = None;
++        for (name, file) in std::iter::once(("NT Kernel Logger", &kernel_etl_file)).chain(
++            user_etl_file
++                .as_ref()
++                .map(|file| (user_session_name.as_str(), file)),
++        ) {
++            match Session::query(name) {
++                Ok(Some(session)) if session.owns_file(file) => self.sessions.push(session),
++                Ok(other) => {
++                    ownership_error = Some(format!(
++                        "xperf did not establish owned session {name:?}: {:?}",
++                        other.map(|s| s.evidence())
++                    ))
++                }
++                Err(error) => ownership_error = Some(error.to_string()),
++            }
++        }
++        self.report["sessions"] = json!(self
++            .sessions
++            .iter()
++            .map(Session::evidence)
++            .collect::<Vec<_>>());
++        self.publish("start_result", json!({"exit_code":status.as_ref().ok().and_then(|s|s.code()),"error":status.as_ref().err().map(|e|e.to_string()),"ownership_error":ownership_error}));
++        self.state = if let Some(user) = user_etl_file {
++            XperfState::RecordingKernelAndUserToFile(kernel_etl_file, user)
+         } else {
+-            self.state = XperfState::RecordingKernelToFile(kernel_etl_file);
+-        }
++            XperfState::RecordingKernelToFile(kernel_etl_file)
++        };
++        if !matches!(status.as_ref(), Ok(s) if s.success()) || ownership_error.is_some() {
++            let cleanup = self.stop_xperf();
++            return Err(format!("xperf start failed: {status:?}; ownership: {ownership_error:?}; owned-session cleanup: {cleanup:?}").into());
++        }
++        self.publish("recording", json!({}));
++        eprintln!("Owned xperf session running...");
+ 
+         Ok(())
+     }
+@@ -157,28 +226,75 @@
+         &mut self,
+     ) -> Result<(PathBuf, Option<PathBuf>), Box<dyn Error + Send + Sync>> {
+         let prev_state = std::mem::replace(&mut self.state, XperfState::Stopped);
+-        let (kernel_etl, user_etl) = match prev_state {
++        let (kernel_etl, user_etl) = match &prev_state {
+             XperfState::Stopped => return Err("xperf wasn't running, can't stop it".into()),
+-            XperfState::RecordingKernelToFile(kpath) => (kpath, None),
+-            XperfState::RecordingKernelAndUserToFile(kpath, upath) => (kpath, Some(upath)),
+-        };
+-
+-        let xperf_path = self.get_xperf_path()?;
+-        let mut xperf = std::process::Command::new(xperf_path);
+-        xperf.arg("-stop");
+-
+-        if user_etl.is_some() {
+-            xperf.arg("-stop");
+-            xperf.arg("SamplySession");
+-        }
+-
+-        let _ = xperf
+-            .status()
+-            .expect("Failed to execute xperf -stop! xperf may still be recording.");
+-
+-        eprintln!("xperf session stopped.");
++            XperfState::RecordingKernelToFile(kpath) => (kpath.clone(), None),
++            XperfState::RecordingKernelAndUserToFile(kpath, upath) => {
++                (kpath.clone(), Some(upath.clone()))
++            }
++        };
++
++        self.publish("stopping", json!({}));
++        let mut errors = Vec::new();
++        let mut failed = Vec::new();
++        for session in std::mem::take(&mut self.sessions).into_iter().rev() {
++            match session.stop() {
++                Ok(evidence) => self.publish("session_stopped", evidence),
++                Err(error) => {
++                    self.publish(
++                        "session_cleanup_failed",
++                        json!({"session":session.evidence(),"error":error.to_string()}),
++                    );
++                    errors.push(error.to_string());
++                    failed.push(session);
++                }
++            }
++        }
++        if !errors.is_empty() {
++            // Keep controllers and lease so Drop can perform one bounded retry.
++            // Successful controllers are never stopped again.
++            self.sessions = failed;
++            self.state = prev_state;
++            self.publish(
++                "cleanup_failed",
++                json!({"errors":errors,"retry_on_drop":true}),
++            );
++            return Err(format!("Owned ETW session cleanup failed: {}", errors.join("; ")).into());
++        }
++        self.lease = None;
++        self.publish("stopped", json!({}));
++        eprintln!("Owned xperf sessions stopped.");
+ 
+         Ok((kernel_etl, user_etl))
++    }
++    fn publish(&mut self, state: &str, details: Value) {
++        self.report["state"] = json!(state);
++        let timestamp_us = std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .map(|d| d.as_micros() as u64)
++            .unwrap_or(0);
++        if let Some(events) = self.report["events"].as_array_mut() {
++            events.push(json!({"state":state,"observed_at_us":timestamp_us,"details":details}));
++        }
++        if let Some(path) = &self.report_path {
++            let temporary = path.with_extension("json.tmp");
++            let result = (|| -> std::io::Result<()> {
++                use std::io::Write;
++                let mut file = std::fs::File::create(&temporary)?;
++                serde_json::to_writer(&mut file, &self.report)?;
++                file.flush()?;
++                drop(file);
++                // Windows rename does not replace existing files. The report is
++                // small; readers retry missing/partial snapshots until deadline.
++                if path.exists() {
++                    std::fs::remove_file(path)?;
++                }
++                std::fs::rename(&temporary, path)
++            })();
++            if let Err(error) = result {
++                eprintln!("Could not retain xperf ownership evidence: {error}");
++            }
++        }
+     }
+ }
+ 
+@@ -188,3 +304,22 @@
+         let _ = self.stop_xperf();
+     }
+ }
++
++fn run_bounded(command: &mut std::process::Command) -> std::io::Result<std::process::ExitStatus> {
++    let mut child = command.spawn()?;
++    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
++    loop {
++        if let Some(status) = child.try_wait()? {
++            return Ok(status);
++        }
++        if std::time::Instant::now() >= deadline {
++            let _ = child.kill();
++            let _ = child.wait();
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::TimedOut,
++                "xperf start exceeded 15 seconds",
++            ));
++        }
++        std::thread::sleep(std::time::Duration::from_millis(20));
++    }
++}
+diff --git a/samply/src/windows/xperf_session.rs b/samply/src/windows/xperf_session.rs
+new file mode 100644
+--- /dev/null
++++ b/samply/src/windows/xperf_session.rs
+@@ -0,0 +1,198 @@
++//! ETW controller ownership. Never stop an unnamed or failed-start session.
++use std::{
++    error::Error,
++    path::{Path, PathBuf},
++    time::{Duration, Instant},
++};
++use windows::core::{w, PCWSTR};
++use windows::Win32::Foundation::{
++    CloseHandle, ERROR_ACTIVE_CONNECTIONS, ERROR_MORE_DATA, ERROR_SUCCESS,
++    ERROR_WMI_INSTANCE_NOT_FOUND, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0,
++};
++use windows::Win32::System::Diagnostics::Etw::{
++    ControlTraceW, CONTROLTRACE_HANDLE, EVENT_TRACE_CONTROL_QUERY, EVENT_TRACE_CONTROL_STOP,
++    EVENT_TRACE_PROPERTIES,
++};
++use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
++
++pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
++
++pub struct KernelLease(HANDLE);
++impl KernelLease {
++    pub fn acquire() -> Result<Self> {
++        unsafe {
++            let handle = CreateMutexW(None, false, w!("Global\\Hunin.NativeKernelLogger.v1"))?;
++            let result = WaitForSingleObject(handle, 0);
++            if result == WAIT_OBJECT_0 || result == WAIT_ABANDONED {
++                return Ok(Self(handle));
++            }
++            let _ = CloseHandle(handle);
++            Err("Another Hunin native Windows recording owns the kernel logger; finish or cancel that recording and retry".into())
++        }
++    }
++}
++impl Drop for KernelLease {
++    fn drop(&mut self) {
++        unsafe {
++            let _ = ReleaseMutex(self.0);
++            let _ = CloseHandle(self.0);
++        }
++    }
++}
++
++#[repr(C)]
++struct Properties {
++    header: EVENT_TRACE_PROPERTIES,
++    name: [u16; 1024],
++    file: [u16; 32768],
++}
++impl Properties {
++    fn new() -> Box<Self> {
++        let mut properties: Box<Self> = Box::new(unsafe { std::mem::zeroed() });
++        properties.header.Wnode.BufferSize = std::mem::size_of::<Self>() as u32;
++        properties.header.LoggerNameOffset = std::mem::offset_of!(Self, name) as u32;
++        properties.header.LogFileNameOffset = std::mem::offset_of!(Self, file) as u32;
++        properties
++    }
++}
++
++pub struct Session {
++    pub name: String,
++    handle: CONTROLTRACE_HANDLE,
++    file: PathBuf,
++}
++impl Session {
++    pub fn query(name: &str) -> Result<Option<Self>> {
++        let name_utf16: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
++        let mut properties = Properties::new();
++        let status = unsafe {
++            ControlTraceW(
++                CONTROLTRACE_HANDLE { Value: 0 },
++                PCWSTR(name_utf16.as_ptr()),
++                &mut properties.header,
++                EVENT_TRACE_CONTROL_QUERY,
++            )
++        };
++        if status == ERROR_WMI_INSTANCE_NOT_FOUND {
++            return Ok(None);
++        }
++        if status != ERROR_SUCCESS {
++            return Err(format!(
++                "Could not query ETW session {name:?}: Windows error {}",
++                status.0
++            )
++            .into());
++        }
++        let handle = unsafe { properties.header.Wnode.Anonymous1.HistoricalContext };
++        if handle == 0 {
++            return Err(
++                "ETW query did not return a controller identity; refusing unowned stop".into(),
++            );
++        }
++        // ControlTrace can repack its output strings; follow the returned
++        // byte offset, bounded by the allocation rather than a field address.
++        let offset = properties.header.LogFileNameOffset as usize;
++        let bytes = std::mem::size_of::<Properties>();
++        if offset < std::mem::size_of::<EVENT_TRACE_PROPERTIES>()
++            || offset >= bytes
++            || offset % 2 != 0
++        {
++            return Err(
++                "ETW query returned an invalid log file name offset; refusing unowned stop".into(),
++            );
++        }
++        let file = unsafe {
++            std::slice::from_raw_parts(
++                (&*properties as *const Properties)
++                    .cast::<u8>()
++                    .add(offset)
++                    .cast::<u16>(),
++                (bytes - offset) / 2,
++            )
++        };
++        let length = file
++            .iter()
++            .position(|&c| c == 0)
++            .ok_or("ETW query returned an unterminated log file name; refusing unowned stop")?;
++        let file = PathBuf::from(String::from_utf16_lossy(&file[..length]));
++        Ok(Some(Self {
++            name: name.into(),
++            handle: CONTROLTRACE_HANDLE { Value: handle },
++            file,
++        }))
++    }
++
++    pub fn owns_file(&self, path: &Path) -> bool {
++        path_identity(&self.file) == path_identity(path)
++    }
++
++    pub fn evidence(&self) -> serde_json::Value {
++        serde_json::json!({"name":self.name,"control_handle":format!("0x{:x}",self.handle.Value),"log_file":self.file})
++    }
++
++    fn same(&self, other: &Self) -> bool {
++        self.handle.Value == other.handle.Value && self.owns_file(&other.file)
++    }
++
++    pub fn stop(&self) -> Result<serde_json::Value> {
++        let Some(current) = Self::query(&self.name)? else {
++            return Ok(serde_json::json!({"session":self.evidence(),"state":"already_stopped"}));
++        };
++        if !self.same(&current) {
++            return Err(format!(
++                "ETW session {:?} was replaced; refusing to stop its new owner",
++                self.name
++            )
++            .into());
++        }
++        let mut properties = Properties::new();
++        // Leave Guid zero and InstanceName null: control this retained handle,
++        // not the globally named kernel logger (which may have been replaced).
++        let status = unsafe {
++            ControlTraceW(
++                self.handle,
++                PCWSTR::null(),
++                &mut properties.header,
++                EVENT_TRACE_CONTROL_STOP,
++            )
++        };
++        if ![
++            ERROR_SUCCESS,
++            ERROR_WMI_INSTANCE_NOT_FOUND,
++            ERROR_MORE_DATA,
++            ERROR_ACTIVE_CONNECTIONS,
++        ]
++        .contains(&status)
++        {
++            return Err(format!(
++                "Could not stop owned ETW session {:?}: Windows error {}",
++                self.name, status.0
++            )
++            .into());
++        }
++        let deadline = Instant::now() + Duration::from_secs(3);
++        loop {
++            match Self::query(&self.name)? {
++                None => break,
++                Some(current) if !self.same(&current) => break,
++                _ if Instant::now() >= deadline => {
++                    return Err(format!(
++                        "Owned ETW session {:?} is still stopping after 3 seconds",
++                        self.name
++                    )
++                    .into())
++                }
++                _ => std::thread::sleep(Duration::from_millis(20)),
++            }
++        }
++        Ok(serde_json::json!({"session":self.evidence(),"state":"stopped","stop_result":status.0}))
++    }
++}
++
++fn path_identity(path: &Path) -> String {
++    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
++    path.to_string_lossy()
++        .trim_start_matches(r"\\?\")
++        .replace('/', r"\")
++        .to_lowercase()
++}
