@@ -19,6 +19,17 @@ pub(crate) fn check(path: &Path, reported: Option<&str>, timeout: Duration) -> R
         help.contains("--lifetime-output") && help.contains("--unstable-presymbolicate"),
         "selected sampler does not expose Hunin's required lifetime-output and presymbolication flags; reinstall the bundled native collector"
     );
+    #[cfg(windows)]
+    {
+        let helper = output(
+            Command::new(path).args(["run-elevated-helper", "--help"]),
+            timeout,
+        )?;
+        ensure!(
+            helper.contains("--parent-pid") && helper.contains("--parent-creation-100ns"),
+            "selected native collector lacks the required Windows wrapper lifetime cleanup protocol; reinstall Hunin's bundled collector"
+        );
+    }
     let bundled = super::assets()
         .join("collectors/native/bin")
         .join(if cfg!(windows) {

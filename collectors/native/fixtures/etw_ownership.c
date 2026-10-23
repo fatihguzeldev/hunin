@@ -40,7 +40,26 @@ int wmain(int argc,wchar_t **argv) {
         FILE *marker=_wfopen(argv[2],L"wb"); if(!marker)return 21;
         fputs("ready",marker); fclose(marker);
         volatile uint64_t value=1;
-        for (;;) value=value*1664525u+1013904223u;
+        DWORD started=GetTickCount();
+        for (;;) {
+            for(int i=0;i<100000;i++)value=value*1664525u+1013904223u;
+            // Only the direct-wrapper-death control has a bounded self-release.
+            // The Engine cancellation control has no release path and must force.
+            if(argc>=4 && (GetFileAttributesW(argv[3])!=INVALID_FILE_ATTRIBUTES || GetTickCount()-started>20000))return 0;
+        }
+    }
+    if(argc==4 && !wcscmp(argv[1],L"kill-wrapper")) {
+        DWORD pid=wcstoul(argv[2],NULL,10);
+        uint64_t expected=_wcstoui64(argv[3],NULL,10);
+        HANDLE process=OpenProcess(PROCESS_TERMINATE|PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,pid);
+        if(!process)return 31;
+        FILETIME created,exited,kernel,user;
+        if(!GetProcessTimes(process,&created,&exited,&kernel,&user) || (((uint64_t)created.dwHighDateTime<<32)|created.dwLowDateTime)!=expected) {
+            CloseHandle(process);fputs("Wrapper birth changed; refusing termination\n",stderr);return 32;
+        }
+        if(!TerminateProcess(process,42)){CloseHandle(process);return 33;}
+        DWORD result=WaitForSingleObject(process,3000);CloseHandle(process);
+        return result==WAIT_OBJECT_0?0:34;
     }
     properties *p=make_properties();
     ULONG status=query(p);

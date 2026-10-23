@@ -114,8 +114,12 @@ resumes the primary thread; Windows behavior still requires its host tests.
 Original partial/malformed profiles, metadata and diagnostics are preserved even
 when normalization fails. Target exit/correctness and collection outcome remain
 separate, and the recorded supervised elapsed interval labels sampler overhead.
-Windows native collection also waits up to 8 seconds for the elevated helper's
-owned-session cleanup report after the supervised tree exits. Retained
+Windows native cancellation writes an owned-session stop request and waits up to
+8 seconds for its helper acknowledgement before forcing the process Job. The
+helper polls both that request and a retained handle to the actual Samply IPC
+client, validates its process creation time, and stops ETW on the controller's
+acquiring thread. Hunin also waits up to 8 seconds for the bound cleanup report
+after the supervised tree exits. Retained
 `*.xperf-session.json` evidence distinguishes stopped, refused, failed and
 unconfirmed cleanup. An unknown cleanup state is not a claim that ETW stopped.
 Native imported process spans retain the collector's observed process interval

@@ -10,6 +10,10 @@ int main(int argc, char **argv) {
     puts("--lifetime-output --unstable-presymbolicate");
     return 0;
   }
+  if (argc > 2 && !strcmp(argv[1], "run-elevated-helper") && !strcmp(argv[2], "--help")) {
+    puts("--parent-pid --parent-creation-100ns");
+    return 0;
+  }
   fputs("controlled collector failure before target launch\n", stderr);
   return 73;
 }

@@ -1,0 +1,508 @@
+diff --git a/samply/src/main.rs b/samply/src/main.rs
+--- a/samply/src/main.rs
++++ b/samply/src/main.rs
+@@ -415,6 +415,12 @@
+ 
+     #[arg(long)]
+     output_path: PathBuf,
++
++    #[arg(long)]
++    parent_pid: u32,
++
++    #[arg(long)]
++    parent_creation_100ns: u64,
+ }
+ 
+ fn main() {
+@@ -515,8 +521,10 @@
+         Action::RunElevatedHelper(RunElevatedHelperArgs {
+             ipc_directory,
+             output_path,
++            parent_pid,
++            parent_creation_100ns,
+         }) => {
+-            windows::run_elevated_helper(&ipc_directory, output_path);
++            windows::run_elevated_helper(&ipc_directory, output_path, parent_pid, parent_creation_100ns);
+         }
+ 
+         #[cfg(target_os = "macos")]
+diff --git a/samply/src/windows/mod.rs b/samply/src/windows/mod.rs
+--- a/samply/src/windows/mod.rs
++++ b/samply/src/windows/mod.rs
+@@ -8,9 +8,11 @@
+ mod gfx;
+ pub mod import;
+ mod profile_context;
++mod parent_watch;
+ pub mod profiler;
+ mod utility_process;
+ mod winutils;
++mod startup;
+ mod xperf;
+ mod xperf_session;
+ 
+diff --git a/samply/src/windows/parent_watch.rs b/samply/src/windows/parent_watch.rs
+new file mode 100644
+--- /dev/null
++++ b/samply/src/windows/parent_watch.rs
+@@ -0,0 +1,63 @@
++//! Retain the actual Samply IPC client's process object, never only its PID.
++use super::xperf_session::Result;
++use windows::Win32::{
++    Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
++    System::Threading::{
++        GetProcessTimes, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
++        PROCESS_SYNCHRONIZE,
++    },
++};
++
++pub struct ParentWatch {
++    handle: HANDLE,
++    pub pid: u32,
++    pub creation_100ns: u64,
++}
++impl ParentWatch {
++    pub fn open(pid: u32, expected_creation: u64) -> Result<Self> {
++        let handle = unsafe {
++            OpenProcess(
++                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
++                false,
++                pid,
++            )?
++        };
++        let watch = Self {
++            handle,
++            pid,
++            creation_100ns: expected_creation,
++        };
++        if expected_creation == 0
++            || creation(handle)? != expected_creation
++            || unsafe { WaitForSingleObject(handle, 0) } != WAIT_TIMEOUT
++        {
++            return Err("Samply IPC client is absent or its process birth changed; refusing collector start".into());
++        }
++        Ok(watch)
++    }
++    pub fn has_exited(&self) -> bool {
++        unsafe { WaitForSingleObject(self.handle, 0) == WAIT_OBJECT_0 }
++    }
++}
++impl Drop for ParentWatch {
++    fn drop(&mut self) {
++        unsafe {
++            let _ = CloseHandle(self.handle);
++        }
++    }
++}
++
++pub fn current_creation() -> Result<u64> {
++    use windows::Win32::System::Threading::GetCurrentProcess;
++    creation(unsafe { GetCurrentProcess() })
++}
++fn creation(handle: HANDLE) -> Result<u64> {
++    let mut created: FILETIME = unsafe { std::mem::zeroed() };
++    let mut exited = created;
++    let mut kernel = created;
++    let mut user = created;
++    unsafe {
++        GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user)?;
++    }
++    Ok(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
++}
+diff --git a/samply/src/windows/startup.rs b/samply/src/windows/startup.rs
+new file mode 100644
+--- /dev/null
++++ b/samply/src/windows/startup.rs
+@@ -0,0 +1,57 @@
++pub(super) fn run_bounded(
++    command: &mut std::process::Command,
++    stop_requested: &mut impl FnMut() -> bool,
++) -> std::io::Result<std::process::ExitStatus> {
++    let mut child = command.spawn()?;
++    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
++    loop {
++        if let Some(status) = child.try_wait()? {
++            return Ok(status);
++        }
++        if stop_requested() {
++            let _ = child.kill();
++            let _ = child.wait();
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::Interrupted,
++                "xperf start interrupted by collection stop or Samply client death",
++            ));
++        }
++        if std::time::Instant::now() >= deadline {
++            let _ = child.kill();
++            let _ = child.wait();
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::TimedOut,
++                "xperf start exceeded 15 seconds",
++            ));
++        }
++        std::thread::sleep(std::time::Duration::from_millis(20));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn waiting_start_fixture() {
++        let Some(path) = std::env::var_os("HUNIN_XPERF_START_READY") else {
++            return;
++        };
++        std::fs::write(path, b"ready").unwrap();
++        std::thread::sleep(std::time::Duration::from_secs(10));
++    }
++    #[test]
++    fn startup_stop_interrupts_pending_command_before_its_timeout() {
++        let directory = tempfile::tempdir().unwrap();
++        let ready = directory.path().join("ready");
++        let full = concat!(module_path!(), "::waiting_start_fixture");
++        let fixture = full.split_once("::").unwrap().1;
++        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
++        command
++            .args(["--exact", fixture])
++            .env("HUNIN_XPERF_START_READY", &ready);
++        let started = std::time::Instant::now();
++        let error = run_bounded(&mut command, &mut || ready.exists()).unwrap_err();
++        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
++        assert!(started.elapsed() < std::time::Duration::from_secs(2));
++    }
++}
+diff --git a/samply/src/windows/elevated_helper.rs b/samply/src/windows/elevated_helper.rs
+--- a/samply/src/windows/elevated_helper.rs
++++ b/samply/src/windows/elevated_helper.rs
+@@ -3,6 +3,7 @@
+ 
+ use serde_derive::{Deserialize, Serialize};
+ 
++use super::parent_watch::ParentWatch;
+ use super::utility_process::{
+     run_child, UtilityProcess, UtilityProcessChild, UtilityProcessParent, UtilityProcessSession,
+ };
+@@ -61,9 +62,19 @@
+ }
+ 
+ // Runs in the helper process which has Administrator privileges.
+-pub fn run_elevated_helper(ipc_directory: &Path, output_path: PathBuf) {
+-    let child = ElevatedHelperChild::new(output_path);
+-    run_child::<ElevatedHelper>(ipc_directory, child)
++pub fn run_elevated_helper(
++    ipc_directory: &Path,
++    output_path: PathBuf,
++    parent_pid: u32,
++    parent_creation_100ns: u64,
++) {
++    match ElevatedHelperChild::new(output_path, parent_pid, parent_creation_100ns) {
++        Ok(child) => run_child::<ElevatedHelper>(ipc_directory, child),
++        Err(error) => {
++            eprintln!("Could not establish Samply IPC client ownership: {error}");
++            std::process::exit(1);
++        }
++    }
+ }
+ 
+ pub struct ElevatedHelperSession {
+@@ -153,6 +164,17 @@
+         let mut cmd = runas::Command::new(self_path);
+         cmd.arg("run-elevated-helper");
+ 
++        // This is the actual supervised Samply client, not the long-lived
++        // Hunin CLI that is still waiting for cleanup acknowledgement.
++        cmd.arg("--parent-pid");
++        cmd.arg(std::process::id().to_string());
++        cmd.arg("--parent-creation-100ns");
++        cmd.arg(
++            super::parent_watch::current_creation()
++                .expect("query own Samply creation time")
++                .to_string(),
++        );
++
+         cmd.arg("--ipc-directory");
+         cmd.arg(ipc_directory);
+         cmd.arg("--output-path");
+@@ -187,19 +209,46 @@
+ struct ElevatedHelperChild {
+     output_path: PathBuf,
+     xperf: Xperf,
++    parent: ParentWatch,
++    cancel_path: PathBuf,
+ }
+ 
+ impl ElevatedHelperChild {
+     // Runs in the helper process which has Administrator privileges.
+-    pub fn new(output_path: PathBuf) -> Self {
+-        Self {
+-            xperf: Xperf::new(),
++    pub fn new(
++        output_path: PathBuf,
++        parent_pid: u32,
++        parent_creation: u64,
++    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
++        let parent = ParentWatch::open(parent_pid, parent_creation)?;
++        let mut xperf = Xperf::new();
++        xperf.configure_owner(&output_path, parent_pid, parent_creation);
++        Ok(Self {
++            cancel_path: output_path.with_extension("stop-request"),
+             output_path,
+-        }
++            xperf,
++            parent,
++        })
+     }
+ }
+ 
+ impl UtilityProcessChild<ElevatedHelperRequestMsg, ElevatedHelperReplyMsg> for ElevatedHelperChild {
++    fn stop_requested(&mut self) -> bool {
++        let reason = if self.cancel_path.exists() {
++            Some("supervisor_stop_request")
++        } else if self.parent.has_exited() {
++            Some("samply_client_exited")
++        } else {
++            None
++        };
++        if let Some(reason) = reason {
++            self.xperf
++                .note_shutdown(reason, self.parent.pid, self.parent.creation_100ns);
++            return true;
++        }
++        false
++    }
++
+     // Runs in the helper process which has Administrator privileges.
+     fn handle_message(
+         &mut self,
+@@ -207,7 +256,11 @@
+     ) -> Result<ElevatedHelperReplyMsg, Box<dyn Error + Send + Sync>> {
+         match msg {
+             ElevatedHelperRequestMsg::StartXperf(props) => {
+-                self.xperf.start_xperf(&self.output_path, &props)?;
++                let cancel_path = &self.cancel_path;
++                let parent = &self.parent;
++                self.xperf.start_xperf(&self.output_path, &props, || {
++                    cancel_path.exists() || parent.has_exited()
++                })?;
+                 Ok(ElevatedHelperReplyMsg::AckStartXperf)
+             }
+             ElevatedHelperRequestMsg::StopXperf => {
+diff --git a/samply/src/windows/xperf.rs b/samply/src/windows/xperf.rs
+--- a/samply/src/windows/xperf.rs
++++ b/samply/src/windows/xperf.rs
+@@ -3,6 +3,7 @@
+ use std::path::{Path, PathBuf};
+ 
+ use super::elevated_helper::ElevatedRecordingProps;
++use super::startup::run_bounded;
+ use super::xperf_session::{KernelLease, Session};
+ use serde_json::{json, Value};
+ 
+@@ -19,6 +20,7 @@
+     sessions: Vec<Session>,
+     report_path: Option<PathBuf>,
+     report: Value,
++    owner: Value,
+ }
+ 
+ enum XperfState {
+@@ -36,7 +38,28 @@
+             sessions: Vec::new(),
+             report_path: None,
+             report: json!({}),
+-        }
++            owner: json!(null),
++        }
++    }
++
++    pub fn configure_owner(&mut self, output: &Path, pid: u32, creation: u64) {
++        self.owner = json!({"wrapper_pid":pid,"wrapper_creation_100ns":creation,"profile_output_path":output});
++        self.report_path = Some(output.with_extension("xperf-session.json"));
++        self.report = json!({"schema":"hunin-xperf-session-v1","helper_pid":std::process::id(),"owner":self.owner,"state":"not_started","sessions":[],"events":[]});
++    }
++
++    pub fn note_shutdown(&mut self, reason: &str, pid: u32, creation: u64) {
++        let state = if self.is_running() {
++            "stop_requested"
++        } else if self.report["state"] == "stopped" {
++            "stopped"
++        } else {
++            "refused"
++        };
++        self.publish(
++            state,
++            json!({"reason":reason,"wrapper_pid":pid,"wrapper_creation_100ns":creation}),
++        );
+     }
+ 
+     pub fn is_running(&self) -> bool {
+@@ -68,14 +91,22 @@
+         &mut self,
+         output_path: &Path,
+         props: &ElevatedRecordingProps,
++        mut stop_requested: impl FnMut() -> bool,
+     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+         if self.is_running() {
+             self.stop_xperf()?;
+         }
+ 
+         self.report_path = Some(output_path.with_extension("xperf-session.json"));
+-        self.report = json!({"schema":"hunin-xperf-session-v1","helper_pid":std::process::id(),"state":"starting","sessions":[],"events":[]});
++        self.report = json!({"schema":"hunin-xperf-session-v1","helper_pid":std::process::id(),"owner":self.owner,"state":"starting","sessions":[],"events":[]});
+         self.publish("preflight", json!({}));
++        if stop_requested() {
++            self.publish(
++                "refused",
++                json!({"reason":"stop requested before xperf start"}),
++            );
++            return Err("Collection stop requested before xperf start".into());
++        }
+         self.lease = match KernelLease::acquire() {
+             Ok(lease) => Some(lease),
+             Err(error) => {
+@@ -181,7 +212,7 @@
+             None
+         };
+ 
+-        let status = run_bounded(&mut xperf);
++        let status = run_bounded(&mut xperf, &mut stop_requested);
+         // A combined xperf command can partially succeed. Retain only controllers
+         // whose log file matches this recording, even if the command failed.
+         let mut ownership_error = None;
+@@ -304,22 +335,3 @@
+         let _ = self.stop_xperf();
+     }
+ }
+-
+-fn run_bounded(command: &mut std::process::Command) -> std::io::Result<std::process::ExitStatus> {
+-    let mut child = command.spawn()?;
+-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+-    loop {
+-        if let Some(status) = child.try_wait()? {
+-            return Ok(status);
+-        }
+-        if std::time::Instant::now() >= deadline {
+-            let _ = child.kill();
+-            let _ = child.wait();
+-            return Err(std::io::Error::new(
+-                std::io::ErrorKind::TimedOut,
+-                "xperf start exceeded 15 seconds",
+-            ));
+-        }
+-        std::thread::sleep(std::time::Duration::from_millis(20));
+-    }
+-}
+diff --git a/samply/src/windows/utility_process/traits.rs b/samply/src/windows/utility_process/traits.rs
+--- a/samply/src/windows/utility_process/traits.rs
++++ b/samply/src/windows/utility_process/traits.rs
+@@ -18,6 +18,9 @@
+ }
+ 
+ pub trait UtilityProcessChild<ParentToChildMsg, ChildToParentMsg> {
++    fn stop_requested(&mut self) -> bool {
++        false
++    }
+     fn handle_message(
+         &mut self,
+         msg: ParentToChildMsg,
+diff --git a/samply/src/windows/utility_process/child.rs b/samply/src/windows/utility_process/child.rs
+--- a/samply/src/windows/utility_process/child.rs
++++ b/samply/src/windows/utility_process/child.rs
+@@ -20,7 +20,8 @@
+ ) -> Result<(), Box<dyn Error + Send + Sync>> {
+     let (mut receiver, mut sender) = BidiChannelCreator::open_in_child(ipc_directory)?;
+ 
+-    let init_msg: ParentToChildMsgWrapper<T::ParentToChildMsg> = receiver.recv_blocking()?;
++    let init_msg: ParentToChildMsgWrapper<T::ParentToChildMsg> =
++        receiver.recv_blocking_until(|| child.stop_requested())?;
+     if let Err(e) = check_init_msg::<T>(init_msg) {
+         let _ = sender.send(ChildToParentMsgWrapper::Err(e.to_string()));
+         return Err(e);
+@@ -29,7 +30,8 @@
+ 
+     let mut shutting_down = false;
+     while !shutting_down {
+-        let msg: ParentToChildMsgWrapper<T::ParentToChildMsg> = receiver.recv_blocking()?;
++        let msg: ParentToChildMsgWrapper<T::ParentToChildMsg> =
++            receiver.recv_blocking_until(|| child.stop_requested())?;
+         let reply: ChildToParentMsgWrapper<T::ChildToParentMsg> = match msg {
+             init_msg @ ParentToChildMsgWrapper::Init { .. } => ChildToParentMsgWrapper::Err(
+                 format!("Unexpected init message after initialization: {init_msg:?}"),
+diff --git a/samply/src/windows/utility_process/file_channel.rs b/samply/src/windows/utility_process/file_channel.rs
+--- a/samply/src/windows/utility_process/file_channel.rs
++++ b/samply/src/windows/utility_process/file_channel.rs
+@@ -3,8 +3,9 @@
+ //!
+ //! It was created for use case of having the root samply process control an elevated
+ //! helper process which collects ETW information. The elevated process is launched
+-//! with "runas". The elevated process is not a child process of the parent samply
+-//! process, so it doesn't inherit any handles for e.g. unnamed pipes.
++//! with "runas". Elevation does not provide reliable unnamed-pipe inheritance.
++//! When already elevated, the helper can inherit the recording's Job, so its
++//! owner must request and acknowledge collector cleanup before forcing that Job.
+ //!
+ //! We could have probably used sockets for communication instead.
+ //!
+@@ -129,7 +130,28 @@
+     }
+ 
+     pub fn recv_blocking(&mut self) -> Result<T, Box<dyn Error + Send + Sync>> {
+-        self.current_lock.lock_exclusive()?; // block until init message is written
++        self.recv_blocking_until(|| false)
++    }
++
++    pub fn recv_blocking_until(
++        &mut self,
++        mut stop: impl FnMut() -> bool,
++    ) -> Result<T, Box<dyn Error + Send + Sync>> {
++        // Stay on the elevated controller's acquiring thread so Xperf::Drop
++        // stops owned sessions and releases the named mutex on that thread.
++        loop {
++            if stop() {
++                return Err("Samply client exited or supervisor requested collection stop".into());
++            }
++            match self.current_lock.try_lock_exclusive() {
++                Ok(()) => break,
++                Err(error)
++                    if error.kind() == std::io::ErrorKind::Interrupted
++                        || error.raw_os_error() == lock_contended_error().raw_os_error() => {}
++                Err(error) => return Err(error.into()),
++            }
++            std::thread::sleep(std::time::Duration::from_millis(20));
++        }
+         let msg = self.reader.recv()?;
+         FileExt::unlock(&self.current_lock)?;
+         std::mem::swap(&mut self.current_lock, &mut self.next_lock);
+@@ -211,3 +233,32 @@
+         Ok((self.receiver, self.sender))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn explicit_stop_interrupts_locked_ipc_without_waiting_for_eof() {
++        use std::sync::{
++            atomic::{AtomicBool, Ordering},
++            Arc,
++        };
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("channel");
++        let sender = Sender::<serde_json::Value>::open(&path, true).unwrap();
++        let mut receiver = Receiver::<serde_json::Value>::open(&path, false).unwrap();
++        let flag = Arc::new(AtomicBool::new(false));
++        let setter = flag.clone();
++        let thread = std::thread::spawn(move || {
++            std::thread::sleep(std::time::Duration::from_millis(40));
++            setter.store(true, Ordering::Release);
++        });
++        let start = std::time::Instant::now();
++        let result = receiver.recv_blocking_until(|| flag.load(Ordering::Acquire));
++        thread.join().unwrap();
++        assert!(result.is_err());
++        assert!(start.elapsed() < std::time::Duration::from_secs(2));
++        // The peer and its locked file still exist: EOF was never the trigger.
++        drop(sender);
++    }
++}

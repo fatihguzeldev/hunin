@@ -287,6 +287,8 @@ impl Engine {
         let execution_started_at_us = now_us();
         let (mut child, mut tree) = process::spawn(&mut command).await?;
         let pid = child.id().context("target process has no PID")?;
+        #[cfg(windows)]
+        let native_wrapper_birth = process_identity::birth(pid);
         let collector_wrapper = plan.command[0] != capture.command[0]
             || matches!(run.runtime.as_str(), "go-test" | "go-trace");
         run.source["supervised_execution_started_at_us"] = json!(execution_started_at_us);
@@ -297,7 +299,18 @@ impl Engine {
         });
         run.source["supervised_pid"] = json!(pid);
         run.source["target_outcome"] = json!({"status":"running","supervised_pid":pid});
-        self.store.save_run(&run)?;
+        if let Err(error) = self.store.save_run(&run) {
+            #[cfg(windows)]
+            native_cleanup::request_stop(
+                &directory,
+                &run.runtime,
+                pid,
+                native_wrapper_birth.as_deref(),
+            )
+            .await;
+            tree.force();
+            return Err(error);
+        }
         let mut metrics = Vec::new();
         let (observer, mut observations) =
             resources::Observer::start(pid, run.id.clone(), collector_wrapper);
@@ -311,12 +324,19 @@ impl Engine {
         let mut timed_out = false;
         let status = loop {
             tokio::select! {
-                status=child.wait()=>{break status?;}
-                _=cancel.changed()=>{canceled=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
-                _=&mut timeout=>{timed_out=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
+                status=child.wait()=>{
+                    // The elevated ETW owner can share this Job. Even an
+                    // unexpected wrapper exit must give it cleanup time before
+                    // the common force/drop path closes the remaining tree.
+                    #[cfg(windows)]
+                    native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
+                    break status?;
+                }
+                _=cancel.changed()=>{canceled=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
+                _=&mut timeout=>{timed_out=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
                 rows=observations.recv(),if observations_open=>{if let Some(rows)=rows{metrics.extend(rows);}else{observations_open=false;}}
                 _=tick.tick()=>{
-                    if self.store.document("cancellations",&run.id).is_ok(){canceled=true;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("persistent cancellation required forced process-tree cleanup after the graceful deadline".into());}break status;}
+                    if self.store.document("cancellations",&run.id).is_ok(){canceled=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("persistent cancellation required forced process-tree cleanup after the graceful deadline".into());}break status;}
                 }
             }
         };
@@ -337,7 +357,13 @@ impl Engine {
             run.runtime.to_ascii_lowercase().as_str(),
             "go" | "rust" | "c" | "cpp" | "c++" | "native"
         ) {
-            let cleanup = native_cleanup::wait(&directory, Duration::from_secs(8)).await;
+            let cleanup = native_cleanup::wait(
+                &directory,
+                pid,
+                native_wrapper_birth.as_deref(),
+                Duration::from_secs(8),
+            )
+            .await;
             if cleanup["acknowledged"] != true {
                 run.diagnostics.push(format!("Native ETW helper cleanup was not confirmed: {}; inspect retained xperf-session evidence before retrying", cleanup["reason"]));
             }

@@ -27,6 +27,8 @@ def verify(binary,output,sampler=None):
     handle=None
     control=None
     recording=None
+    direct=None
+    release=None
     foreign=output/'external-control.etl'
     try:
         source=output/'source';source.mkdir()
@@ -76,15 +78,78 @@ def verify(binary,output,sampler=None):
         canceled=json.loads(stdout);(output/'canceled.json').write_text(json.dumps(canceled,indent=2))
         run=canceled['run']
         assert run['status']=='canceled',run
+        assert any('forced' in text for text in run['diagnostics']),run
         assert run['source']['native_session_cleanup']['acknowledged'] is True,run
         assert execute([control,'query'],output)=='absent','Owned ETW session survived completed cancellation'
         report=json.loads(next((data/'captures'/run_id).glob('*.xperf-session.json')).read_text())
         assert report['state']=='stopped' and report['sessions'],report
-        evidence={'refused_run':refused['run']['id'],'external_handle_preserved':True,'canceled_run':run_id,'owned_handle':owned_handle,'cleanup_acknowledged':True,'kernel_session_absent_after_cancel':True}
+        assert report['owner']['wrapper_pid']==run['source']['supervised_pid'],report
+        assert any(event['state']=='stop_requested' and event['details'].get('reason')=='supervisor_stop_request' for event in report['events']),report
+        # An unexpected wrapper exit inside the Engine Job must receive the
+        # same pre-force cleanup handshake as requested cancellation.
+        marker=output/'engine-wrapper-exit-ready'
+        command=[str(v) for v in [binary,'--data-dir',data,'run','--runtime','native','--cwd',source,'--timeout','30','--',control,'work',marker]]
+        recording=subprocess.Popen(command,cwd=output,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        deadline=time.monotonic()+20
+        while not marker.exists():
+            if recording.poll() is not None:
+                out,err=recording.communicate();raise RuntimeError(f'Wrapper-exit control failed before readiness: {out}\n{err}')
+            if time.monotonic()>deadline:raise RuntimeError('Engine wrapper-exit readiness deadline expired')
+            time.sleep(.02)
+        active=[r for r in json.loads(execute([binary,'--data-dir',data,'call','runs.list','{}'],output,environment))['runs'] if r['status']=='running']
+        assert len(active)==1,active
+        interrupted_id=active[0]['id']
+        active_report=json.loads(next((data/'captures'/interrupted_id).glob('*.xperf-session.json')).read_text())
+        wrapper=active_report['owner']
+        assert wrapper['wrapper_pid']==active[0]['source']['supervised_pid'],active_report
+        execute([control,'kill-wrapper',wrapper['wrapper_pid'],wrapper['wrapper_creation_100ns']],output)
+        out,err=recording.communicate(timeout=30)
+        (output/'engine-wrapper-exit.stderr.txt').write_text(err)
+        assert recording.returncode==1,(recording.returncode,out,err)
+        interrupted=json.loads(out);(output/'engine-wrapper-exit.json').write_text(json.dumps(interrupted,indent=2))
+        assert interrupted['run']['status']=='failed',interrupted
+        assert interrupted['run']['source']['collector_outcome']['exit_code']==42,interrupted
+        assert interrupted['run']['source']['native_session_cleanup']['acknowledged'] is True,interrupted
+        assert execute([control,'query'],output)=='absent','Engine wrapper exit left an owned ETW session active'
+        # Killing only the actual Samply IPC client must also wake its retained
+        # helper watch even if a file-channel lock never supplies an EOF.
+        sampler_path=sampler or Path(environment.get('HUNIN_SAMPLY',''))
+        if not sampler_path.is_file():
+            sampler_path=binary.parent/'collectors/native/bin/samply.exe'
+        if not sampler_path.is_file():raise RuntimeError('Patched sampler path required for direct wrapper-death control')
+        death=output/'wrapper-death';death.mkdir()
+        marker=death/'target-ready';release=death/'target-release'
+        profile=death/'cpu.samply.json'
+        direct=subprocess.Popen([str(v) for v in [sampler_path,'record','--save-only','--unstable-presymbolicate','--lifetime-output',death/'cpu.samply.lifetimes.json','--keep-etl','-o',profile,'--',control,'work',marker,release]],cwd=output,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        deadline=time.monotonic()+15
+        while not marker.exists():
+            if direct.poll() is not None:raise RuntimeError(f'Direct sampler exited before readiness: {direct.returncode}')
+            if time.monotonic()>deadline:raise RuntimeError('Direct target readiness deadline expired')
+            time.sleep(.02)
+        direct_pid=direct.pid
+        direct.kill();direct.wait(timeout=5)
+        death_report=death/'cpu.samply.xperf-session.json'
+        deadline=time.monotonic()+8
+        final_report=None
+        while time.monotonic()<deadline:
+            try:
+                observed=json.loads(death_report.read_text())
+                if observed['state']=='stopped':final_report=observed;break
+            except (FileNotFoundError,json.JSONDecodeError):pass
+            time.sleep(.02)
+        assert final_report is not None,'Direct Samply wrapper death left unconfirmed ETW cleanup'
+        assert final_report['owner']['wrapper_pid']==direct_pid,final_report
+        assert any(event['state']=='stop_requested' and event['details'].get('reason')=='samply_client_exited' for event in final_report['events']),final_report
+        assert execute([control,'query'],output)=='absent','Direct wrapper death left an owned ETW session active'
+        release.write_text('stop owned direct fixture')
+        evidence={'refused_run':refused['run']['id'],'external_handle_preserved':True,'canceled_run':run_id,'owned_handle':owned_handle,'cleanup_acknowledged':True,'kernel_session_absent_after_cancel':True,'engine_wrapper_exit_run':interrupted_id,'engine_wrapper_exit_cleanup':True,'direct_wrapper_pid':direct_pid,'direct_wrapper_death_cleanup':True}
         (output/'evidence.json').write_text(json.dumps(evidence,indent=2));return evidence
     except BaseException as error:
         (output/'failure.json').write_text(json.dumps({'error':str(error)},indent=2));raise
     finally:
+        if release is not None:release.write_text('stop owned direct fixture')
+        if direct is not None and direct.poll() is None:
+            direct.kill();direct.wait(timeout=5)
         if recording is not None and recording.poll() is None:
             # Request through the owner. Never use a global xperf stop or kill
             # an unverified logger merely to make a failed control pass.
