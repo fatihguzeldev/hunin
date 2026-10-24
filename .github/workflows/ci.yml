@@ -221,7 +221,7 @@ jobs:
       - name: Record GraalPy Intel Mac distribution exclusion
         if: always() && matrix.platform == 'macos-x64'
         run: |
-          python -c "import os; open(os.environ['GITHUB_STEP_SUMMARY'],'a').write('GraalPy macOS x64: current upstream native distributions are unavailable; the Hunin app still targets Intel Macs. No GraalPy support is claimed for this cell. See docs/support.md.\n')"
+          python -c "import os; open(os.environ['GITHUB_STEP_SUMMARY'],'a').write('GraalPy macOS x64: current upstream native distributions are unavailable; the Hunin app still targets Intel Macs. No GraalPy support is claimed for this cell.\n')"
       - name: Install checksum-pinned GraalPy Community
         id: graalpy
         if: always() && steps.build.outcome == 'success' && matrix.platform != 'macos-x64'

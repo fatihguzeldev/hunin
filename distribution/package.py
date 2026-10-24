@@ -53,7 +53,7 @@ def build_metadata(root, rust_toolchain=None, rust_target=None):
                              "github_sha": os.environ.get("GITHUB_SHA") or "unknown", "workflow_run_url": run_url,
                              "rust": {"toolchain": rust_toolchain or "unknown", "version": rust.get("release", "unknown"),
                                       "host": rust.get("host", "unknown"), "target": rust_target or "unknown"}},
-        "compatibility": {"minimum_os": "not_established", "runtime_cells": "docs/support.md", "permissions": "docs/installation.md",
+        "compatibility": {"minimum_os": "not_established",
                           "validation": "Consult workflow evidence; packaging alone does not establish collector support."},
     }
 
@@ -78,8 +78,7 @@ def verify_native_collector(files, target):
 def contents(root, binary, target):
     files = {"hunin.exe" if binary.suffix == ".exe" else "hunin": binary.read_bytes()}
     for source, destination in ((root / "ui/dist", "ui"), (root / "sdk", "sdk"),
-                                (root / "collectors", "collectors"), (root / "protocol", "protocol"),
-                                (root / "docs", "docs")):
+                                (root / "collectors", "collectors"), (root / "protocol", "protocol")):
         if not source.is_dir():
             raise ValueError(f"Required bundle component missing: {source}")
         for path in sorted(source.rglob("*")):

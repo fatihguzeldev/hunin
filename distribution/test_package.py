@@ -54,7 +54,7 @@ class PackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "Cargo.toml").write_text('[package]\nversion="0.1.0"\n')
-            for path in ("ui/dist/index.html", "sdk/python/hunin.py", "collectors/python/collect.py", "protocol/record.schema.json", "docs/installation.md", "distribution/install.py", "distribution/fetch_samply.py", "distribution/fetch_runtime.py", "distribution/runtime-assets.json"):
+            for path in ("ui/dist/index.html", "sdk/python/hunin.py", "collectors/python/collect.py", "protocol/record.schema.json", "distribution/install.py", "distribution/fetch_samply.py", "distribution/fetch_runtime.py", "distribution/runtime-assets.json"):
                 target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(path)
