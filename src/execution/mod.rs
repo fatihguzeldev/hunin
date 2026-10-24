@@ -240,9 +240,13 @@ impl Engine {
                 .context("collector planning task failed")??
         };
         let normalize = |value: &str| {
-            value
+            let normalized = value
                 .replace(&directory.to_string_lossy().to_string(), "<artifacts>")
-                .replace(&run.id, "<run>")
+                .replace(&run.id, "<run>");
+            match plan.env.get("HUNIN_DENO_WORKER_SESSION") {
+                Some(session) => normalized.replace(session, "<worker-session>"),
+                None => normalized,
+            }
         };
         let mut settings = json!({"runtime":run.runtime,"runtime_version":plan.runtime_version,"command":plan.command.iter().map(|v|normalize(v)).collect::<Vec<_>>(),"environment":plan.env.iter().map(|(k,v)|(k.clone(),normalize(v))).collect::<std::collections::BTreeMap<_,_>>()});
         if let Some(identity) = &plan.collector_identity {

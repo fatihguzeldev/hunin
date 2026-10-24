@@ -57,11 +57,17 @@ export function plan(request) {
     const preload = toolPath(fileURLToPath(new URL('./clock-preload.mjs', import.meta.url)));
     // Keep the target's explicit permissions. Hunin only adds access needed by its preload.
     const inspectorDenied = command.some(value => value === '--deny-sys' || value.startsWith('--deny-sys=') && value.slice('--deny-sys='.length).split(',').includes('inspector'));
+    const producer = randomUUID();
+    env.HUNIN_DENO_WORKER_SESSION = producer;
+    writeFileSync(join(directory, `deno-workers-${producer}.jsonl`), JSON.stringify({
+      schema_version: 1, runtime: 'deno', run_id, producer_id: producer, status: 'planned',
+    }) + '\n', { mode: 0o600, flag: 'wx' });
     const index = ['run', 'eval', 'test', 'bench'].includes(command[1]) ? 2 : 1;
     launched = [executable, ...command.slice(1, index), '--cpu-prof', `--cpu-prof-dir=${directory}`, '--preload', preload,
-      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_PROJECT_ROOT,HUNIN_RUN_ID,HUNIN_RECORD_DIR`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-write=${directory}`, ...command.slice(index)];
+      `--allow-env=HUNIN_JS_PROFILE_DIR,HUNIN_PROJECT_ROOT,HUNIN_RUN_ID,HUNIN_RECORD_DIR,HUNIN_DENO_WORKER_SESSION`, ...(inspectorDenied ? [] : ['--allow-sys=inspector']), `--allow-read=${directory}`, `--allow-write=${directory}`, ...command.slice(index)];
     if (inspectorDenied) diagnostics.push('The target denies Inspector access; CPU samples retain an unmapped runtime clock when epoch calibration is unavailable.');
     diagnostics.push('Deno TypeScript CPU profile positions refer to generated JavaScript when the runtime omits source maps. Worker profiles are emitted by Deno itself. Child Deno processes need their own collection plan.');
+    diagnostics.push('Deno main-isolate Web Workers have a bounded exit barrier for their exact profile files. Nested workers and node:worker_threads created outside this constructor are not enumerated by this barrier; forced process exit can leave collection incomplete.');
   }
   return { command: launched, env, profiles: [{ path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' }], diagnostics, runtime_version };
 }

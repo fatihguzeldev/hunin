@@ -1,4 +1,5 @@
 pub use crate::importers::ImportedProfile;
+mod deno_workers;
 pub(crate) mod native_tool;
 pub(crate) mod probe;
 use anyhow::{Context, Result, bail};
@@ -63,6 +64,11 @@ pub fn collect(request: &CaptureRequest) -> Result<Vec<ImportedProfile>> {
     let mut files = Vec::new();
     walk(&request.artifact_dir, &mut files)?;
     files.sort();
+    deno_workers::validate(
+        &files,
+        &request.run_id,
+        request.runtime.eq_ignore_ascii_case("deno"),
+    )?;
     let mut profiles = Vec::new();
     for path in files {
         let format = profile_format(&path);

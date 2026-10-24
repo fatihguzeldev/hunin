@@ -31,3 +31,13 @@ if (directory) {
     process.stderr.write(`hunin: CPU clock calibration failed: ${error.message}\n`);
   } finally { session.disconnect(); }
 }
+if (globalThis.Deno && directory) {
+  try {
+    const { installDenoWorkerBarrier } = await import('./deno-workers.mjs');
+    installDenoWorkerBarrier({ directory, runId: process.env.HUNIN_RUN_ID, producerId: process.env.HUNIN_DENO_WORKER_SESSION });
+  } catch (error) {
+    // The prelaunch planned record remains incomplete. A target's explicit
+    // permission denial must not turn collector setup into a target failure.
+    process.stderr.write(`hunin: Deno worker lifecycle setup unavailable: ${error.message}\n`);
+  }
+}

@@ -1,11 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, cpSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, toNamespacedPath } from 'node:path';
+import { join, dirname, toNamespacedPath, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { plan, toolPath } from './plan.mjs';
+
+function retainFailure(directory, error) {
+  const root = process.env.HUNIN_JS_TEST_EVIDENCE ?? (process.env.GITHUB_ACTIONS === 'true' ? 'collector-evidence/javascript-workers' : undefined);
+  if (!root) return;
+  const destination = resolve(root, basename(directory));
+  mkdirSync(dirname(destination), { recursive: true });
+  cpSync(directory, destination, { recursive: true });
+  writeFileSync(join(destination, 'failure.json'), JSON.stringify({ message: error.message, stack: error.stack }, null, 2));
+  process.stderr.write(`JavaScript collector failure evidence retained at ${destination}\n`);
+}
 
 test('runtime tool paths normalize only Win32 verbatim disks and UNC shares', () => {
   assert.equal(toolPath('\\\\?\\C:\\work dir\\capture', 'win32'), 'C:\\work dir\\capture');
@@ -62,11 +73,159 @@ for (const [runtime, executable] of [['node', process.execPath], ['bun', process
       assert.equal(result.status, 0, result.stderr);
       const profiles = readdirSync(directory).filter(name => name.endsWith('.cpuprofile')).map(name => JSON.parse(readFileSync(join(directory, name), 'utf8')));
       assert.ok(profiles.some(profile => profile.nodes.some(node => node.callFrame.functionName === 'workerHot')), `no workerHot frame in ${profiles.length} profiles: ${result.stderr}`);
+    } catch (error) {
+      retainFailure(directory, error);
+      throw error;
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 }
 
 if (process.env.HUNIN_TEST_DENO) {
+  function denoLifecycleTest(name, run) {
+    test(name, () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hunin-deno-lifecycle-'));
+      try { run(directory); }
+      catch (error) { retainFailure(directory, error); throw error; }
+      finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+  }
+  function captureDeno(directory, source, workerSource = 'postMessage(1);', permissions = []) {
+    const artifacts = join(directory, 'capture');
+    writeFileSync(join(directory, 'worker.mjs'), workerSource);
+    writeFileSync(join(directory, 'main.mjs'), source);
+    const command = [process.env.HUNIN_TEST_DENO, 'run', `--allow-read=${directory}`, ...permissions, join(directory, 'main.mjs')];
+    const capture = plan({ command, cwd: directory, artifact_dir: artifacts, run_id: 'worker-lifecycle', runtime: 'deno' });
+    const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+    writeFileSync(join(directory, 'target-result.json'), JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error?.message }, null, 2));
+    assert.equal(result.status, 0, result.stderr);
+    const statusPath = join(artifacts, `deno-workers-${capture.env.HUNIN_DENO_WORKER_SESSION}.jsonl`);
+    const records = readFileSync(statusPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    return { result, records, artifacts, terminal: records.findLast(record => record.event === 'finished') };
+  }
+  const workerMain = `const w=new Worker(new URL('./worker.mjs',import.meta.url),{type:'module'});w.onmessage=e=>{console.log(e.data);w.terminate();};`;
+
+  denoLifecycleTest('Deno exit waits for a large exact worker profile without changing terminate', directory => {
+    // A large sampled stack makes native serialization outlast the main
+    // isolate's cleanup, reproducing missing/empty output without timing sleeps.
+    const name = 'deep_' + 'x'.repeat(32000);
+    const worker = `function workerHot(){const end=Date.now()+150;let value=0;while(Date.now()<end)for(let n=1;n<10000;n++)value+=Math.sqrt(n);return value;}function ${name}(n){return n?${name}(n-1):workerHot();}postMessage(${name}(1200));`;
+    const { result, records, terminal, artifacts } = captureDeno(directory, workerMain, worker);
+    assert.ok(Number(result.stdout.trim()) > 0);
+    assert.equal(result.stderr, '');
+    assert.equal(terminal?.status, 'complete');
+    assert.equal(terminal.workers.length, 1);
+    assert.equal(terminal.profiles.length, 1);
+    assert.equal(terminal.workers[0].worker_id, 1);
+    assert.equal(records.filter(row => row.event === 'worker_registered').length, 1);
+    const profile = terminal.profiles[0];
+    assert.equal(profile.worker_id, 1);
+    assert.match(profile.filename, new RegExp(`^CPU\\.\\d+\\.${terminal.pid}\\.worker-1\\.cpuprofile$`));
+    const bytes = readFileSync(join(artifacts, profile.filename));
+    assert.ok(bytes.length > 1024 * 1024, 'control failed to exercise a large native profile write');
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), profile.sha256);
+    assert.ok(JSON.parse(bytes).nodes.some(node => node.callFrame.functionName === 'workerHot'));
+  });
+
+  denoLifecycleTest('Deno natural worker close completes its profile barrier', directory => {
+    const { terminal, result } = captureDeno(directory, `const w=new Worker(new URL('./worker.mjs',import.meta.url),{type:'module'});w.onmessage=e=>console.log(e.data);`, 'postMessage(1);close();');
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'complete');
+    assert.equal(terminal.profiles.length, 1);
+  });
+
+  denoLifecycleTest('Deno barrier uses runtime worker IDs rather than constructor counts', directory => {
+    const source = `const NativeWorker=Object.getPrototypeOf(Worker);const first=new NativeWorker(new URL('./worker.mjs',import.meta.url),{type:'module'});first.onmessage=()=>{first.terminate();${workerMain}};`;
+    const { terminal, result } = captureDeno(directory, source, `const end=Date.now()+50;while(Date.now()<end){}postMessage(1);`);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'complete');
+    assert.deepEqual(terminal.workers.map(row => row.worker_id), [2]);
+    assert.deepEqual(terminal.profiles.map(row => row.worker_id), [2]);
+  });
+
+  denoLifecycleTest('Deno handled worker startup error validates the emitted profile', directory => {
+    const { terminal, result, artifacts } = captureDeno(directory, `const w=new Worker(new URL('./worker.mjs',import.meta.url),{type:'module'});w.onerror=e=>{e.preventDefault();console.log('handled');};`, `throw Error('expected worker startup failure');`);
+    assert.equal(result.stdout.trim(), 'handled');
+    assert.equal(terminal?.status, 'complete');
+    assert.equal(terminal.profiles.length, 1);
+    assert.ok(JSON.parse(readFileSync(join(artifacts, terminal.profiles[0].filename), 'utf8')).nodes.length > 0);
+  });
+
+  denoLifecycleTest('Deno lifecycle deadline rejects a missing exact worker profile', directory => {
+    // Simulate a changed native ID contract: an unrelated completed profile
+    // must never satisfy the registry just because its file count matches.
+    const source = `import inspector from 'node:inspector';const post=inspector.Session.prototype.post;inspector.Session.prototype.post=function(method,...args){if(method==='Runtime.getProperties'){args.at(-1)(null,{privateProperties:[{name:'#id',value:{value:2}}]});return;}return post.call(this,method,...args);};${workerMain}`;
+    const { terminal, result, artifacts } = captureDeno(directory, source);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'incomplete');
+    assert.deepEqual(terminal.workers.map(row => row.worker_id), [2]);
+    assert.ok(readdirSync(artifacts).some(name => name.endsWith('.worker-1.cpuprofile')));
+    assert.match(terminal.diagnostics.join(' '), /profile flush did not complete within 2000ms/);
+  });
+
+  denoLifecycleTest('Deno denied Inspector access cannot claim tracked worker completion', directory => {
+    const { terminal, result } = captureDeno(directory, workerMain, 'postMessage(1);', ['--deny-sys=inspector']);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'incomplete');
+    assert.match(terminal.diagnostics.join(' '), /worker identity unavailable/);
+    assert.equal(terminal.workers[0].worker_id, null);
+  });
+
+  denoLifecycleTest('Deno missing private worker identity never falls back to a guessed ID', directory => {
+    const source = `import inspector from 'node:inspector';const post=inspector.Session.prototype.post;inspector.Session.prototype.post=function(method,...args){if(method==='Runtime.getProperties'){args.at(-1)(null,{privateProperties:[]});return;}return post.call(this,method,...args);};${workerMain}`;
+    const { terminal, result } = captureDeno(directory, source);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'incomplete');
+    assert.equal(terminal.workers[0].worker_id, null);
+    assert.equal(terminal.profiles.length, 0);
+    assert.match(terminal.diagnostics.join(' '), /Worker.#id is unavailable or invalid/);
+  });
+
+  denoLifecycleTest('Deno denied profile reads preserve target output and mark collection incomplete', directory => {
+    const source = `const w=new Worker(new URL('data:application/javascript,postMessage(1)'),{type:'module'});w.onmessage=e=>{console.log(e.data);w.terminate();};`;
+    const { terminal, result } = captureDeno(directory, source, '', [`--deny-read=${join(directory, 'capture')}`]);
+    assert.equal(result.stdout.trim(), '1');
+    assert.equal(terminal?.status, 'incomplete');
+    assert.match(terminal.diagnostics.join(' '), /worker profile lifecycle unavailable.*[Rr]equires read access/);
+  });
+
+  denoLifecycleTest('Deno forced main exit never claims a completed worker lifecycle', directory => {
+    const { records, terminal, result } = captureDeno(directory, `console.log('forced');Deno.exit(0);`);
+    assert.equal(result.stdout.trim(), 'forced');
+    assert.equal(records[0].status, 'planned');
+    assert.notEqual(terminal?.status, 'complete');
+  });
+
+  denoLifecycleTest('Deno denied lifecycle environment preserves target execution', directory => {
+    const { result, records, terminal } = captureDeno(directory, 'console.log("target-ran");', '', ['--deny-env=HUNIN_DENO_WORKER_SESSION']);
+    assert.equal(result.stdout.trim(), 'target-ran');
+    assert.match(result.stderr, /Deno worker lifecycle setup unavailable/);
+    assert.equal(records[0].status, 'planned');
+    assert.notEqual(terminal?.status, 'complete');
+  });
+
+  denoLifecycleTest('Deno lifecycle deadline bounds validation and resets only after a completed phase', directory => {
+    const module = new URL('./deno-workers.mjs', import.meta.url).href;
+    const producerId = 'zero-budget-control';
+    writeFileSync(join(directory, `deno-workers-${producerId}.jsonl`), JSON.stringify({ schema_version: 1, runtime: 'deno', run_id: 'zero-budget', producer_id: producerId, status: 'planned' }) + '\n');
+    writeFileSync(join(directory, 'worker.mjs'), 'postMessage(1);');
+    writeFileSync(join(directory, 'zero.mjs'), `import {installDenoWorkerBarrier} from ${JSON.stringify(module)};installDenoWorkerBarrier({directory:${JSON.stringify(directory)},runId:'zero-budget',producerId:${JSON.stringify(producerId)},timeoutMs:0});${workerMain}`);
+    const zero = spawnSync(process.env.HUNIN_TEST_DENO, ['run', '--cpu-prof', `--cpu-prof-dir=${directory}`, `--allow-read=${directory}`, `--allow-write=${directory}`, '--allow-sys=inspector', join(directory, 'zero.mjs')], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(zero.status, 0, zero.stderr);
+    assert.equal(zero.stdout.trim(), '1');
+    const terminal = readFileSync(join(directory, `deno-workers-${producerId}.jsonl`), 'utf8').trim().split('\n').map(line => JSON.parse(line)).at(-1);
+    assert.equal(terminal.status, 'incomplete');
+    assert.match(terminal.diagnostics.join(' '), /deadline expired after 0ms/);
+
+    // Advance a controlled main-isolate clock after a user beforeExit hook
+    // restarts real worker work. Reusing the previous completed phase's
+    // deadline would reject this new shutdown even though its profile is ready.
+    const source = `import process from 'node:process';const now=performance.now.bind(performance);let offset=0;performance.now=()=>now()+offset;process.once('beforeExit',()=>{const w=new Worker(new URL('./worker.mjs',import.meta.url),{type:'module'});w.onmessage=e=>{offset=3000;console.log(e.data);w.terminate();};});`;
+    const next = captureDeno(directory, source);
+    assert.equal(next.result.stdout.trim(), '1');
+    assert.equal(next.terminal?.status, 'complete');
+    assert.equal(next.terminal.profiles.length, 1);
+  });
+
   test('Deno calibrates its CPU clock with only scoped Inspector access', () => {
     const directory = mkdtempSync(join(tmpdir(), 'hunin-deno-clock-'));
     try {
