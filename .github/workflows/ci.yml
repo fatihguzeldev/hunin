@@ -108,9 +108,9 @@ jobs:
         if: always()
         id: build
         run: cargo +stable build --locked --release
-      - name: Native collector build integrity tests
+      - name: Native collector build and session evidence tests
         if: always()
-        run: python -m unittest discover -s collectors/native -p test_build.py
+        run: python -m unittest discover -s collectors/native -p "test_*.py"
       - uses: actions/cache/restore@v4
         if: always() && steps.build.outcome == 'success'
         id: native-cache

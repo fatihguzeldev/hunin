@@ -3,12 +3,54 @@
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import time
 
 HERE=Path(__file__).resolve().parent
+
+# Session::stop accepts these ControlTrace results only after querying that the
+# retained session has gone away: SUCCESS, MORE_DATA, ACTIVE_CONNECTIONS and
+# WMI_INSTANCE_NOT_FOUND. A request/reason alone is not cleanup evidence.
+STOP_RESULTS=frozenset((0,234,2402,4201))
+
+def verify_direct_recording(report,wrapper_pid,profile,active_handle):
+    assert report.get('schema')=='hunin-xperf-session-v1',report
+    assert report.get('state')=='recording','Direct wrapper was not recording before termination'
+    owner=report.get('owner',{})
+    assert owner.get('wrapper_pid')==wrapper_pid,report
+    birth=owner.get('wrapper_creation_100ns')
+    assert type(birth) is int and birth>0,report
+    assert owner.get('profile_output_path')==str(profile),report
+    helper_pid=report.get('helper_pid')
+    assert type(helper_pid) is int and helper_pid>0,report
+    sessions=report.get('sessions')
+    assert isinstance(sessions,list) and sessions,report
+    kernels=[session for session in sessions if session.get('name')=='NT Kernel Logger']
+    assert len(kernels)==1,report
+    kernel=kernels[0]
+    assert kernel.get('log_file')==str(PureWindowsPath(profile).with_suffix('.kernel.etl')),report
+    assert active_handle!='absent','Direct wrapper never owned an active kernel session'
+    assert int(kernel['control_handle'],16)==int(active_handle,16)>0,report
+
+def verify_direct_cleanup(before,after,wrapper_pid,profile,active_handle,remaining_handle):
+    """Check ownership and actual cleanup independently of the shutdown route."""
+    verify_direct_recording(before,wrapper_pid,profile,active_handle)
+    assert after.get('schema')==before['schema'],after
+    assert after.get('state')=='stopped','Direct wrapper death left unconfirmed ETW cleanup'
+    assert after.get('owner')==before['owner'],'Cleanup report belongs to a different wrapper lifetime'
+    assert after.get('helper_pid')==before['helper_pid'],'Cleanup report belongs to a different helper'
+    assert after.get('sessions')==before['sessions'],'Cleanup report changed the owned sessions'
+    events=after.get('events',[])
+    for session in before['sessions']:
+        stopped=[event.get('details',{}) for event in events
+                 if event.get('state')=='session_stopped' and event.get('details',{}).get('session')==session]
+        assert stopped,('Missing owned-session stop evidence',session)
+        for result in stopped:
+            status=result.get('stop_result')
+            assert result.get('state')=='stopped' and type(status) is int and status in STOP_RESULTS, result
+    assert remaining_handle=='absent','Direct wrapper death left an owned ETW session active'
 
 def execute(command,cwd,env=None,codes=(0,)):
     result=subprocess.run([str(v) for v in command],cwd=cwd,env=env,capture_output=True,text=True,timeout=90)
@@ -111,8 +153,9 @@ def verify(binary,output,sampler=None):
         assert interrupted['run']['source']['collector_outcome']['exit_code']==42,interrupted
         assert interrupted['run']['source']['native_session_cleanup']['acknowledged'] is True,interrupted
         assert execute([control,'query'],output)=='absent','Engine wrapper exit left an owned ETW session active'
-        # Killing only the actual Samply IPC client must also wake its retained
-        # helper watch even if a file-channel lock never supplies an EOF.
+        # Killing only the actual Samply IPC client must clean up its sessions.
+        # IPC EOF can unwind the helper before its retained process watch polls;
+        # the locked-IPC native test separately exercises the watch-only route.
         sampler_path=sampler or Path(environment.get('HUNIN_SAMPLY',''))
         if not sampler_path.is_file():
             sampler_path=binary.parent/'collectors/native/bin/samply.exe'
@@ -127,8 +170,22 @@ def verify(binary,output,sampler=None):
             if time.monotonic()>deadline:raise RuntimeError('Direct target readiness deadline expired')
             time.sleep(.02)
         direct_pid=direct.pid
-        direct.kill();direct.wait(timeout=5)
         death_report=death/'cpu.samply.xperf-session.json'
+        deadline=time.monotonic()+2
+        before_report=None
+        while time.monotonic()<deadline:
+            try:
+                observed=json.loads(death_report.read_text())
+                if observed['state']=='recording':before_report=observed;break
+            except (FileNotFoundError,json.JSONDecodeError):pass
+            time.sleep(.02)
+        assert before_report is not None,'Direct wrapper has no live session ownership report'
+        direct_handle=execute([control,'query'],output)
+        verify_direct_recording(before_report,direct_pid,profile,direct_handle)
+        assert direct.poll() is None,'Direct wrapper exited before the termination control'
+        (death/'before-kill.xperf-session.json').write_text(json.dumps(before_report,indent=2))
+        (death/'before-kill.control.json').write_text(json.dumps({'wrapper_pid':direct_pid,'wrapper_alive':True,'kernel_handle':direct_handle},indent=2))
+        direct.kill();direct.wait(timeout=5)
         deadline=time.monotonic()+8
         final_report=None
         while time.monotonic()<deadline:
@@ -138,11 +195,10 @@ def verify(binary,output,sampler=None):
             except (FileNotFoundError,json.JSONDecodeError):pass
             time.sleep(.02)
         assert final_report is not None,'Direct Samply wrapper death left unconfirmed ETW cleanup'
-        assert final_report['owner']['wrapper_pid']==direct_pid,final_report
-        assert any(event['state']=='stop_requested' and event['details'].get('reason')=='samply_client_exited' for event in final_report['events']),final_report
-        assert execute([control,'query'],output)=='absent','Direct wrapper death left an owned ETW session active'
+        remaining_handle=execute([control,'query'],output)
+        verify_direct_cleanup(before_report,final_report,direct_pid,profile,direct_handle,remaining_handle)
         release.write_text('stop owned direct fixture')
-        evidence={'refused_run':refused['run']['id'],'external_handle_preserved':True,'canceled_run':run_id,'owned_handle':owned_handle,'cleanup_acknowledged':True,'kernel_session_absent_after_cancel':True,'engine_wrapper_exit_run':interrupted_id,'engine_wrapper_exit_cleanup':True,'direct_wrapper_pid':direct_pid,'direct_wrapper_death_cleanup':True}
+        evidence={'refused_run':refused['run']['id'],'external_handle_preserved':True,'canceled_run':run_id,'owned_handle':owned_handle,'cleanup_acknowledged':True,'kernel_session_absent_after_cancel':True,'engine_wrapper_exit_run':interrupted_id,'engine_wrapper_exit_cleanup':True,'direct_wrapper_pid':direct_pid,'direct_wrapper_death_cleanup':True,'direct_owned_handle':direct_handle,'direct_kernel_session_after_death':remaining_handle}
         (output/'evidence.json').write_text(json.dumps(evidence,indent=2));return evidence
     except BaseException as error:
         (output/'failure.json').write_text(json.dumps({'error':str(error)},indent=2));raise
