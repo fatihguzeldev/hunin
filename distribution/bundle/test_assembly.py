@@ -225,6 +225,21 @@ class PackageTests(unittest.TestCase):
                 self.assertFalse(name in files, f"Unexpected runtime asset: {name}")
             self.assertFalse("fetch_samply.py" in files)
 
+    def test_installed_vmprof_decoder_is_standalone_format_implementation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            compatibility = root / "collectors/python/decode.py"
+            compatibility.write_text("source-only compatibility entrypoint")
+            implementation = root / "src/importers/vmprof/decode.py"
+            files = package.contents(root, binary, "linux-x64")
+            self.assertEqual(
+                files["collectors/python/decode.py"], implementation.read_bytes()
+            )
+            self.assertNotEqual(
+                files["collectors/python/decode.py"], compatibility.read_bytes()
+            )
+
     def test_missing_emitted_runtime_asset_explains_which_build_is_required(self):
         for name in (
             "collectors/javascript/agents/clock.mjs",

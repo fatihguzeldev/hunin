@@ -28,7 +28,6 @@
         "capture.py": "capture.py",
         "cpu.py": "cpu.py",
         "cpu_clock.py": "cpu_clock.py",
-        "decode.py": "decode.py",
         "entry.py": "entry.py",
         "graal.py": "graal.py",
         "hunin_capture/__init__.py": "hunin_capture/__init__.py",
@@ -42,6 +41,12 @@
         "hunin_capture/cpu_progress/clocks/macos.py": "hunin_capture/cpu_progress/clocks/macos.py",
         "hunin_capture/cpu_progress/clocks/linux.py": "hunin_capture/cpu_progress/clocks/linux.py"
       }
+    },
+    {
+      "name": "vmprof-decoder",
+      "source_root": "src/importers/vmprof",
+      "destination_root": "collectors/python",
+      "files": { "decode.py": "decode.py" }
     },
     {
       "name": "native-collector",
