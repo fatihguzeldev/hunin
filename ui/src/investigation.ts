@@ -1,0 +1,191 @@
+export type ProfileInvestigation = {
+  unit: string;
+  path: string[];
+  cursor?: string;
+  breadcrumbs: string[];
+  mode: 'tree' | 'flame';
+  query: string;
+  scopeKey?: string;
+  expanded?: string[];
+  focus?: { path: string[]; names: string[] };
+};
+
+export type SourceSelection = {
+  view: string;
+  path: string;
+  line?: number;
+  codeId?: string;
+};
+
+export type Investigation = {
+  profile: ProfileInvestigation;
+  source?: SourceSelection;
+};
+
+type SavedInvestigation = {
+  version: 1;
+  resultIdentity?: string;
+  state: Investigation;
+};
+
+type Entry = SavedInvestigation & { restored: boolean };
+type SessionStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function strings(value: unknown, limit = 128): string[] | undefined {
+  return Array.isArray(value) &&
+    value.length <= limit &&
+    value.every((item): item is string => typeof item === 'string')
+    ? [...value]
+    : undefined;
+}
+
+function empty(): Investigation {
+  return {
+    profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
+  };
+}
+
+function decode(value: unknown): SavedInvestigation | undefined {
+  const saved = object(value);
+  const state = object(saved?.state);
+  const profile = object(state?.profile);
+  if (saved?.version !== 1 || !profile) return undefined;
+  const result = empty();
+  result.profile.unit = text(profile.unit) ?? '';
+  result.profile.path = strings(profile.path) ?? [];
+  result.profile.breadcrumbs = strings(profile.breadcrumbs) ?? [];
+  result.profile.cursor = text(profile.cursor);
+  result.profile.mode = profile.mode === 'flame' ? 'flame' : 'tree';
+  result.profile.query = text(profile.query) ?? '';
+  result.profile.scopeKey = text(profile.scopeKey);
+  result.profile.expanded = strings(profile.expanded, 2_000);
+  const focus = object(profile.focus);
+  const focusPath = strings(focus?.path, 256);
+  const focusNames = strings(focus?.names, 256);
+  if (focusPath && focusNames && focusPath.length === focusNames.length)
+    result.profile.focus = { path: focusPath, names: focusNames };
+  const source = object(state?.source);
+  const path = text(source?.path);
+  const view = text(source?.view);
+  if (
+    source &&
+    path &&
+    view &&
+    (source?.line === undefined ||
+      (typeof source.line === 'number' &&
+        Number.isInteger(source.line) &&
+        source.line >= 1)) &&
+    (source.codeId === undefined || typeof source.codeId === 'string')
+  ) {
+    result.source = {
+      view,
+      path,
+      line: source.line,
+      codeId: text(source.codeId),
+    };
+  }
+  return {
+    version: 1,
+    resultIdentity: text(saved.resultIdentity),
+    state: result,
+  };
+}
+
+/** Own private investigation preferences; raw observations and source bytes stay in the service. */
+export class Investigations {
+  private entries = new Map<string, Entry>();
+  persistent: boolean;
+
+  constructor(private storage?: SessionStorage) {
+    this.persistent = storage !== undefined;
+  }
+
+  private entry(runId: string): Entry {
+    const existing = this.entries.get(runId);
+    if (existing) return existing;
+    let saved: SavedInvestigation | undefined;
+    let value: string | null | undefined;
+    try {
+      value = this.storage?.getItem(`hunin.investigation.v1:${runId}`);
+    } catch {
+      this.persistent = false;
+    }
+    if (value) {
+      try {
+        saved = decode(JSON.parse(value));
+      } catch {
+        /* Malformed private preferences do not make storage unavailable. */
+      }
+    }
+    const entry: Entry = saved
+      ? { ...saved, restored: true }
+      : { version: 1, state: empty(), restored: false };
+    this.entries.set(runId, entry);
+    return entry;
+  }
+
+  forRun(runId: string): Investigation {
+    return this.entry(runId).state;
+  }
+
+  capture(runId: string): SavedInvestigation {
+    const entry = this.entry(runId);
+    return {
+      version: 1,
+      resultIdentity: entry.resultIdentity,
+      state: entry.state,
+    };
+  }
+
+  restore(runId: string, value: unknown): void {
+    const saved = decode(value);
+    if (saved) this.entries.set(runId, { ...saved, restored: true });
+  }
+
+  persist(runId: string): void {
+    try {
+      this.storage?.setItem(
+        `hunin.investigation.v1:${runId}`,
+        JSON.stringify(this.capture(runId)),
+      );
+    } catch {
+      this.persistent = false;
+    }
+  }
+
+  observeResult(
+    runId: string,
+    identity: string | undefined,
+  ): 'changed' | 'unconfirmed' | undefined {
+    const entry = this.entry(runId);
+    const changed =
+      entry.resultIdentity !== undefined && identity !== entry.resultIdentity;
+    const unconfirmed =
+      entry.restored &&
+      (identity === undefined || entry.resultIdentity === undefined);
+    if (changed || unconfirmed) {
+      const profile = entry.state.profile;
+      profile.path = [];
+      profile.breadcrumbs = [];
+      profile.cursor = undefined;
+      profile.scopeKey = undefined;
+      profile.expanded = undefined;
+      profile.focus = undefined;
+      entry.state.source = undefined;
+    }
+    entry.resultIdentity = identity;
+    entry.restored = false;
+    this.persist(runId);
+    return changed ? 'changed' : unconfirmed ? 'unconfirmed' : undefined;
+  }
+}

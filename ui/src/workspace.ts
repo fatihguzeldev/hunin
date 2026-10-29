@@ -1,5 +1,6 @@
+import { Investigations, type Investigation } from './investigation';
 import { runSource } from './run';
-import { operation, type Run, type Summary } from './api';
+import { operation, type Run, type Summary, type Operations } from './api';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
 import { recordDialog } from './recording';
@@ -11,6 +12,9 @@ export type ViewContext = {
   run: Run;
   summary: Summary;
   runs: Run[];
+  investigation: Investigation;
+  signal: AbortSignal;
+  persist: (mode?: 'push' | 'replace') => void;
   source: (path: string, line?: number | null, codeId?: string | null) => void;
 };
 export type View = {
@@ -31,6 +35,10 @@ export class Workspace {
   private focusSelectedTab = false;
   private poll: ReturnType<typeof setTimeout> | undefined;
   private views: Record<string, View>;
+  private investigations: Investigations;
+  private renderController: AbortController | undefined;
+  private pendingInvalidation: 'changed' | 'unconfirmed' | undefined;
+  private returningFromSource = false;
 
   constructor(
     views: Record<string, View>,
@@ -39,8 +47,16 @@ export class Workspace {
       path: string,
       line?: number,
       codeId?: string,
+      signal?: AbortSignal,
     ) => Promise<HTMLElement>,
   ) {
+    let storage: Storage | undefined;
+    try {
+      storage = window.sessionStorage;
+    } catch {
+      /* Private state remains in memory. */
+    }
+    this.investigations = new Investigations(storage);
     this.views = {
       overview: {
         name: 'Overview',
@@ -50,11 +66,18 @@ export class Workspace {
       ...views,
     };
     this.normalizeTab();
+    this.restoreHistory();
     window.addEventListener('popstate', () => {
+      const wasSource = Boolean(
+        this.selected && this.investigations.forRun(this.selected).source,
+      );
       const params = new URLSearchParams(location.search);
       this.selected = params.get('run') ?? '';
       this.tab = params.get('view') ?? 'overview';
       this.normalizeTab();
+      this.restoreHistory();
+      this.returningFromSource =
+        wasSource && !this.investigations.forRun(this.selected).source;
       this.renderRail();
       void this.render();
     });
@@ -257,21 +280,79 @@ export class Workspace {
   private navigate(id: string, tab: string): void {
     this.selected = id;
     this.tab = tab;
-    this.writeLocation();
+    if (id) this.investigations.forRun(id).source = undefined;
+    this.writeLocation('push');
     this.renderRail();
     void this.render();
   }
 
-  private writeLocation(): void {
+  private historyState():
+    | { runId: string; saved: unknown; sourceReturn: boolean }
+    | undefined {
+    const value: unknown = history.state;
+    if (!value || typeof value !== 'object' || !('hunin' in value))
+      return undefined;
+    const state = value.hunin;
+    if (
+      !state ||
+      typeof state !== 'object' ||
+      !('runId' in state) ||
+      typeof state.runId !== 'string' ||
+      !('saved' in state)
+    )
+      return undefined;
+    return {
+      runId: state.runId,
+      saved: state.saved,
+      sourceReturn: 'sourceReturn' in state && state.sourceReturn === true,
+    };
+  }
+
+  private restoreHistory(): void {
+    const state = this.historyState();
+    if (this.selected && state?.runId === this.selected)
+      this.investigations.restore(this.selected, state.saved);
+  }
+
+  private writeLocation(
+    mode: 'push' | 'replace' = 'replace',
+    sourceEntry = false,
+  ): void {
     const url = new URL(location.href);
     if (this.selected) url.searchParams.set('run', this.selected);
     else url.searchParams.delete('run');
     url.searchParams.set('view', this.tab);
-    history.pushState({}, '', url);
+    const previous = this.historyState();
+    const source = this.selected
+      ? this.investigations.forRun(this.selected).source
+      : undefined;
+    const state = {
+      hunin: {
+        runId: this.selected,
+        saved: this.selected
+          ? this.investigations.capture(this.selected)
+          : undefined,
+        sourceReturn: Boolean(
+          source &&
+          (sourceEntry ||
+            (mode === 'replace' &&
+              previous?.runId === this.selected &&
+              previous.sourceReturn)),
+        ),
+      },
+    };
+    history[mode === 'push' ? 'pushState' : 'replaceState'](state, '', url);
+    if (this.selected) this.investigations.persist(this.selected);
   }
 
-  private async render(): Promise<void> {
+  private async render(
+    snapshot?: Operations['runs.get']['output'],
+  ): Promise<void> {
     const epoch = ++this.epoch;
+    this.renderController?.abort();
+    const controller = new AbortController();
+    this.renderController = controller;
+    const signal = controller.signal;
     clearTimeout(this.poll);
     this.content.replaceChildren(loading('Loading recording…'));
     try {
@@ -312,16 +393,24 @@ export class Workspace {
         );
         return;
       }
-      const { run, summary } = await operation('runs.get', {
-        run_id: this.selected,
-      });
-      if (epoch !== this.epoch) return;
-      // A deep link can select a run outside the first bounded list page.
+      const details =
+        snapshot?.run.id === this.selected
+          ? snapshot
+          : await operation('runs.get', { run_id: this.selected }, signal);
+      if (epoch !== this.epoch || signal.aborted) return;
+      const { run, summary, result_identity } = details;
+      const invalidation =
+        this.investigations.observeResult(run.id, result_identity) ??
+        this.pendingInvalidation;
+      this.pendingInvalidation = undefined;
+      const investigation = this.investigations.forRun(run.id);
+      if (investigation.source?.view !== this.tab)
+        investigation.source = undefined;
+      this.writeLocation('replace');
       if (!this.runs.some((value) => value.id === run.id)) {
         this.runs.push(run);
         this.renderRail();
       }
-      const header = this.header(run);
       const view = el(
         'section',
         {
@@ -333,8 +422,26 @@ export class Workspace {
         },
         loading('Loading view…'),
       );
-      if (epoch !== this.epoch) return;
-      this.content.replaceChildren(header, view);
+      const notices = invalidation
+        ? [
+            el(
+              'p',
+              { class: 'notice', role: 'status' },
+              invalidation === 'changed'
+                ? 'Selected results changed. Saved stack and source locations were reset; your filters are retained.'
+                : 'This service cannot confirm the saved result identity. Stack and source locations were reset; your filters are retained.',
+            ),
+          ]
+        : [];
+      if (!this.investigations.persistent)
+        notices.push(
+          el(
+            'p',
+            { class: 'metric-note' },
+            'Investigation state is remembered on this page only because browser session storage is unavailable.',
+          ),
+        );
+      this.content.replaceChildren(this.header(run), ...notices, view);
       if (this.focusSelectedTab) {
         this.content
           .querySelector<HTMLButtonElement>(`#tab-${this.tab}`)
@@ -345,22 +452,68 @@ export class Workspace {
         path: string,
         line?: number | null,
         codeId?: string | null,
-      ): void => {
-        void this.showSource(run, path, line ?? undefined, codeId ?? undefined);
-      };
-      const renderer = this.views[this.tab] ?? this.views.overview;
-      const body = await renderer.render({
-        run,
-        summary,
-        runs: this.runs,
-        source,
-      });
-      if (epoch !== this.epoch) return;
-      view.replaceChildren(body);
+      ): void =>
+        this.showSource(run, path, line ?? undefined, codeId ?? undefined);
+      if (investigation.source) {
+        const selected = investigation.source;
+        const back = button(
+          `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
+          () => {
+            if (this.historyState()?.sourceReturn) history.back();
+            else {
+              investigation.source = undefined;
+              this.returningFromSource = true;
+              this.writeLocation('replace');
+              void this.render();
+            }
+          },
+          'button subtle small',
+        );
+        const sourceBody = loading('Loading measured source…');
+        view.replaceChildren(back, sourceBody);
+        back.focus();
+        try {
+          const body = await this.sourceView(
+            run,
+            selected.path,
+            selected.line,
+            selected.codeId,
+            signal,
+          );
+          if (epoch !== this.epoch || signal.aborted) return;
+          sourceBody.replaceWith(body);
+        } catch (error) {
+          if (epoch === this.epoch && !signal.aborted)
+            sourceBody.replaceWith(
+              errorView(error, () => {
+                void this.render();
+              }),
+            );
+        }
+      } else {
+        const renderer = this.views[this.tab] ?? this.views.overview;
+        const body = await renderer.render({
+          run,
+          summary,
+          runs: this.runs,
+          source,
+          investigation,
+          signal,
+          persist: (mode = 'replace') => {
+            if (!signal.aborted) this.writeLocation(mode);
+          },
+        });
+        if (epoch !== this.epoch || signal.aborted) return;
+        view.replaceChildren(body);
+        if (this.returningFromSource) {
+          view.focus();
+          this.returningFromSource = false;
+        }
+      }
       document.title = `${run.name} · Hunin`;
-      if (run.status === 'running') this.pollStatus(run.id, epoch);
+      if (run.status === 'running') this.pollStatus(run.id, epoch, signal);
     } catch (error) {
-      if (epoch === this.epoch)
+      if (epoch === this.epoch && !signal.aborted)
         this.content.replaceChildren(
           errorView(error, () => {
             void this.render();
@@ -369,22 +522,30 @@ export class Workspace {
     }
   }
 
-  private pollStatus(id: string, epoch: number): void {
+  private pollStatus(id: string, epoch: number, signal: AbortSignal): void {
     this.poll = setTimeout(() => {
-      void operation('runs.get', { run_id: id })
-        .then(({ run }) => {
-          if (epoch !== this.epoch) return;
+      void operation('runs.get', { run_id: id }, signal)
+        .then((details) => {
+          if (epoch !== this.epoch || signal.aborted) return;
+          const { run, result_identity } = details;
           this.runs = this.runs.map((value) =>
             value.id === run.id ? run : value,
           );
           this.renderRail();
-          if (run.status === 'running') {
+          const invalidation = this.investigations.observeResult(
+            id,
+            result_identity,
+          );
+          if (invalidation) {
+            this.pendingInvalidation = invalidation;
+            void this.render(details);
+          } else if (run.status === 'running') {
             this.content.firstElementChild?.replaceWith(this.header(run));
-            this.pollStatus(id, epoch);
+            this.pollStatus(id, epoch, signal);
           } else void this.reload();
         })
         .catch((error) => {
-          if (epoch === this.epoch)
+          if (epoch === this.epoch && !signal.aborted)
             this.content.prepend(
               errorView(error, () => {
                 void this.reload();
@@ -394,44 +555,21 @@ export class Workspace {
     }, 2_000);
   }
 
-  private async showSource(
+  private showSource(
     run: Run,
     path: string,
     line?: number,
     codeId?: string,
-  ): Promise<void> {
-    const epoch = ++this.epoch;
-    const view = this.content.querySelector('.view');
-    if (!view) return;
-    view.replaceChildren(loading('Loading measured source…'));
-    try {
-      const body = await this.sourceView(run, path, line, codeId);
-      if (epoch === this.epoch) {
-        view.replaceChildren(
-          button(
-            `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
-            () => {
-              void this.render();
-            },
-            'button subtle small',
-          ),
-          body,
-        );
-        if (run.status === 'running') this.pollStatus(run.id, epoch);
-      }
-    } catch (error) {
-      if (epoch === this.epoch)
-        view.replaceChildren(
-          errorView(error, () => {
-            void this.showSource(
-              run,
-              path,
-              line ?? undefined,
-              codeId ?? undefined,
-            );
-          }),
-        );
-    }
+  ): void {
+    if (run.id !== this.selected) return;
+    this.investigations.forRun(run.id).source = {
+      view: this.tab,
+      path,
+      line,
+      codeId,
+    };
+    this.writeLocation('push', true);
+    void this.render();
   }
 
   private header(run: Run): HTMLElement {

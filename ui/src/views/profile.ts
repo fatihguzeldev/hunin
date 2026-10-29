@@ -1,3 +1,4 @@
+import { linkedRequest } from '../requests';
 import { operation, type TreeNode } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
 import { numeric } from '../format';
@@ -7,19 +8,39 @@ import { hasInspectableSource } from '../source-path';
 
 export async function profile(
   context: ViewContext,
-  unit = '',
-  path: string[] = [],
-  cursor?: string,
-  breadcrumbs: string[] = [],
-  initialMode: 'tree' | 'flame' = 'tree',
+  unit = context.investigation.profile.unit,
+  path = context.investigation.profile.path,
+  cursor = context.investigation.profile.cursor,
+  breadcrumbs = context.investigation.profile.breadcrumbs,
+  initialMode = context.investigation.profile.mode,
+  requestSignal = context.signal,
 ): Promise<HTMLElement> {
-  const data = await operation('profiles.tree', {
-    run_id: context.run.id,
-    weight_unit: unit || undefined,
-    limit: 1000,
-    depth_limit: 16,
-    path,
+  const data = await operation(
+    'profiles.tree',
+    {
+      run_id: context.run.id,
+      weight_unit: unit || undefined,
+      limit: 1000,
+      depth_limit: 16,
+      path,
+      cursor,
+    },
+    requestSignal,
+  );
+  if (requestSignal.aborted)
+    throw new DOMException('View request was disposed', 'AbortError');
+  const state = context.investigation.profile;
+  const scopeKey = JSON.stringify([unit, path, cursor ?? null]);
+  if (state.scopeKey !== scopeKey) {
+    state.expanded = undefined;
+    state.focus = undefined;
+  }
+  Object.assign(state, {
+    unit,
+    path: [...path],
     cursor,
+    breadcrumbs: [...breadcrumbs],
+    scopeKey,
   });
   const { roots, weight_unit } = data;
   const content = el('div');
@@ -27,23 +48,50 @@ export async function profile(
   let focused: TreeNode | undefined;
   let focusedPath: string[] = [];
   let focusedNames: string[] = [];
+  const savedFocus = state.focus;
+  if (
+    savedFocus &&
+    savedFocus.path.length > path.length &&
+    path.every((id, index) => savedFocus.path[index] === id)
+  ) {
+    let children = roots;
+    const names = [...breadcrumbs];
+    for (const id of savedFocus.path.slice(path.length)) {
+      focused = children.find((node) => node.id === id);
+      if (!focused) break;
+      names.push(focused.name);
+      children = focused.children;
+    }
+    if (focused) {
+      focusedPath = [...savedFocus.path];
+      focusedNames = names;
+    }
+  }
+  if (!focused) state.focus = undefined;
   const query = el('input', {
     type: 'search',
     placeholder: 'Find a loaded function',
     'aria-label': 'Find a function',
   });
+  query.value = state.query;
   const treeButton = button('Call tree', () => {
     mode = 'tree';
+    state.mode = mode;
+    context.persist();
     render();
   });
   const flameButton = button('Flamegraph', () => {
     mode = 'flame';
+    state.mode = mode;
+    context.persist();
     render();
   });
   const reset = button(
     'Reset stack',
     () => {
       focused = undefined;
+      state.focus = undefined;
+      context.persist();
       render();
     },
     'button subtle small',
@@ -54,6 +102,7 @@ export async function profile(
     units.append(el('option', { value }, value || 'Automatic weight unit'));
   units.value = unit;
   let request = 0;
+  let pending: AbortController | undefined;
   function navigate(
     nextPath: string[],
     nextCursor?: string,
@@ -61,23 +110,54 @@ export async function profile(
     selectedUnit = units.value,
   ): void {
     const epoch = ++request;
+    pending?.abort();
+    pending = new AbortController();
+    const linked = linkedRequest(context.signal, pending.signal);
+    Object.assign(state, {
+      unit: selectedUnit,
+      path: [...nextPath],
+      cursor: nextCursor,
+      breadcrumbs: [...names],
+      mode,
+      expanded: undefined,
+      focus: undefined,
+      scopeKey: undefined,
+    });
+    context.persist('push');
     content.replaceChildren(loading('Loading stack weights…'));
-    void profile(context, selectedUnit, nextPath, nextCursor, names, mode)
+    void profile(
+      context,
+      selectedUnit,
+      nextPath,
+      nextCursor,
+      names,
+      mode,
+      linked.signal,
+    )
       .then((next) => {
-        if (epoch === request) body.replaceWith(next);
+        if (epoch === request && !context.signal.aborted)
+          body.replaceWith(next);
       })
       .catch((error) => {
-        if (epoch === request)
+        if (epoch === request && !linked.signal.aborted)
           content.replaceChildren(
             errorView(error, () =>
               navigate(nextPath, nextCursor, names, selectedUnit),
             ),
           );
-      });
+      })
+      .finally(linked.finish);
   }
   units.addEventListener('change', () => navigate([], undefined, []));
-  const expanded = new Set<string>(roots.map((_, index) => String(index)));
-  query.addEventListener('input', render);
+  const expanded = new Set<string>(
+    state.expanded ?? roots.map((_, index) => String(index)),
+  );
+  state.expanded = [...expanded];
+  query.addEventListener('input', () => {
+    state.query = query.value;
+    context.persist();
+    render();
+  });
   const body = el(
     'div',
     { class: 'stack' },
@@ -219,6 +299,8 @@ export async function profile(
         () => {
           if (expanded.has(key)) expanded.delete(key);
           else expanded.add(key);
+          state.expanded = [...expanded];
+          context.persist();
           render();
         },
         'tree-toggle',
@@ -330,6 +412,8 @@ export async function profile(
           focused = node;
           focusedPath = [...ancestors, node.id];
           focusedNames = [...names, node.name];
+          state.focus = { path: [...focusedPath], names: [...focusedNames] };
+          context.persist();
           render();
         },
         'flame-frame',
@@ -405,6 +489,15 @@ export async function profile(
         : null,
     );
   }
+  context.persist();
   render();
+  if (savedFocus && !focused)
+    body.prepend(
+      el(
+        'p',
+        { class: 'notice' },
+        'The saved stack focus is unavailable in the current query.',
+      ),
+    );
   return body;
 }

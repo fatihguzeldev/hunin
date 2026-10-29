@@ -15,14 +15,19 @@ export async function source(
   path: string,
   line?: number,
   codeId?: string,
+  signal?: AbortSignal,
 ): Promise<HTMLElement> {
-  const data = await operation('source.read', {
-    run_id: run.id,
-    path,
-    line,
-    code_id: codeId,
-    count: 120,
-  });
+  const data = await operation(
+    'source.read',
+    {
+      run_id: run.id,
+      path,
+      line,
+      code_id: codeId,
+      count: 120,
+    },
+    signal,
+  );
   const measuredScript =
     data.provenance &&
     typeof data.provenance === 'object' &&
