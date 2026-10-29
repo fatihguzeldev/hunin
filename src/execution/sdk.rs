@@ -15,6 +15,7 @@ const PRODUCER_ID_BYTE_LIMIT: usize = 256;
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum RejectionStage {
+    Budget,
     Decode,
     Acceptance,
 }
@@ -80,7 +81,91 @@ struct SpoolEvidence {
     loss: DeliveryKnowledge,
     spool_snapshot: SpoolSnapshot,
     accepted_producer_declarations: ProducerDeclarations,
-    limitations: [&'static str; 3],
+    budget: BudgetReport,
+    limitations: [&'static str; 4],
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct SpoolBudget {
+    max_directory_entries: usize,
+    max_spool_files: usize,
+    max_read_bytes: u64,
+    max_line_bytes: u64,
+    max_records: usize,
+}
+
+impl Default for SpoolBudget {
+    fn default() -> Self {
+        Self {
+            max_directory_entries: 4096,
+            max_spool_files: 1024,
+            max_read_bytes: 64 * 1024 * 1024,
+            max_line_bytes: 1024 * 1024,
+            max_records: 100_000,
+        }
+    }
+}
+
+#[derive(Default, Serialize)]
+struct SpoolWork {
+    directory_entries: usize,
+    spool_files: usize,
+    read_bytes: u64,
+    max_physical_line_bytes: u64,
+    nonblank_records: usize,
+}
+
+#[derive(Serialize)]
+struct BudgetReport {
+    name: &'static str,
+    limits: SpoolBudget,
+    work: SpoolWork,
+    exceeded: Option<BudgetExceeded>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BudgetExceeded {
+    limit: &'static str,
+    maximum: u64,
+    observed: u64,
+}
+
+impl std::fmt::Display for BudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SDK spool budget {} exceeded: observed {} > maximum {}",
+            self.limit, self.observed, self.maximum
+        )
+    }
+}
+
+impl std::error::Error for BudgetExceeded {}
+
+impl BudgetReport {
+    fn check(&mut self, limit: &'static str, observed: u64, maximum: u64) -> Result<()> {
+        if observed > maximum {
+            let error = BudgetExceeded {
+                limit,
+                maximum,
+                observed,
+            };
+            self.exceeded = Some(error.clone());
+            return Err(error.into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for BudgetReport {
+    fn default() -> Self {
+        Self {
+            name: "sdk-spool-decode-v1",
+            limits: SpoolBudget::default(),
+            work: SpoolWork::default(),
+            exceeded: None,
+        }
+    }
 }
 
 impl Default for SpoolEvidence {
@@ -90,6 +175,7 @@ impl Default for SpoolEvidence {
             completion: DeliveryKnowledge::Unknown,
             loss: DeliveryKnowledge::Unknown,
             spool_snapshot: SpoolSnapshot::default(),
+            budget: BudgetReport::default(),
             accepted_producer_declarations: ProducerDeclarations {
                 source: "accepted_record_fields",
                 entry_limit: PRODUCER_DESCRIPTOR_LIMIT,
@@ -102,6 +188,7 @@ impl Default for SpoolEvidence {
                 "Empty or accepted spools do not establish successful producer shutdown or delivery of all intended records; unflushed buffers and invisible producers can leave no evidence",
                 "Producer IDs and PIDs are self-reported fields of accepted records, not observed OS identities or a complete producer inventory",
                 "Final line-feed observations describe retained bytes only; they prove neither successful flush/fsync nor producer shutdown, and valid legacy final JSON without a line-feed remains accepted",
+                "The SDK decode budget does not bound prior raw retention/copy, publication work or overall finishing time",
             ],
         }
     }
@@ -119,13 +206,33 @@ impl IngestionOutcome {
 /// SDK decoding and acceptance have one explicit recording outcome. Decode
 /// immutable retained bytes and never publish a valid prefix of a rejected spool.
 pub(super) fn ingest(store: &Store, run_id: &str, directory: &Path) -> IngestionOutcome {
+    ingest_with_budget(store, run_id, directory, SpoolBudget::default())
+}
+
+fn ingest_with_budget(
+    store: &Store,
+    run_id: &str,
+    directory: &Path,
+    limits: SpoolBudget,
+) -> IngestionOutcome {
     let mut evidence = SpoolEvidence::default();
-    let records = match read(store, run_id, directory, &mut evidence.spool_snapshot) {
+    evidence.budget.limits = limits;
+    let records = match read(
+        store,
+        run_id,
+        directory,
+        &mut evidence.spool_snapshot,
+        &mut evidence.budget,
+    ) {
         Ok(records) => records,
         Err(error) => {
             return IngestionOutcome {
                 status: IngestionStatus::Rejected {
-                    stage: RejectionStage::Decode,
+                    stage: if error.is::<BudgetExceeded>() {
+                        RejectionStage::Budget
+                    } else {
+                        RejectionStage::Decode
+                    },
                     diagnostic: format!("SDK spool decoding failed: {error:#}"),
                 },
                 evidence,
@@ -176,15 +283,27 @@ pub(super) fn ingest(store: &Store, run_id: &str, directory: &Path) -> Ingestion
     IngestionOutcome { status, evidence }
 }
 
+#[cfg(test)]
+#[path = "sdk/budget_tests.rs"]
+mod budget_tests;
+
 fn read(
     store: &Store,
     run_id: &str,
     directory: &Path,
     snapshot: &mut SpoolSnapshot,
+    budget: &mut BudgetReport,
 ) -> Result<Vec<Value>> {
+    let limits = budget.limits;
     let mut records = Vec::new();
     let mut paths = Vec::new();
     for entry in fs::read_dir(directory)? {
+        budget.work.directory_entries += 1;
+        budget.check(
+            "directory_entries",
+            budget.work.directory_entries as u64,
+            limits.max_directory_entries as u64,
+        )?;
         let path = entry?.path();
         if !path
             .extension()
@@ -192,6 +311,12 @@ fn read(
         {
             continue;
         }
+        budget.work.spool_files += 1;
+        budget.check(
+            "spool_files",
+            budget.work.spool_files as u64,
+            limits.max_spool_files as u64,
+        )?;
         paths.push(path);
     }
     paths.sort();
@@ -211,6 +336,8 @@ fn read(
             file.seek(SeekFrom::End(-1))?;
             let mut last = [0u8; 1];
             file.read_exact(&mut last)?;
+            budget.work.read_bytes += 1;
+            budget.check("read_bytes", budget.work.read_bytes, limits.max_read_bytes)?;
             if last[0] != b'\n' {
                 snapshot.nonempty_without_final_lf_count += 1;
             }
@@ -219,15 +346,49 @@ fn read(
     }
     for artifact in retained {
         let retained = store.artifact_path(run_id, &artifact.id)?;
-        for (index, line) in std::io::BufReader::new(fs::File::open(retained)?)
-            .lines()
-            .enumerate()
-        {
-            let line = line?;
+        let before_file = budget.work.read_bytes;
+        // One sentinel byte distinguishes exact EOF from a budget overrun.
+        // Take bounds actual reads, even when metadata or a line is misleading.
+        let allowance = limits
+            .max_read_bytes
+            .saturating_sub(before_file)
+            .saturating_add(1);
+        let mut reader = std::io::BufReader::new(fs::File::open(retained)?.take(allowance));
+        let mut line = Vec::new();
+        let mut index = 0;
+        loop {
+            line.clear();
+            let result = Read::take(&mut reader, limits.max_line_bytes.saturating_add(1))
+                .read_until(b'\n', &mut line);
+            // Include BufReader prefetch in actual work, not only parsed bytes.
+            budget.work.read_bytes =
+                before_file.saturating_add(allowance - reader.get_ref().limit());
+            budget.check("read_bytes", budget.work.read_bytes, limits.max_read_bytes)?;
+            let count = result.with_context(|| {
+                format!("read SDK artifact {} line {}", artifact.name, index + 1)
+            })?;
+            budget.work.max_physical_line_bytes =
+                budget.work.max_physical_line_bytes.max(count as u64);
+            budget.check("line_bytes", count as u64, limits.max_line_bytes)?;
+            if count == 0 {
+                break;
+            }
+            index += 1;
+            let line = std::str::from_utf8(&line).with_context(|| {
+                format!("SDK artifact {} line {} is not UTF-8", artifact.name, index)
+            })?;
             if !line.trim().is_empty() {
-                records.push(serde_json::from_str(&line).with_context(|| {
-                    format!("SDK artifact {} line {}", artifact.name, index + 1)
-                })?);
+                budget.work.nonblank_records += 1;
+                budget.check(
+                    "records",
+                    budget.work.nonblank_records as u64,
+                    limits.max_records as u64,
+                )?;
+                records.push(
+                    serde_json::from_str(line).with_context(|| {
+                        format!("SDK artifact {} line {}", artifact.name, index)
+                    })?,
+                );
             }
         }
     }
