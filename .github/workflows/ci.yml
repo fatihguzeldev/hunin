@@ -211,7 +211,11 @@ jobs:
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node
       - name: Verify Go CPU profiling
         if: always() && steps.build.outcome == 'success'
+        id: go_test
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-test --output collector-evidence/go-test
+      - name: Verify pinned PE symbol-reader source against the measured Go test binary
+        if: always() && runner.os == 'Windows' && steps.samply.outcome == 'success' && steps.go_test.outcome == 'success'
+        run: python collectors/native/verify_source.py --cache "${{ runner.temp }}/hunin-native-cache" --pe-recording collector-evidence/go-test --output collector-evidence/native-source
       - name: Verify ordinary Go executable native stacks and source
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go --output collector-evidence/go-native
