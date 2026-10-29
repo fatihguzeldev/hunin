@@ -175,6 +175,7 @@ fn publish_with_limits(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Result<Publication> {
     reanalyze_controlled(store, run_id, artifact_id, None)
 }

@@ -190,10 +190,22 @@ impl Operations {
                 let store = store.clone();
                 let run_id = id()?.to_owned();
                 let artifact_id = params["artifact_id"].as_str().unwrap().to_owned();
-                self.aggregate_work.run(move || {
-                    let publication = crate::recordings::reanalyze(&store, &run_id, &artifact_id)?;
-                    Ok(json!({"accepted":publication.accepted,"diagnostics":publication.diagnostics,"summary":query::summary(&store.records(&run_id)?)}))
-                }).await
+                self.aggregate_work
+                    .run(move || {
+                        let deadline =
+                            Some(std::time::Instant::now() + std::time::Duration::from_secs(120));
+                        let publication = crate::recordings::reanalyze_controlled(
+                            &store,
+                            &run_id,
+                            &artifact_id,
+                            deadline,
+                        )?;
+                        let mut result = reads::summary_after_mutation(&store, &run_id, deadline);
+                        result["accepted"] = json!(publication.accepted);
+                        result["diagnostics"] = json!(publication.diagnostics);
+                        Ok(result)
+                    })
+                    .await
             }
             "comparisons.create" => {
                 let store = store.clone();
@@ -285,6 +297,7 @@ impl Operations {
     }
 
     fn import(&self, params: &Value) -> Result<Value> {
+        let deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(120));
         let store = self.engine.store();
         let path = PathBuf::from(params["path"].as_str().unwrap()).canonicalize()?;
         anyhow::ensure!(path.is_file(), "recording import requires a regular file");
@@ -302,9 +315,16 @@ impl Operations {
             run
         };
         let imported = (|| {
-            store.add_artifact(&run.id, &path, format)?;
-            let profile = crate::importers::import(&path, format, &run.id)?;
-            crate::recordings::publish(store, &run.id, profile)
+            store.add_artifact_controlled(
+                &run.id,
+                &path,
+                format,
+                crate::importers::NormalizationInputLimits::default().raw_bytes,
+                &mut 0,
+                || crate::publication::check_deadline(deadline),
+            )?;
+            let profile = crate::importers::import_controlled(&path, format, &run.id, deadline)?;
+            crate::recordings::publish_controlled(store, &run.id, profile, deadline)
         })();
         let publication = match imported {
             Ok(publication) => publication,
@@ -322,9 +342,10 @@ impl Operations {
             &publication.diagnostics,
             params["run_id"].is_null(),
         )?;
-        Ok(
-            json!({"run":run,"accepted":publication.accepted,"summary":query::summary(&store.records(&run.id)?)}),
-        )
+        let mut result = reads::summary_after_mutation(store, &run.id, deadline);
+        result["run"] = json!(run);
+        result["accepted"] = json!(publication.accepted);
+        Ok(result)
     }
 }
 

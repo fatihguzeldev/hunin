@@ -67,4 +67,60 @@ async fn recording_metadata_does_not_require_aggregating_large_selected_payloads
         .unwrap()
         .validate(metadata)
         .unwrap();
+
+    // A selected query failure after a committed import must not erase its
+    // mutation acknowledgment or turn unknown counts into a zero summary.
+    let inputs = tempfile::tempdir().unwrap();
+    let path = inputs.path().join("small.jsonl");
+    std::fs::write(&path, json!({"schema_version":1,"kind":"event","id":"imported-small","run_id":"large","producer_id":"small","pid":1,"tid":"","timestamp_us":2,"basis":"explicit","name":"accepted"}).to_string()).unwrap();
+    let imported = operations
+        .call(
+            "recordings.import",
+            json!({"run_id":"large","path":path,"format":"hunin-jsonl"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(imported["accepted"], true);
+    assert!(imported["summary"].is_null());
+    assert!(
+        imported["summary_diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("summary unavailable")
+    );
+    let artifacts = operations.engine.store().artifacts("large").unwrap();
+    let raw = artifacts
+        .iter()
+        .find(|artifact| artifact.name == "small.jsonl")
+        .unwrap();
+    let replayed = operations
+        .call(
+            "recordings.reanalyze",
+            json!({"run_id":"large","artifact_id":raw.id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed["accepted"], false);
+    assert!(replayed["summary"].is_null());
+    for (name, result) in [
+        ("recordings.import", &imported),
+        ("recordings.reanalyze", &replayed),
+    ] {
+        let schema = &catalog()
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap()["outputSchema"];
+        jsonschema::validator_for(schema)
+            .unwrap()
+            .validate(result)
+            .unwrap();
+    }
+    let selected = operations
+        .call(
+            "evidence.get",
+            json!({"run_id":"large","ids":["imported-small"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(selected["records"].as_array().unwrap().len(), 1);
 }

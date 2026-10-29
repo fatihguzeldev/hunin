@@ -125,3 +125,24 @@ pub(super) fn query(
     interest.check()?;
     Ok(result)
 }
+
+/// A committed mutation must keep its acknowledgment when an independent read
+/// exceeds its budget. Unknown counts are explicit, never a synthetic summary.
+pub(super) fn summary_after_mutation(
+    store: &Store,
+    run_id: &str,
+    deadline: Option<std::time::Instant>,
+) -> Value {
+    match crate::query::read_recording(
+        store,
+        run_id,
+        crate::query::RecordingQuery::Summary,
+        Default::default(),
+        move || crate::publication::check_deadline(deadline),
+    ) {
+        Ok(snapshot) => json!({"summary":snapshot.value}),
+        Err(error) => {
+            json!({"summary":null,"summary_diagnostic":format!("Mutation result retained; selected summary unavailable: {error:#}")})
+        }
+    }
+}

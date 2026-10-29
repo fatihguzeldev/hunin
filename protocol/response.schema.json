@@ -160,7 +160,11 @@
           "type": "boolean"
         },
         "summary": {
-          "$ref": "#/$defs/Summary"
+          "$ref": "#/$defs/MutationSummary"
+        },
+        "summary_diagnostic": {
+          "type": "string",
+          "description": "Why the independent summary is unavailable after the mutation result was retained."
         }
       },
       "required": ["run", "accepted", "summary"]
@@ -178,7 +182,11 @@
           }
         },
         "summary": {
-          "$ref": "#/$defs/Summary"
+          "$ref": "#/$defs/MutationSummary"
+        },
+        "summary_diagnostic": {
+          "type": "string",
+          "description": "Why the independent summary is unavailable after the mutation result was retained."
         }
       },
       "required": ["accepted", "diagnostics", "summary"]
@@ -1859,6 +1867,50 @@
       },
       "required": ["receipt"],
       "additionalProperties": false
+    },
+    "MutationSummary": {
+      "type": ["object", "null"],
+      "properties": {
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_weight": {
+          "type": ["number", "null"],
+          "description": "A non-finite floating-point aggregate serializes as null; it must not be relabeled as zero."
+        },
+        "weight_unit": {
+          "type": "string"
+        },
+        "span_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "metric_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "sample_count",
+        "total_weight",
+        "weight_unit",
+        "span_count",
+        "metric_count",
+        "relation_count",
+        "diagnostics"
+      ],
+      "description": "Independent mutation summary, or null when selected aggregate work is unavailable; null never means measured zero."
     }
   }
 }

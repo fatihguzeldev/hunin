@@ -1315,6 +1315,11 @@
         "maximum_in_flight": 2,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/mutation-budget": {
+        "checkpoint_seconds": 120,
+        "scope": "One owned normalization worker through raw staging, decode and atomic publication; independent summary failure preserves the mutation acknowledgment.",
+        "enforcement": "Cooperative checks cannot preempt one filesystem, JSON parse, external-tool or SQLite unit; cleanup remains owned after a caller drops."
       }
     }
   },
@@ -1933,6 +1938,11 @@
         "maximum_in_flight": 2,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/mutation-budget": {
+        "checkpoint_seconds": 120,
+        "scope": "One owned normalization worker through raw staging, decode and atomic publication; independent summary failure preserves the mutation acknowledgment.",
+        "enforcement": "Cooperative checks cannot preempt one filesystem, JSON parse, external-tool or SQLite unit; cleanup remains owned after a caller drops."
       }
     }
   }

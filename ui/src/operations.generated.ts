@@ -45,13 +45,15 @@ export type RunDetails = {
 export type ImportResult = {
   "run": Run;
   "accepted": boolean;
-  "summary": Summary;
+  "summary": MutationSummary;
+  "summary_diagnostic"?: string;
 };
 
 export type ReanalysisResult = {
   "accepted": boolean;
   "diagnostics": Array<string>;
-  "summary": Summary;
+  "summary": MutationSummary;
+  "summary_diagnostic"?: string;
 };
 
 export type OperationError = {
@@ -487,6 +489,16 @@ export type RunRemoval = {
   "receipt": Record<string, unknown> | null;
 };
 
+export type MutationSummary = {
+  "sample_count": number;
+  "total_weight": number | null;
+  "weight_unit": string;
+  "span_count": number;
+  "metric_count": number;
+  "relation_count": number;
+  "diagnostics": Array<string>;
+} | null;
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -725,11 +737,11 @@ export function isRunDetails(value: unknown): value is RunDetails {
 }
 
 export function isImportResult(value: unknown): value is ImportResult {
-  return (isOutputObject(value) && Object.hasOwn(value, "run") && Object.hasOwn(value, "accepted") && Object.hasOwn(value, "summary") && isRun(value["run"]) && (typeof value["accepted"] === "boolean") && isSummary(value["summary"]));
+  return (isOutputObject(value) && Object.hasOwn(value, "run") && Object.hasOwn(value, "accepted") && Object.hasOwn(value, "summary") && isRun(value["run"]) && (typeof value["accepted"] === "boolean") && isMutationSummary(value["summary"]) && (!Object.hasOwn(value, "summary_diagnostic") || (typeof value["summary_diagnostic"] === "string")));
 }
 
 export function isReanalysisResult(value: unknown): value is ReanalysisResult {
-  return (isOutputObject(value) && Object.hasOwn(value, "accepted") && Object.hasOwn(value, "diagnostics") && Object.hasOwn(value, "summary") && (typeof value["accepted"] === "boolean") && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))) && isSummary(value["summary"]));
+  return (isOutputObject(value) && Object.hasOwn(value, "accepted") && Object.hasOwn(value, "diagnostics") && Object.hasOwn(value, "summary") && (typeof value["accepted"] === "boolean") && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))) && isMutationSummary(value["summary"]) && (!Object.hasOwn(value, "summary_diagnostic") || (typeof value["summary_diagnostic"] === "string")));
 }
 
 export function isOperationError(value: unknown): value is OperationError {
@@ -906,6 +918,10 @@ export function isRunMetadata(value: unknown): value is RunMetadata {
 
 export function isRunRemoval(value: unknown): value is RunRemoval {
   return (isOutputObject(value) && Object.hasOwn(value, "receipt") && ((isOutputObject(value["receipt"])) || (value["receipt"] === null)) && Object.keys(value).every(key => ["receipt"].includes(key)));
+}
+
+export function isMutationSummary(value: unknown): value is MutationSummary {
+  return ((isOutputObject(value) && Object.hasOwn(value, "sample_count") && Object.hasOwn(value, "total_weight") && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "span_count") && Object.hasOwn(value, "metric_count") && Object.hasOwn(value, "relation_count") && Object.hasOwn(value, "diagnostics") && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0) && ((typeof value["total_weight"] === "number" && Number.isFinite(value["total_weight"])) || (value["total_weight"] === null)) && (typeof value["weight_unit"] === "string") && (typeof value["span_count"] === "number" && Number.isInteger(value["span_count"]) && value["span_count"] >= 0) && (typeof value["metric_count"] === "number" && Number.isInteger(value["metric_count"]) && value["metric_count"] >= 0) && (typeof value["relation_count"] === "number" && Number.isInteger(value["relation_count"]) && value["relation_count"] >= 0) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string")))) || (value === null));
 }
 
 // Every operation result is checked against its declared wire contract.
