@@ -8,6 +8,6 @@ mod tools;
 
 pub(crate) use assets::assets;
 pub(crate) use executable::resolve_launch_executable;
-pub(crate) use files::{InventoryLimits, inventory, visit_regular, walk_files};
+pub(crate) use files::{FileReadLimit, InventoryLimits, inventory, visit_regular, walk_files};
 pub(crate) use paths::tool_path;
 pub(crate) use tools::{find_on_path, tool};

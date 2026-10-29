@@ -66,6 +66,14 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         json!({"scope":"selected_record_query","dimension":budget.dimension.as_str(),"limit":budget.limit,"observed":budget.observed})
     })).or_else(|| error.downcast_ref::<crate::query::WorkBudgetExceeded>().map(|budget| {
         json!({"scope":"selected_record_query","dimension":budget.dimension.as_str(),"limit":budget.limit,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::storage::ArtifactByteLimit>().map(|budget| {
+        json!({"scope":"artifact_retention","dimension":"source_bytes","limit":budget.maximum,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::host::FileReadLimit>().map(|budget| {
+        json!({"scope":"normalization_input","dimension":"source_bytes","limit":budget.maximum,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::importers::NormalizationByteLimit>().map(|budget| {
+        json!({"scope":"normalization_input","dimension":"decoded_bytes","limit":budget.maximum,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::recordings::ReanalysisSidecarLimit>().map(|budget| {
+        json!({"scope":"normalization_replay","dimension":"sidecar_entries","limit":budget.maximum,"observed":budget.observed})
     }));
     let capacity = error.downcast_ref::<crate::model::CapacityExceeded>();
     let code = match error.downcast_ref::<Failure>().map(|failure| failure.kind) {

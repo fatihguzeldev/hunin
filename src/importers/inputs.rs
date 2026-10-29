@@ -5,11 +5,28 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    fmt,
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+#[derive(Debug)]
+pub(crate) struct NormalizationByteLimit {
+    pub maximum: u64,
+    pub observed: u64,
+}
+impl fmt::Display for NormalizationByteLimit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "profile-normalization-input-v1 decoded bytes exceed limit {} (observed {})",
+            self.maximum, self.observed
+        )
+    }
+}
+impl std::error::Error for NormalizationByteLimit {}
 
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct Limits {
@@ -211,10 +228,10 @@ fn decode(input: &mut impl Read, maximum: u64, deadline: Option<Instant>) -> Res
             .min(buffer.len() as u64) as usize;
         let count = input.read(&mut buffer[..capacity])?;
         check(deadline)?;
-        ensure!(
-            decoded.len() as u64 + count as u64 <= maximum,
-            "profile-normalization-input-v1 decoded bytes exceed limit {maximum}"
-        );
+        let observed = decoded.len() as u64 + count as u64;
+        if observed > maximum {
+            return Err(NormalizationByteLimit { maximum, observed }.into());
+        }
         if count == 0 {
             return Ok(decoded);
         }

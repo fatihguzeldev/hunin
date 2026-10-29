@@ -5,7 +5,7 @@ pub(crate) use formats::import_formats;
 mod go_trace;
 mod graal;
 mod inputs;
-pub(crate) use inputs::Limits as NormalizationInputLimits;
+pub(crate) use inputs::{Limits as NormalizationInputLimits, NormalizationByteLimit};
 mod javascript_sources;
 mod native_identity;
 mod native_lifetimes;

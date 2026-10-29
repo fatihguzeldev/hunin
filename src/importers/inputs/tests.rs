@@ -62,13 +62,10 @@ fn gzip_budget_rejects_oversized_decoded_output_without_returning_a_prefix() {
     snapshot.capture_raw(&raw, &mut Sha256::new()).unwrap();
     assert_eq!(snapshot.decoded().unwrap(), b"12345");
     snapshot.limits.decompressed_bytes = 4;
-    assert!(
-        snapshot
-            .decoded()
-            .unwrap_err()
-            .to_string()
-            .contains("decoded bytes")
-    );
+    let error = snapshot.decoded().unwrap_err();
+    let error = error.downcast_ref::<NormalizationByteLimit>().unwrap();
+    assert_eq!(error.maximum, 4);
+    assert_eq!(error.observed, 5);
 }
 
 #[test]
