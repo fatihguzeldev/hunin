@@ -1,3 +1,4 @@
+mod bun_producers;
 mod deno_workers;
 mod finalization;
 pub(crate) mod native_tool;

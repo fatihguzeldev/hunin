@@ -28,6 +28,7 @@ RUNTIME_SOURCES = (
     "collectors/javascript/host/plan.mjs",
     "collectors/javascript/agents/clock.mjs",
     "collectors/javascript/agents/bun.mjs",
+    "collectors/javascript/agents/bun/manifest.mjs",
     "collectors/javascript/agents/deno-workers.mjs",
     "collectors/javascript/source/snapshots.mjs",
     "collectors/python/capture.py",

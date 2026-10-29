@@ -26,7 +26,8 @@ export interface CaptureRequest {
 
 export type CaptureOutput =
   | { kind: 'profiles'; format: 'v8-cpuprofile' }
-  | { kind: 'deno-workers'; producer_id: string };
+  | { kind: 'deno-workers'; producer_id: string }
+  | { kind: 'bun-producers'; session_id: string; root_registration_id: string };
 
 export function plan(request: CaptureRequest) {
   const { command, cwd, artifact_dir, run_id } = request;
@@ -93,12 +94,42 @@ export function plan(request: CaptureRequest) {
   };
   const session_identity: Record<string, string> = {};
   let output: CaptureOutput = { kind: 'profiles', format: 'v8-cpuprofile' };
+  let collector_identity:
+    | { kind: string; measurement_contract: string }
+    | undefined;
   const diagnostics = [];
   diagnostics.push(
     'JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.',
   );
   let launched: string[];
   if (runtime === 'bun') {
+    const sessionId = randomUUID();
+    const rootRegistrationId = randomUUID();
+    session_identity['bun-session'] = sessionId;
+    session_identity['bun-root'] = rootRegistrationId;
+    env.HUNIN_BUN_SESSION = sessionId;
+    env.HUNIN_BUN_ROOT_REGISTRATION = rootRegistrationId;
+    output = {
+      kind: 'bun-producers',
+      session_id: sessionId,
+      root_registration_id: rootRegistrationId,
+    };
+    collector_identity = {
+      kind: 'bun-inspector',
+      measurement_contract: 'bun-producers-v1',
+    };
+    writeFileSync(
+      join(directory, `bun-session-${sessionId}.json`),
+      JSON.stringify({
+        schema_version: 1,
+        runtime: 'bun',
+        run_id,
+        session_id: sessionId,
+        root_registration_id: rootRegistrationId,
+        status: 'planned',
+      }),
+      { mode: 0o600, flag: 'wx' },
+    );
     const preload = toolPath(
       fileURLToPath(new URL('../bun-preload.mjs', import.meta.url)),
     );
@@ -184,6 +215,7 @@ export function plan(request: CaptureRequest) {
     env,
     session_identity,
     output,
+    collector_identity,
     diagnostics,
     runtime_version,
   };

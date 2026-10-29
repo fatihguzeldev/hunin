@@ -1,4 +1,4 @@
-use super::{CapturePlan, CaptureRequest, deno_workers, profile_format, walk};
+use super::{CapturePlan, CaptureRequest, bun_producers, deno_workers, profile_format, walk};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -14,6 +14,10 @@ pub enum CaptureOutput {
     },
     DenoWorkers {
         producer_id: String,
+    },
+    BunProducers {
+        session_id: String,
+        root_registration_id: String,
     },
 }
 
@@ -110,6 +114,16 @@ impl CapturePlan {
                 (Some("v8-cpuprofile"), "declared_profiles_and_registered_deno_workers", vec![
                     "Only main-isolate Web Workers registered by the adapter are enumerated; nested workers, unrelated Node workers and child processes are outside this inventory".into(),
                     "Collection completeness does not prove profile decoding, clock mapping or coverage of every target activity".into(),
+                ])
+            }
+            CaptureOutput::BunProducers { session_id, root_registration_id } => {
+                match bun_producers::validate(&files, &request.run_id, &request.artifact_dir, session_id, root_registration_id) {
+                    Ok(value) => coverage = Some(value),
+                    Err(error) => diagnostics.push(format!("{error:#}")),
+                }
+                (Some("v8-cpuprofile"), "observed_bun_producers_and_registered_workers", vec![
+                    "The planned root, observed producer manifests and constructor-registered workers are checked; child processes or workers that never expose either a registration or producer evidence are not proven covered".into(),
+                    "Forced termination can leave a producer incomplete; complete artifact delivery does not establish sampling coverage or bound profiling overhead".into(),
                 ])
             }
         };

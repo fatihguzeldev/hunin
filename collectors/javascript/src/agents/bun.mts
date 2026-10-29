@@ -1,12 +1,12 @@
 import inspector from 'node:inspector';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import process from 'node:process';
 import type { WorkerOptions as NodeWorkerOptions } from 'node:worker_threads';
-import { captureBunProfile } from '../sources-preload.mjs';
+import { BunProducerManifest } from './bun/manifest.mjs';
 const require = createRequire(import.meta.url);
 const threads: typeof import('node:worker_threads') = require('node:worker_threads');
 const preload = fileURLToPath(import.meta.url);
@@ -14,6 +14,30 @@ const directory = process.env.HUNIN_JS_PROFILE_DIR;
 if (directory) {
   mkdirSync(directory, { recursive: true });
   const captureDirectory = directory;
+  const producer = randomUUID();
+  const sessionId = process.env.HUNIN_BUN_SESSION;
+  const runId = process.env.HUNIN_RUN_ID;
+  const rootRegistrationId = threads.isMainThread
+    ? process.env.HUNIN_BUN_ROOT_REGISTRATION
+    : undefined;
+  if (threads.isMainThread) delete process.env.HUNIN_BUN_ROOT_REGISTRATION;
+  const manifest =
+    sessionId && runId
+      ? new BunProducerManifest({
+          directory,
+          runId,
+          sessionId,
+          rootRegistrationId,
+          producerId: producer,
+          pid: process.pid,
+          tid: threads.threadId,
+          isMainThread: threads.isMainThread,
+        })
+      : undefined;
+  if (!manifest)
+    process.stderr.write(
+      'hunin: Bun producer lifecycle unavailable: capture session identity is missing\n',
+    );
   const options = <T extends object>(
     value: T | undefined,
   ): T & { preload: string[] } =>
@@ -54,11 +78,12 @@ if (directory) {
   };
   const OriginalWebWorker = globalThis.Worker;
   globalThis.Worker = class extends OriginalWebWorker {
-    // This extra native identity is specific to Bun's Web Worker.
+    // Bun exposes its runtime thread ID through its Web Worker facade.
     declare readonly threadId: number;
 
     constructor(script: string | URL, value?: WorkerOptions) {
       super(script, options(value));
+      manifest?.registerWorker(this.threadId);
     }
     terminate() {
       void stopWorker(this, () => super.terminate());
@@ -68,12 +93,16 @@ if (directory) {
   threads.Worker = class extends OriginalNodeWorker {
     constructor(script: string | URL, value?: NodeWorkerOptions) {
       super(script, options(value));
+      manifest?.registerWorker(this.threadId);
     }
     terminate() {
       return stopWorker(this, () => super.terminate());
     }
   };
   syncBuiltinESMExports();
+  // Bun does not refresh an already-created worker_threads ESM binding here.
+  // Install the constructor hook before source capture imports threadId.
+  const { captureBunProfile } = await import('../sources-preload.mjs');
   const session = new inspector.Session();
   session.connect();
   function post(
@@ -89,7 +118,6 @@ if (directory) {
   }
   await post('Profiler.enable');
   await post('Profiler.start');
-  const producer = randomUUID();
   let sequence = 0,
     stopping = false,
     finished = false;
@@ -100,7 +128,7 @@ if (directory) {
       const persisted = await pending;
       if (restart || finished) return persisted;
     }
-    if (finished) return true;
+    if (finished) return manifest?.isComplete ?? true;
     pending = (async () => {
       try {
         const { profile } = await post('Profiler.stop');
@@ -109,26 +137,33 @@ if (directory) {
           captureDirectory,
           `CPU.${process.pid}.${threads.threadId}.${producer}.${++sequence}.cpuprofile`,
         );
-        writeFileSync(path, JSON.stringify(profile), { mode: 0o600 });
-        writeFileSync(
-          path + '.meta.json',
-          JSON.stringify({
-            profile: path,
-            pid: process.pid,
-            tid: String(threads.threadId),
-            profile_time_origin_us: 0,
-            uncertainty_us: 1,
-            clock_source: 'JavaScriptCore epoch microseconds',
-          }),
-          { mode: 0o600 },
-        );
+        const profileJson = JSON.stringify(profile);
+        const clockJson = JSON.stringify({
+          profile: path,
+          pid: process.pid,
+          tid: String(threads.threadId),
+          profile_time_origin_us: 0,
+          uncertainty_us: 1,
+          clock_source: 'JavaScriptCore epoch microseconds',
+        });
+        writeFileSync(path, profileJson, { mode: 0o600 });
+        writeFileSync(path + '.meta.json', clockJson, { mode: 0o600 });
+        manifest?.recordSegment({
+          sequence,
+          filename: basename(path),
+          sha256: createHash('sha256').update(profileJson).digest('hex'),
+          clock_sha256: createHash('sha256').update(clockJson).digest('hex'),
+        });
         if (restart && !stopping) await post('Profiler.start');
         else {
           finished = true;
           session.disconnect();
+          return manifest?.finish() ?? true;
         }
         return true;
       } catch (error) {
+        manifest?.fail(error);
+        if (!restart || stopping) manifest?.finish();
         process.stderr.write(
           `hunin: Bun CPU collection failed: ${(error as Error).message}\n`,
         );

@@ -15,6 +15,7 @@
         "host/plan.mjs": "host/plan.mjs",
         "agents/clock.mjs": "agents/clock.mjs",
         "agents/bun.mjs": "agents/bun.mjs",
+        "agents/bun/manifest.mjs": "agents/bun/manifest.mjs",
         "agents/deno-workers.mjs": "agents/deno-workers.mjs",
         "source/snapshots.mjs": "source/snapshots.mjs"
       }
