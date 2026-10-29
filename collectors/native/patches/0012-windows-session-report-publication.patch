@@ -1,0 +1,278 @@
+--- a/samply/src/windows/mod.rs
++++ b/samply/src/windows/mod.rs
+@@ -14,6 +14,7 @@
+ mod winutils;
+ mod sample_correlation;
+ mod startup;
++mod session_report;
+ mod xperf;
+ mod xperf_session;
+ 
+--- /dev/null
++++ b/samply/src/windows/session_report.rs
+@@ -0,0 +1,241 @@
++//! Replace only the owned report name; a staged file is never cleanup acknowledgement.
++use std::fs::{self, File};
++use std::io::{self, Write};
++use std::path::Path;
++use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
++
++use serde_json::{json, Value};
++
++const REPORT_BYTES: usize = 1024 * 1024;
++const RETRY_BUDGET: Duration = Duration::from_millis(250);
++const RETRY_PAUSE: Duration = Duration::from_millis(5);
++const REPLACE_ATTEMPTS: usize = 50;
++
++struct BoundedWriter {
++    file: File,
++    written: usize,
++    deadline: Instant,
++}
++
++impl Write for BoundedWriter {
++    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
++        if Instant::now() >= self.deadline {
++            return Err(io::Error::new(
++                io::ErrorKind::TimedOut,
++                "report publication deadline elapsed",
++            ));
++        }
++        if bytes.len() > REPORT_BYTES.saturating_sub(self.written) {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "ownership report exceeds 1 MiB",
++            ));
++        }
++        let count = self.file.write(bytes)?;
++        self.written += count;
++        Ok(count)
++    }
++
++    fn flush(&mut self) -> io::Result<()> {
++        self.file.flush()
++    }
++}
++
++fn replace_with_retry(
++    mut replace: impl FnMut() -> io::Result<()>,
++    deadline: Instant,
++) -> io::Result<()> {
++    let mut last_error = None;
++    for attempt in 0..REPLACE_ATTEMPTS {
++        if Instant::now() >= deadline {
++            return Err(last_error.unwrap_or_else(|| {
++                io::Error::new(
++                    io::ErrorKind::TimedOut,
++                    "report publication deadline elapsed",
++                )
++            }));
++        }
++        match replace() {
++            Ok(()) => return Ok(()),
++            Err(error) => {
++                // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION only. Access
++                // denial, missing paths, full disks and other errors are not replayed.
++                if !matches!(error.raw_os_error(), Some(32 | 33))
++                    || attempt + 1 == REPLACE_ATTEMPTS
++                    || Instant::now() >= deadline
++                {
++                    return Err(error);
++                }
++                last_error = Some(error);
++                std::thread::sleep(
++                    RETRY_PAUSE.min(deadline.saturating_duration_since(Instant::now())),
++                );
++            }
++        }
++    }
++    unreachable!()
++}
++
++pub fn publish(path: &Path, report: &Value) -> io::Result<()> {
++    let deadline = Instant::now() + RETRY_BUDGET;
++    let temporary = path.with_extension("json.tmp");
++    let result = (|| {
++        let mut writer = BoundedWriter {
++            file: File::create(&temporary)?,
++            written: 0,
++            deadline,
++        };
++        serde_json::to_writer(&mut writer, report)?;
++        writer.flush()?;
++        drop(writer);
++        // Rust's Windows rename replaces an existing file. Never delete the
++        // published report before replacement, including while readers hold it.
++        // The deadline is cooperative; an individual filesystem call can block.
++        replace_with_retry(|| fs::rename(&temporary, path), deadline)
++    })();
++    if let Err(error) = &result {
++        let diagnostic = json!({
++            "schema": "hunin-xperf-publication-error-v1",
++            "observed_at_us": SystemTime::now().duration_since(UNIX_EPOCH).map(|v|v.as_micros() as u64).unwrap_or(0),
++            "intended_state": report.get("state").and_then(Value::as_str).unwrap_or("unknown").chars().take(64).collect::<String>(),
++            "raw_os_error": error.raw_os_error(),
++            "message": error.to_string().chars().take(256).collect::<String>(),
++            "scope": "The published report was not replaced; a temporary file is not cleanup acknowledgement."
++        });
++        if let Ok(bytes) = serde_json::to_vec(&diagnostic) {
++            if bytes.len() <= 4096 {
++                if let Err(diagnostic_error) =
++                    fs::write(path.with_extension("publication-error.json"), bytes)
++                {
++                    eprintln!("Could not retain report publication diagnostic: {diagnostic_error}");
++                }
++            }
++        }
++    }
++    result
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[cfg(windows)]
++    use std::io::Read;
++    #[cfg(windows)]
++    use std::os::windows::fs::OpenOptionsExt;
++
++    #[cfg(windows)]
++    fn conflicting_reader(path: &Path) -> File {
++        fs::OpenOptions::new()
++            .read(true)
++            .share_mode(1)
++            .open(path)
++            .unwrap()
++    }
++
++    #[test]
++    #[cfg(windows)]
++    fn conflicting_reader_release_preserves_the_old_json_until_complete_replacement() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("session.json");
++        let temporary = path.with_extension("json.tmp");
++        let old = br#"{"state":"session_stopped"}"#;
++        let new = br#"{"state":"stopped"}"#;
++        fs::write(&path, old).unwrap();
++        fs::write(&temporary, new).unwrap();
++        let mut reader = Some(conflicting_reader(&path));
++        let mut attempts = 0;
++        replace_with_retry(
++            || {
++                attempts += 1;
++                let result = fs::rename(&temporary, &path);
++                if attempts == 1 {
++                    assert!(matches!(
++                        result.as_ref().unwrap_err().raw_os_error(),
++                        Some(32 | 33)
++                    ));
++                    assert_eq!(fs::read(&path).unwrap(), old);
++                    let mut retained = Vec::new();
++                    let mut handle = reader.take().unwrap();
++                    handle.read_to_end(&mut retained).unwrap();
++                    assert_eq!(retained, old);
++                    drop(handle);
++                }
++                result
++            },
++            Instant::now() + RETRY_BUDGET,
++        )
++        .unwrap();
++        assert!(attempts >= 2);
++        assert_eq!(
++            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
++            json!({"state":"stopped"})
++        );
++        assert!(!temporary.exists());
++    }
++
++    #[test]
++    #[cfg(windows)]
++    fn persistent_sharing_failure_retains_the_published_report_and_a_failure_diagnostic() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("session.json");
++        let old = br#"{"state":"session_stopped"}"#;
++        fs::write(&path, old).unwrap();
++        let _reader = conflicting_reader(&path);
++        let error = publish(&path, &json!({"state":"stopped"})).unwrap_err();
++        assert!(matches!(error.raw_os_error(), Some(32 | 33)));
++        assert_eq!(fs::read(&path).unwrap(), old);
++        assert!(path.with_extension("json.tmp").is_file());
++        let diagnostic: Value = serde_json::from_slice(
++            &fs::read(path.with_extension("publication-error.json")).unwrap(),
++        )
++        .unwrap();
++        assert_eq!(diagnostic["intended_state"], "stopped");
++        assert_eq!(
++            diagnostic["raw_os_error"].as_i64(),
++            error.raw_os_error().map(i64::from)
++        );
++    }
++
++    #[test]
++    fn nonsharing_errors_and_expired_interest_do_not_replay_replacement() {
++        let mut attempts = 0;
++        let error = replace_with_retry(
++            || {
++                attempts += 1;
++                Err(io::Error::from_raw_os_error(5))
++            },
++            Instant::now() + RETRY_BUDGET,
++        )
++        .unwrap_err();
++        assert_eq!(error.raw_os_error(), Some(5));
++        assert_eq!(attempts, 1);
++        let error = replace_with_retry(
++            || {
++                attempts += 1;
++                Ok(())
++            },
++            Instant::now() - Duration::from_millis(1),
++        )
++        .unwrap_err();
++        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
++        assert_eq!(attempts, 1);
++    }
++
++    #[test]
++    fn oversized_report_stops_before_expanding_the_staged_file_and_keeps_the_old_report() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("session.json");
++        let old = br#"{"state":"recording"}"#;
++        fs::write(&path, old).unwrap();
++        assert!(publish(
++            &path,
++            &json!({"state":"stopped","large":"x".repeat(REPORT_BYTES + 1)})
++        )
++        .is_err());
++        assert_eq!(fs::read(&path).unwrap(), old);
++        assert!(
++            fs::metadata(path.with_extension("json.tmp")).unwrap().len() <= REPORT_BYTES as u64
++        );
++        assert!(path.with_extension("publication-error.json").is_file());
++    }
++}
+--- a/samply/src/windows/xperf.rs
++++ b/samply/src/windows/xperf.rs
+@@ -308,20 +308,7 @@
+             events.push(json!({"state":state,"observed_at_us":timestamp_us,"details":details}));
+         }
+         if let Some(path) = &self.report_path {
+-            let temporary = path.with_extension("json.tmp");
+-            let result = (|| -> std::io::Result<()> {
+-                use std::io::Write;
+-                let mut file = std::fs::File::create(&temporary)?;
+-                serde_json::to_writer(&mut file, &self.report)?;
+-                file.flush()?;
+-                drop(file);
+-                // Windows rename does not replace existing files. The report is
+-                // small; readers retry missing/partial snapshots until deadline.
+-                if path.exists() {
+-                    std::fs::remove_file(path)?;
+-                }
+-                std::fs::rename(&temporary, path)
+-            })();
++            let result = super::session_report::publish(path, &self.report);
+             if let Err(error) = result {
+                 eprintln!("Could not retain xperf ownership evidence: {error}");
+             }

@@ -22,6 +22,13 @@ class RequiredSourceChecksTest(unittest.TestCase):
             "explicit_stop_interrupts_locked_ipc_without_waiting_for_eof",
         ):
             self.assertIn(("samply", name), selected)
+        reports = [
+            check
+            for check in windows
+            if check.filter == "windows::session_report::tests"
+        ]
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0].expected_passed, 4)
         self.assertEqual(
             checks.required_checks(
                 "x86_64-pc-windows-msvc",

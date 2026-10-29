@@ -40,6 +40,9 @@ def required_checks(target, extra_filters=()):
                     "explicit_stop_interrupts_locked_ipc_without_waiting_for_eof",
                     expected_passed=1,
                 ),
+                SourceCheck(
+                    "samply", "windows::session_report::tests", expected_passed=4
+                ),
             ]
         )
     elif "apple" in target:
