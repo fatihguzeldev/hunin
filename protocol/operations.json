@@ -46,9 +46,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -113,15 +111,10 @@
           "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
         }
       },
-      "required": [
-        "command"
-      ],
+      "required": ["command"],
       "additionalProperties": false,
       "not": {
-        "required": [
-          "expected_stdout",
-          "expected_stdout_sha256"
-        ]
+        "required": ["expected_stdout", "expected_stdout_sha256"]
       }
     },
     "outputSchema": {
@@ -139,9 +132,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -159,9 +150,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -171,9 +160,7 @@
           "const": true
         }
       },
-      "required": [
-        "removed"
-      ]
+      "required": ["removed"]
     }
   },
   {
@@ -196,9 +183,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -242,9 +227,7 @@
           "maximum": 128
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -287,16 +270,10 @@
           "minimum": 0
         },
         "alignment": {
-          "enum": [
-            "aligned",
-            "unmapped",
-            "all"
-          ]
+          "enum": ["aligned", "unmapped", "all"]
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -336,9 +313,7 @@
           "maximum": 5000
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -365,9 +340,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -393,10 +366,7 @@
           "maxItems": 100
         }
       },
-      "required": [
-        "run_id",
-        "ids"
-      ],
+      "required": ["run_id", "ids"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -423,9 +393,7 @@
           "pattern": "^[0-9]+$"
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -453,26 +421,14 @@
                 "type": "string"
               }
             },
-            "required": [
-              "id",
-              "name",
-              "size",
-              "sha256",
-              "format"
-            ]
+            "required": ["id", "name", "size", "sha256", "format"]
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "artifacts",
-        "next_cursor"
-      ]
+      "required": ["artifacts", "next_cursor"]
     }
   },
   {
@@ -499,10 +455,7 @@
           "maximum": 5000
         }
       },
-      "required": [
-        "run_id",
-        "artifact_id"
-      ],
+      "required": ["run_id", "artifact_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -515,10 +468,7 @@
           "const": "utf8_lossy"
         },
         "next_offset": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "size": {
@@ -526,12 +476,7 @@
           "minimum": 0
         }
       },
-      "required": [
-        "content",
-        "encoding",
-        "next_offset",
-        "size"
-      ]
+      "required": ["content", "encoding", "next_offset", "size"]
     }
   },
   {
@@ -563,10 +508,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id",
-        "path"
-      ],
+      "required": ["run_id", "path"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -596,10 +538,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "path",
-        "format"
-      ],
+      "required": ["path", "format"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -621,10 +560,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "before",
-        "after"
-      ],
+      "required": ["before", "after"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -697,11 +633,7 @@
           "type": "object"
         }
       },
-      "required": [
-        "name",
-        "command",
-        "requirements"
-      ],
+      "required": ["name", "command", "requirements"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -727,10 +659,7 @@
           "exclusiveMinimum": 0
         }
       },
-      "required": [
-        "run_id",
-        "analysis_id"
-      ],
+      "required": ["run_id", "analysis_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -757,9 +686,7 @@
           "pattern": "^[0-9]+$"
         }
       },
-      "required": [
-        "run_id"
-      ],
+      "required": ["run_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -851,16 +778,10 @@
           "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
         }
       },
-      "required": [
-        "name",
-        "command"
-      ],
+      "required": ["name", "command"],
       "additionalProperties": false,
       "not": {
-        "required": [
-          "expected_stdout",
-          "expected_stdout_sha256"
-        ]
+        "required": ["expected_stdout", "expected_stdout_sha256"]
       }
     },
     "outputSchema": {
@@ -882,9 +803,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "scenario_id"
-      ],
+      "required": ["scenario_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -902,9 +821,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "execution_id"
-      ],
+      "required": ["execution_id"],
       "additionalProperties": false
     },
     "outputSchema": {
@@ -926,10 +843,7 @@
           "minLength": 1
         }
       },
-      "required": [
-        "run_id",
-        "artifact_id"
-      ],
+      "required": ["run_id", "artifact_id"],
       "additionalProperties": false
     },
     "outputSchema": {

@@ -31,18 +31,16 @@ export async function source(
   const code = el(
     'pre',
     { class: 'source-code', tabindex: 0, 'aria-label': `Source ${data.path}` },
-    ...data.content
-      .split('\n')
-      .map((text, index) =>
-        el(
-          'span',
-          {
-            class: `source-line ${data.start_line + index === line ? 'selected' : ''}`,
-            'data-line': data.start_line + index,
-          },
-          text || ' ',
-        ),
+    ...data.content.split('\n').map((text, index) =>
+      el(
+        'span',
+        {
+          class: `source-line ${data.start_line + index === line ? 'selected' : ''}`,
+          'data-line': data.start_line + index,
+        },
+        text || ' ',
       ),
+    ),
   );
   return el(
     'div',
