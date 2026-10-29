@@ -25,6 +25,8 @@ class SdkTest(unittest.TestCase):
 assert not hunin.enabled()
 with hunin.span('work'):
     hunin.counter('items', 1)
+assert hunin.counter('boolean', True) is None
+assert hunin.counter('zero', 0) is None
 class TargetError(Exception):
     calls = 0
     def __str__(self):
@@ -40,6 +42,30 @@ assert original.calls == 0
 """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_boolean_counters_do_not_poison_valid_numeric_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_target(
+                """import hunin
+for value in (False, True):
+    assert hunin.counter('boolean', value) is None
+for value in (0, -2, 3, 2.5):
+    assert hunin.counter('numeric', value) is not None
+hunin.flush()
+assert hunin.enabled()
+assert hunin.last_error() is None
+print('target-ok')
+""",
+                directory,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "target-ok\n")
+            rows = [
+                json.loads(line)
+                for path in Path(directory).glob("*.jsonl")
+                for line in path.read_text().splitlines()
+            ]
+            self.assertEqual([row["value"] for row in rows], [0, -2, 3, 2.5])
 
     def test_throwing_error_formatter_preserves_sync_and_async_target_exception(self):
         with tempfile.TemporaryDirectory() as directory:

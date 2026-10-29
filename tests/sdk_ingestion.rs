@@ -131,3 +131,31 @@ async fn sdk_error_formatters_preserve_target_exceptions_and_accept_valid_spools
         }
     }
 }
+
+#[tokio::test]
+async fn python_boolean_counters_leave_a_valid_numeric_sdk_spool() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    let engine = Engine::new(store.clone());
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let run = engine.start(serde_json::from_value(json!({
+        "command":[python,"-c","import hunin\nfor value in (False, True):\n assert hunin.counter('boolean', value) is None\nfor value in (0, -2, 3, 2.5):\n assert hunin.counter('numeric', value) is not None\nhunin.flush()\nassert hunin.last_error() is None\nprint('target-ok')"],
+        "cwd":project.path(),"runtime":"none",
+        "env":{"PYTHONPATH":std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sdk/python")},
+        "expected_stdout":"target-ok\n",
+    })).unwrap()).await.unwrap();
+    let run = engine.wait(&run.id).await.unwrap();
+    assert_eq!(run.status, "completed", "{:?}", run.diagnostics);
+    assert_eq!(run.correctness["passed"], true);
+    assert_eq!(run.source["sdk_ingestion"]["status"], "accepted");
+    assert_eq!(run.source["sdk_ingestion"]["record_count"], 4);
+    let values = store
+        .records(&run.id)
+        .unwrap()
+        .into_iter()
+        .filter(|record| record["name"] == "numeric")
+        .map(|record| record["value"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec![json!(0), json!(-2), json!(3), json!(2.5)]);
+}

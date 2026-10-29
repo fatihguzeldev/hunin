@@ -189,7 +189,11 @@ def context(name, attributes=None):
 
 def counter(name, value, unit="count", attributes=None):
     try:
-        if not isinstance(value, (float, int)) or not math.isfinite(value):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (float, int))
+            or not math.isfinite(value)
+        ):
             return None
     except (OverflowError, ValueError):
         return None
