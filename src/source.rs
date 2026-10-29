@@ -1,4 +1,4 @@
-use crate::{model::runs::Run, storage::Store};
+use crate::storage::Store;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -7,51 +7,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-/// Retain bounded source text before launching the measured process. A matching
-/// snapshot identifies recorded bytes, independently of a binary/source mapping.
-pub(crate) fn retain(store: &Store, run: &mut Run) -> Result<()> {
-    let root = Path::new(&run.cwd);
-    let mut snapshots = Vec::new();
-    let mut skipped = 0;
-    let mut bytes = 0;
-    for (relative, expected) in run.source["source_files"].as_object().into_iter().flatten() {
-        let path = root.join(relative);
-        let Ok(canonical) = path.canonicalize() else {
-            skipped += 1;
-            continue;
-        };
-        if !canonical.starts_with(root) {
-            skipped += 1;
-            continue;
-        }
-        let Ok(content) = fs::read(&canonical) else {
-            skipped += 1;
-            continue;
-        };
-        if content.len() > 2 * 1024 * 1024
-            || bytes + content.len() > 32 * 1024 * 1024
-            || std::str::from_utf8(&content).is_err()
-        {
-            skipped += 1;
-            continue;
-        }
-        let digest = format!("{:x}", Sha256::digest(&content));
-        if expected.as_str() != Some(digest.as_str()) {
-            skipped += 1;
-            continue;
-        }
-        let artifact = store.add_artifact(&run.id, &canonical, "source-snapshot")?;
-        if artifact.sha256 != digest {
-            skipped += 1;
-            continue;
-        }
-        bytes += content.len();
-        snapshots.push(json!({"path":relative,"artifact_id":artifact.id,"sha256":digest}));
-    }
-    run.source["retained_sources"] = json!(snapshots);
-    run.source["source_retention"] = json!({"bytes":bytes,"skipped_files":skipped,"scope":"pre-launch UTF-8 project files, at most 2 MiB per file and 32 MiB per recording","build_mapping_verified":false});
-    Ok(())
-}
+mod retention;
+pub(crate) use retention::retain;
 
 pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
     let run = store.run(params["run_id"].as_str().unwrap())?;
