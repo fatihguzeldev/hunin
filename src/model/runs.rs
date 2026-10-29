@@ -1,11 +1,70 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+
+/// Recording state is distinct from target correctness and capture completeness.
+/// Unknown historical labels remain readable without becoming known outcomes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunStatus {
+    Running,
+    Completed,
+    Failed,
+    Canceled,
+    Unknown(String),
+}
+
+impl RunStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+impl From<String> for RunStatus {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "canceled" => Self::Canceled,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+impl From<&str> for RunStatus {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_owned())
+    }
+}
+
+impl PartialEq<&str> for RunStatus {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl Serialize for RunStatus {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RunStatus {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
     pub id: String,
     pub name: String,
-    pub status: String,
+    pub status: RunStatus,
     pub command: Vec<String>,
     pub cwd: String,
     pub runtime: String,

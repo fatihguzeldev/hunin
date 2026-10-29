@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use hunin::{interfaces, operations::Operations, storage::Store};
+use hunin::{interfaces, model::runs::RunStatus, operations::Operations, storage::Store};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             let run = tokio::select! {run=operations.engine.wait(id)=>run?,_=tokio::signal::ctrl_c()=>{operations.engine.cancel(id).await?;operations.engine.wait(id).await?}};
             let result = operations.call("runs.get", json!({"run_id":id})).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
-            if run.status != "completed" {
+            if run.status != RunStatus::Completed {
                 std::process::exit(1);
             }
             return Ok(());

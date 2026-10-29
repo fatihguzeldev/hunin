@@ -1,6 +1,6 @@
 use crate::{
     ingestion,
-    model::runs::{Artifact, Run},
+    model::runs::{Artifact, Run, RunStatus},
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -172,11 +172,11 @@ impl Store {
             .with_context(|| format!("run removed before import completion: {run_id}"))?;
         let mut run: Run = serde_json::from_str(&text)?;
         anyhow::ensure!(
-            run.status != "running",
+            run.status != RunStatus::Running,
             "cannot import into a running recording"
         );
         if complete_new_run {
-            run.status = "completed".into();
+            run.status = RunStatus::Completed;
         }
         run.diagnostics.extend_from_slice(diagnostics);
         tx.execute(
@@ -594,7 +594,7 @@ impl Store {
     }
 
     pub fn remove_run(&self, run_id: &str) -> Result<()> {
-        if self.run(run_id)?.status == "running" {
+        if self.run(run_id)?.status == RunStatus::Running {
             bail!("cancel a running recording before removing it");
         }
         let mut c = self.connection()?;

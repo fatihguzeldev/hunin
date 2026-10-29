@@ -1,4 +1,4 @@
-use crate::model::runs::{Artifact, Run};
+use crate::model::runs::{Artifact, Run, RunStatus};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
@@ -64,7 +64,7 @@ pub fn validate_declaration(requirements: &Value) -> Result<()> {
 }
 pub fn check(requirements: &Value, run: &Run, artifacts: &[Artifact]) -> Result<()> {
     validate_declaration(requirements)?;
-    if run.status == "running" {
+    if run.status == RunStatus::Running {
         bail!("analysis requires a finished input recording");
     }
     let runtime = requirements["runtime"].as_str().unwrap();

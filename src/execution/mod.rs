@@ -10,7 +10,10 @@ mod resources;
 
 use crate::{
     collection::{self, CaptureRequest},
-    model::{now_us, runs::Run},
+    model::{
+        now_us,
+        runs::{Run, RunStatus},
+    },
     storage::Store,
 };
 use anyhow::{Context, Result, bail};
@@ -115,7 +118,7 @@ impl Engine {
                 .name
                 .clone()
                 .unwrap_or_else(|| request.command.join(" ")),
-            status: "running".into(),
+            status: RunStatus::Running,
             command: request.command.clone(),
             cwd: cwd.display().to_string(),
             runtime,
@@ -149,7 +152,7 @@ impl Engine {
         tokio::spawn(async move {
             if let Err(error) = engine.execute(task_run.clone(), request, rx).await {
                 let mut failed = engine.store.run(&task_run.id).unwrap_or(task_run.clone());
-                failed.status = "failed".into();
+                failed.status = RunStatus::Failed;
                 failed.finished_at_us = Some(now_us());
                 failed.diagnostics.push(format!("{error:#}"));
                 if let Err(save) = engine.store.save_run(&failed) {
@@ -163,7 +166,7 @@ impl Engine {
 
     pub async fn cancel(&self, id: &str) -> Result<Run> {
         let run = self.store.run(id)?;
-        if run.status == "running" {
+        if run.status == RunStatus::Running {
             self.store.save_document(
                 "cancellations",
                 id,
@@ -192,7 +195,7 @@ impl Engine {
     pub async fn wait(&self, id: &str) -> Result<Run> {
         loop {
             let run = self.store.run(id)?;
-            if run.status != "running" {
+            if run.status != RunStatus::Running {
                 return Ok(run);
             }
             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -262,7 +265,7 @@ impl Engine {
         run.source["runtime_version"] = json!(plan.runtime_version);
         self.store.save_run(&run)?;
         if *cancel.borrow() || self.store.document("cancellations", &run.id).is_ok() {
-            run.status = "canceled".into();
+            run.status = RunStatus::Canceled;
             run.finished_at_us = Some(now_us());
             run.source["target_outcome"] =
                 json!({"status":"not_started","reason":"canceled before launch"});
@@ -439,13 +442,12 @@ impl Engine {
             }
         }
         run.status = if canceled {
-            "canceled"
+            RunStatus::Canceled
         } else if run.correctness["passed"] != true {
-            "failed"
+            RunStatus::Failed
         } else {
-            "completed"
-        }
-        .into();
+            RunStatus::Completed
+        };
         run.source["target_outcome"] =
             target_outcome.unwrap_or_else(|| json!({"exit_code":run.exit_code}));
         run.source["target_outcome"]["status"] = json!(run.status);
@@ -458,7 +460,7 @@ impl Engine {
         // Keep waiters on the recording until preservation and ingestion finish,
         // while retaining the actual target outcome if finalization later fails.
         let mut finalizing = run.clone();
-        finalizing.status = "running".into();
+        finalizing.status = RunStatus::Running;
         finalizing.finished_at_us = None;
         self.store.save_run(&finalizing)?;
         if timed_out {
@@ -486,8 +488,8 @@ impl Engine {
                     run.diagnostics
                         .push(format!("automatic collection incomplete: {error:#}"));
                     run.source["collection_status"] = json!("failed");
-                    if run.status == "completed" {
-                        run.status = "failed".into();
+                    if run.status == RunStatus::Completed {
+                        run.status = RunStatus::Failed;
                     }
                 }
             }
@@ -497,8 +499,8 @@ impl Engine {
         {
             run.source["collection_status"] = json!("failed");
             run.diagnostics.push("Native collector exited differently from the observed target status; raw and any accepted profile evidence were retained, and collector failure does not replace the target outcome".into());
-            if run.status == "completed" {
-                run.status = "failed".into();
+            if run.status == RunStatus::Completed {
+                run.status = RunStatus::Failed;
             }
         }
         let mut sdk = Vec::new();

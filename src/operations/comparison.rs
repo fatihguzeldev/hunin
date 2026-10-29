@@ -1,4 +1,4 @@
-use crate::{model::runs::Run, query, storage::Store};
+use crate::{model::runs::{Run, RunStatus}, query, storage::Store};
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -100,7 +100,7 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
     if before.correctness["passed"] != true || after.correctness["passed"] != true {
         reasons.push("Successful correctness checks are required for both runs");
     }
-    if before.status != "completed" || after.status != "completed" {
+    if before.status != RunStatus::Completed || after.status != RunStatus::Completed {
         reasons.push("Both recordings must complete successfully");
     }
     let known = |v: &Value| v.as_str().is_some_and(|s| !s.is_empty() && s != "unknown");

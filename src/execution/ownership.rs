@@ -1,3 +1,4 @@
+use crate::model::runs::RunStatus;
 use crate::{model::now_us, storage::Store};
 use anyhow::Result;
 use serde::Serialize;
@@ -35,7 +36,7 @@ pub fn recover_abandoned(store: &Store) -> Result<()> {
     loop {
         let runs = store.runs(250, offset)?;
         let count = runs.len();
-        running.extend(runs.into_iter().filter(|run| run.status == "running"));
+        running.extend(runs.into_iter().filter(|run| run.status == RunStatus::Running));
         if count < 250 {
             break;
         }
@@ -59,7 +60,7 @@ pub fn recover_abandoned(store: &Store) -> Result<()> {
         if !owner_absent(&run.source["owner"], &system) {
             continue;
         }
-        run.status = "failed".into();
+        run.status = RunStatus::Failed;
         run.finished_at_us = Some(now_us());
         run.diagnostics.push("Recording interrupted: its owning Hunin process is absent or has a different OS start identity. Preserved artifacts remain available; no stale PID was signaled.".into());
         run.source["collection_status"] = json!("interrupted");
