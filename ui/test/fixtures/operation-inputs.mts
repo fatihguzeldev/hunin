@@ -16,3 +16,14 @@ export const numericEnvironment = {
     COUNT: 7,
   },
 } satisfies OperationInputs['runs.start'];
+
+export const exactAttemptLookup = {
+  run_id: 'recording',
+  execution_id: 'attempt',
+} satisfies OperationInputs['analyses.results'];
+
+export const malformedAttemptLookup = {
+  run_id: 'recording',
+  // @ts-expect-error Attempt handles are strings; they are not numeric page offsets.
+  execution_id: 7,
+} satisfies OperationInputs['analyses.results'];

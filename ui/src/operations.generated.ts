@@ -523,6 +523,7 @@ export type OperationInputs = {
   "run_id": string;
   "limit"?: number;
   "cursor"?: string;
+  "execution_id"?: string;
 };
   "scenarios.list": {
   "limit"?: number;

@@ -40,6 +40,57 @@ async fn analysis_without_result_identity_is_never_selected() {
 }
 
 #[tokio::test]
+async fn exact_analysis_attempt_lookup_preserves_replay_identity_and_run_scope() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    store.save_run(&run("other", "/project", true)).unwrap();
+    store.save_document("analysis-results", "attempt", &json!({"id":"attempt","run_id":"recording","analysis_id":"analyzer","result_set_id":"replayed-result","status":"replayed","created_at_us":0})).unwrap();
+    for index in 1..4 {
+        store.save_document("analysis-results", &format!("newer-{index}"), &json!({"id":format!("newer-{index}"),"run_id":"recording","status":"failed","created_at_us":index})).unwrap();
+    }
+    store
+        .save_document(
+            "analysis-results",
+            "foreign",
+            &json!({"id":"foreign","run_id":"other","status":"accepted"}),
+        )
+        .unwrap();
+    let operations = Operations::new(store);
+    let page = operations
+        .call("analyses.results", json!({"run_id":"recording","limit":2}))
+        .await
+        .unwrap();
+    assert!(
+        page["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != "attempt")
+    );
+    let result = operations
+        .call(
+            "analyses.results",
+            json!({"run_id":"recording","execution_id":"attempt","limit":2}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["results"].as_array().unwrap().len(), 1);
+    assert_eq!(result["results"][0]["id"], "attempt");
+    assert_eq!(result["results"][0]["result_set_id"], "replayed-result");
+    assert!(result["next_cursor"].is_null());
+    for params in [
+        json!({"run_id":"recording","execution_id":"foreign"}),
+        json!({"run_id":"recording","execution_id":"missing"}),
+        json!({"run_id":"recording","execution_id":"attempt","cursor":"1"}),
+    ] {
+        let result = operations.call("analyses.results", params).await.unwrap();
+        assert!(result["results"].as_array().unwrap().is_empty());
+        assert!(result["next_cursor"].is_null());
+    }
+}
+
+#[tokio::test]
 async fn durable_metadata_lists_page_without_losing_history_or_crossing_runs() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

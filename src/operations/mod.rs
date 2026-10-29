@@ -225,8 +225,18 @@ impl Operations {
                 self.analyses.recover()?;
                 let run_id = id()?;
                 store.run(run_id)?;
-                let mut results =
-                    store.documents_page("analysis-results", Some(run_id), limit + 1, cursor)?;
+                let mut results = if let Some(execution_id) = params["execution_id"].as_str() {
+                    if cursor == 0 {
+                        store
+                            .document_for_run("analysis-results", execution_id, run_id)?
+                            .into_iter()
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    store.documents_page("analysis-results", Some(run_id), limit + 1, cursor)?
+                };
                 for row in &mut results {
                     let selected = store.selected_result_id(
                         run_id,

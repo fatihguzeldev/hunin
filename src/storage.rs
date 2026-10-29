@@ -54,6 +54,23 @@ impl Store {
             .collect()
     }
 
+    pub(crate) fn document_for_run(
+        &self,
+        namespace: &str,
+        id: &str,
+        run_id: &str,
+    ) -> Result<Option<Value>> {
+        let text: Option<String> = self
+            .connection()?
+            .query_row(
+                "SELECT payload FROM documents WHERE namespace=?1 AND id=?2 AND owner_run_id=?3",
+                params![namespace, id, run_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(text.map(|text| serde_json::from_str(&text)).transpose()?)
+    }
+
     /// Page in SQL before decoding payloads; completed attempts keep creation order.
     pub fn documents_page(
         &self,

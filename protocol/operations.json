@@ -684,6 +684,11 @@
         "cursor": {
           "type": "string",
           "pattern": "^[0-9]+$"
+        },
+        "execution_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Return only this attempt when it belongs to run_id. An absent row does not prove completion; paged listing remains available when omitted."
         }
       },
       "required": ["run_id"],
