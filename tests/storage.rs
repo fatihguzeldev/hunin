@@ -74,6 +74,40 @@ fn shared_raw_artifacts_survive_removing_one_run() {
 }
 
 #[test]
+fn artifact_resolution_decodes_only_the_requested_owned_reference() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let mut foreign = run();
+    foreign.id = "foreign-run".into();
+    store.save_run(&foreign).unwrap();
+    let valid = store
+        .add_artifact_bytes("run-1", "valid.txt", "raw", b"retained")
+        .unwrap();
+    let connection = rusqlite::Connection::open(root.path().join("hunin.sqlite")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO artifacts(run_id,id,metadata,sha256) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![
+                "run-1",
+                "unrelated-corrupt-reference",
+                "not JSON",
+                valid.sha256
+            ],
+        )
+        .unwrap();
+    let path = store.artifact_path("run-1", &valid.id).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"retained");
+    assert!(store.artifact_path("run-1", "missing").is_err());
+    assert!(store.artifact_path("foreign-run", &valid.id).is_err());
+    assert!(
+        store
+            .artifact_path("run-1", "unrelated-corrupt-reference")
+            .is_err()
+    );
+}
+
+#[test]
 fn large_artifacts_stream_to_immutable_shared_bytes_and_preserve_reference_identity() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

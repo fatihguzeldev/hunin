@@ -177,11 +177,16 @@ impl Store {
 
     pub fn artifact_path(&self, run_id: &str, id: &str) -> Result<PathBuf> {
         // Resolve through a run-owned reference, never by joining an arbitrary caller path.
-        let artifact = self
-            .artifacts(run_id)?
-            .into_iter()
-            .find(|a| a.id == id)
+        self.run(run_id)?;
+        let metadata: String = self
+            .connection()?
+            .query_row(
+                "SELECT metadata FROM artifacts WHERE run_id=?1 AND id=?2",
+                params![run_id, id],
+                |row| row.get(0),
+            )
             .context("artifact not found")?;
+        let artifact: Artifact = serde_json::from_str(&metadata)?;
         Ok(self.root.join("artifacts").join(artifact.sha256))
     }
 }
