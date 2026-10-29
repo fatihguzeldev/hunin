@@ -63,7 +63,14 @@ fn checkpoint_failure_after_a_real_chunk_cleans_partial_staging() {
         .add_artifact_controlled("raw-budget", &path, "raw", 200_000, &mut read, || {
             let partial = fs::read_dir(root.path().join("artifacts"))?
                 .filter_map(Result::ok)
-                .any(|entry| entry.metadata().is_ok_and(|metadata| metadata.len() > 0));
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(".pending-"))
+                .any(|entry| {
+                    // Directory-entry size can lag writes through an open
+                    // handle. Observe staged bytes rather than cached metadata.
+                    fs::File::open(entry.path()).is_ok_and(|mut file| {
+                        file.read(&mut [0u8; 1]).is_ok_and(|count| count == 1)
+                    })
+                });
             if partial {
                 saw_partial = true;
                 bail!("controlled deadline elapsed");
@@ -73,7 +80,10 @@ fn checkpoint_failure_after_a_real_chunk_cleans_partial_staging() {
         .expect_err("deadline checkpoint must prevent reference publication");
     assert!(saw_partial);
     assert!(error.to_string().contains("deadline"));
-    assert!(read > 0 && read < 150_000);
+    assert!(
+        read > 0 && read < 150_000,
+        "actual source bytes read: {read}"
+    );
     assert!(store.artifacts("raw-budget").unwrap().is_empty());
     assert_eq!(
         fs::read_dir(root.path().join("artifacts")).unwrap().count(),
