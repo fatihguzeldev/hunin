@@ -7,6 +7,9 @@
       "properties": {},
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Capabilities"
     }
   },
   {
@@ -547,6 +550,9 @@
         "path"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/SourceRead"
     }
   },
   {

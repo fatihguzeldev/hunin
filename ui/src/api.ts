@@ -3,7 +3,7 @@ import { isHttpFailure, isHttpSuccess, validateOperationOutput, type OperationIn
 
 export type Run = RunWire;
 export type Summary = SummaryWire;
-export type Capability = { runtime: string; available: boolean; version?: string | null; executable?: string | null; probe_status?: string; verification?: string; modes?: { mode: string; mechanism: string; availability: string; basis: string; recording_verified: boolean }[]; capabilities: string[]; diagnostics: string[] };
+export type Capability = OperationOutputs['capabilities']['runtimes'][number];
 export type Hotspot = { function: string; file?: string; line?: number; code_id?: string | null; self_weight: number; inclusive_weight: number; weight_unit: string };
 export type TreeNode = { id: string; name: string; file?: string; line?: number; code_id?: string | null; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
 export type Artifact = OperationOutputs['artifacts.list']['artifacts'][number];
@@ -14,14 +14,12 @@ export type Comparison = { before: Run; after: Run; comparable: boolean; reasons
 export type Scenario = { id: string; name: string; command: string[]; cwd: string; runtime: string; timeout_seconds: number; expected_exit_code: number; env?: Record<string,string>; input_files?: string[]; expected_stdout?: string; expected_stdout_sha256?: string };
 
 type Responses = {
-  capabilities: { host: { os: string; arch: string }; runtimes: Capability[]; schema_version: number; native_sampling_permission?: { state: string; probe: string }; probe_limits?: { output_bytes_per_stream: number; timeout_seconds_per_command: number } };
   'profiles.hotspots': { hotspots: Hotspot[]; total_weight: number; weight_unit: string };
   'profiles.tree': { roots: TreeNode[]; weight_unit: string; next_cursor?: string | null; returned_nodes?: number; node_limit?: number; depth_limit?: number; diagnostics?: string[] };
   'timeline.query': { records: Observation[]; unaligned_records?: Observation[]; next_cursor?: string; unaligned_count?: number; bounds: { start_us: number; end_us: number } | null };
   'resources.query': { series: Series[]; next_cursor?: string; returned_points?: number; total_points?: number };
   'contexts.query': { contexts: Observation[]; relations: Observation[]; next_cursor?: string };
   'evidence.get': { records: Observation[] };
-  'source.read': { path: string; content: string; start_line: number; identity_verified: boolean; source_kind?: 'recorded_snapshot' | 'current_file' | 'recorded_source_map'; build_mapping_verified?: boolean; diagnostic?: string; provenance?: unknown };
   'analyses.list': { analyses: Analysis[]; next_cursor?: string | null };
   'analyses.register': { analysis: Analysis };
   'analyses.results': { results: AnalysisResult[]; next_cursor?: string | null };

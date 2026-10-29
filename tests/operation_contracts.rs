@@ -89,6 +89,45 @@ fn summary_contract_retains_non_finite_aggregate_as_null() {
 }
 
 #[tokio::test]
+async fn capabilities_and_source_contracts_cover_real_discovery_and_unverified_files() {
+    let data = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let source = project.path().join("control.js");
+    std::fs::write(&source, "function currentControl() {}\n").unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store
+        .save_run(&Run {
+            id: "source".into(),
+            name: "source".into(),
+            status: "completed".into(),
+            command: vec![],
+            cwd: project.path().to_string_lossy().into_owned(),
+            runtime: "imported".into(),
+            started_at_us: 1,
+            finished_at_us: Some(2),
+            exit_code: None,
+            diagnostics: vec![],
+            source: Value::Null,
+            correctness: Value::Null,
+        })
+        .unwrap();
+    let operations = Operations::new(store);
+    let result = operations
+        .call("source.read", json!({"run_id":"source","path":source}))
+        .await
+        .unwrap();
+    validate_result("source.read", &result);
+    assert_eq!(result["identity_verified"], false);
+    assert_eq!(result["source_kind"], "current_file");
+    let discovery = operations.call("capabilities", json!({})).await.unwrap();
+    validate_result("capabilities", &discovery);
+    assert_eq!(
+        discovery["verification"],
+        "Discovery never labels executable presence as a verified CPU recording."
+    );
+}
+
+#[tokio::test]
 async fn artifact_contracts_cover_real_pages_and_lossy_byte_excerpts() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

@@ -14,7 +14,7 @@ export async function capabilities(): Promise<HTMLElement> {
         runtime.version ? el('p', { class: 'mono' }, runtime.version) : null,
         runtime.executable ? el('p', { class: 'mono source-label' }, runtime.executable) : null,
         runtime.verification ? el('p', { class: 'metric-note' }, runtime.verification) : null,
-        el('div', { class: 'inline' }, ...runtime.capabilities.map(value => badge(value))),
+        el('div', { class: 'inline' }, ...(runtime.capabilities ?? []).map(value => badge(value))),
         ...(runtime.modes ?? []).map(mode => el('div', { class: 'result-item' },
           el('div', { class: 'inline' }, el('h3', {}, mode.mode), badge(mode.availability, mode.availability === 'prerequisites_ready' ? 'good' : 'warn')),
           el('p', {}, mode.mechanism), el('p', { class: 'metric-note' }, mode.basis), badge(mode.recording_verified ? 'recording verified' : 'recording not verified by discovery', mode.recording_verified ? 'good' : 'warn'))),

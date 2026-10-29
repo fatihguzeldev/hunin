@@ -81,6 +81,62 @@ export type McpToolFailure = {
   "isError": true;
 };
 
+export type CapabilityMode = {
+  "mode": string;
+  "mechanism": string;
+  "availability": string;
+  "basis": string;
+  "recording_verified": boolean;
+};
+
+export type Capability = {
+  "runtime": string;
+  "available": boolean;
+  "executable"?: string | null;
+  "version"?: string | null;
+  "probe_status": string;
+  "capabilities"?: Array<string>;
+  "modes"?: Array<CapabilityMode>;
+  "diagnostics": Array<string>;
+  "verification"?: string;
+};
+
+export type NativeSamplingPermission = {
+  "state": string;
+  "probe"?: string;
+  "error"?: string;
+  "perf_event_paranoid"?: string | null;
+  "prerequisite"?: string;
+  "setup_url"?: string;
+  "xperf_executable"?: string;
+};
+
+export type Capabilities = {
+  "host": {
+  "os": string;
+  "arch": string;
+};
+  "runtimes": Array<Capability>;
+  "schema_version": 1;
+  "native_sampling_permission": NativeSamplingPermission;
+  "probe_limits": {
+  "timeout_seconds_per_command": number;
+  "output_bytes_per_stream": number;
+};
+  "verification": string;
+};
+
+export type SourceRead = {
+  "path": string;
+  "content": string;
+  "start_line": number;
+  "identity_verified": boolean;
+  "source_kind": string;
+  "build_mapping_verified": boolean;
+  "diagnostic": string;
+  "provenance"?: unknown;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -233,6 +289,7 @@ export type OperationInputs = {
 };
 
 export type OperationOutputs = {
+  "capabilities": Capabilities;
   "runs.list": RunPage;
   "runs.get": RunDetails;
   "runs.start": RunResult;
@@ -256,6 +313,7 @@ export type OperationOutputs = {
   "next_offset": number | null;
   "size": number;
 };
+  "source.read": SourceRead;
   "recordings.import": ImportResult;
   "scenarios.run": RunResult;
   "recordings.reanalyze": ReanalysisResult;
@@ -313,9 +371,32 @@ export function isMcpToolFailure(value: unknown): value is McpToolFailure {
   return (isOutputObject(value) && Object.hasOwn(value, "content") && Object.hasOwn(value, "isError") && (Array.isArray(value["content"]) && value["content"].every(item => (isOutputObject(item) && Object.hasOwn(item, "type") && Object.hasOwn(item, "text") && (item["type"] === "text") && (typeof item["text"] === "string")))) && (value["isError"] === true));
 }
 
+export function isCapabilityMode(value: unknown): value is CapabilityMode {
+  return (isOutputObject(value) && Object.hasOwn(value, "mode") && Object.hasOwn(value, "mechanism") && Object.hasOwn(value, "availability") && Object.hasOwn(value, "basis") && Object.hasOwn(value, "recording_verified") && (typeof value["mode"] === "string") && (typeof value["mechanism"] === "string") && (typeof value["availability"] === "string") && (typeof value["basis"] === "string") && (typeof value["recording_verified"] === "boolean"));
+}
+
+export function isCapability(value: unknown): value is Capability {
+  return (isOutputObject(value) && Object.hasOwn(value, "runtime") && Object.hasOwn(value, "available") && Object.hasOwn(value, "probe_status") && Object.hasOwn(value, "diagnostics") && (typeof value["runtime"] === "string") && (typeof value["available"] === "boolean") && (!Object.hasOwn(value, "executable") || ((typeof value["executable"] === "string") || (value["executable"] === null))) && (!Object.hasOwn(value, "version") || ((typeof value["version"] === "string") || (value["version"] === null))) && (typeof value["probe_status"] === "string") && (!Object.hasOwn(value, "capabilities") || (Array.isArray(value["capabilities"]) && value["capabilities"].every(item => (typeof item === "string")))) && (!Object.hasOwn(value, "modes") || (Array.isArray(value["modes"]) && value["modes"].every(item => isCapabilityMode(item)))) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))) && (!Object.hasOwn(value, "verification") || (typeof value["verification"] === "string")));
+}
+
+export function isNativeSamplingPermission(value: unknown): value is NativeSamplingPermission {
+  return (isOutputObject(value) && Object.hasOwn(value, "state") && (typeof value["state"] === "string") && (!Object.hasOwn(value, "probe") || (typeof value["probe"] === "string")) && (!Object.hasOwn(value, "error") || (typeof value["error"] === "string")) && (!Object.hasOwn(value, "perf_event_paranoid") || ((typeof value["perf_event_paranoid"] === "string") || (value["perf_event_paranoid"] === null))) && (!Object.hasOwn(value, "prerequisite") || (typeof value["prerequisite"] === "string")) && (!Object.hasOwn(value, "setup_url") || (typeof value["setup_url"] === "string")) && (!Object.hasOwn(value, "xperf_executable") || (typeof value["xperf_executable"] === "string")));
+}
+
+export function isCapabilities(value: unknown): value is Capabilities {
+  return (isOutputObject(value) && Object.hasOwn(value, "host") && Object.hasOwn(value, "runtimes") && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "native_sampling_permission") && Object.hasOwn(value, "probe_limits") && Object.hasOwn(value, "verification") && (isOutputObject(value["host"]) && Object.hasOwn(value["host"], "os") && Object.hasOwn(value["host"], "arch") && (typeof value["host"]["os"] === "string") && (typeof value["host"]["arch"] === "string")) && (Array.isArray(value["runtimes"]) && value["runtimes"].every(item => isCapability(item))) && (value["schema_version"] === 1) && isNativeSamplingPermission(value["native_sampling_permission"]) && (isOutputObject(value["probe_limits"]) && Object.hasOwn(value["probe_limits"], "timeout_seconds_per_command") && Object.hasOwn(value["probe_limits"], "output_bytes_per_stream") && (typeof value["probe_limits"]["timeout_seconds_per_command"] === "number" && Number.isInteger(value["probe_limits"]["timeout_seconds_per_command"]) && value["probe_limits"]["timeout_seconds_per_command"] >= 0) && (typeof value["probe_limits"]["output_bytes_per_stream"] === "number" && Number.isInteger(value["probe_limits"]["output_bytes_per_stream"]) && value["probe_limits"]["output_bytes_per_stream"] >= 0)) && (typeof value["verification"] === "string"));
+}
+
+export function isSourceRead(value: unknown): value is SourceRead {
+  return (isOutputObject(value) && Object.hasOwn(value, "path") && Object.hasOwn(value, "content") && Object.hasOwn(value, "start_line") && Object.hasOwn(value, "identity_verified") && Object.hasOwn(value, "source_kind") && Object.hasOwn(value, "build_mapping_verified") && Object.hasOwn(value, "diagnostic") && (typeof value["path"] === "string") && (typeof value["content"] === "string") && (typeof value["start_line"] === "number" && Number.isInteger(value["start_line"]) && value["start_line"] >= 1) && (typeof value["identity_verified"] === "boolean") && (typeof value["source_kind"] === "string") && (typeof value["build_mapping_verified"] === "boolean") && (typeof value["diagnostic"] === "string") && (!Object.hasOwn(value, "provenance") || true));
+}
+
 // Only declared output schemas are checked while the catalog is migrated.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
+    case "capabilities":
+      if (!isCapabilities(value)) throw new Error("Hunin returned an invalid capabilities result.");
+      break;
     case "runs.list":
       if (!isRunPage(value)) throw new Error("Hunin returned an invalid runs.list result.");
       break;
@@ -336,6 +417,9 @@ export function validateOperationOutput(name: string, value: unknown): void {
       break;
     case "artifacts.read":
       if (!(isOutputObject(value) && Object.hasOwn(value, "content") && Object.hasOwn(value, "encoding") && Object.hasOwn(value, "next_offset") && Object.hasOwn(value, "size") && (typeof value["content"] === "string") && (value["encoding"] === "utf8_lossy") && ((typeof value["next_offset"] === "number" && Number.isInteger(value["next_offset"]) && value["next_offset"] >= 0) || (value["next_offset"] === null)) && (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0))) throw new Error("Hunin returned an invalid artifacts.read result.");
+      break;
+    case "source.read":
+      if (!isSourceRead(value)) throw new Error("Hunin returned an invalid source.read result.");
       break;
     case "recordings.import":
       if (!isImportResult(value)) throw new Error("Hunin returned an invalid recordings.import result.");

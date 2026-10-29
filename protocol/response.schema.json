@@ -256,6 +256,194 @@
         }
       },
       "required": ["content", "isError"]
+    },
+    "CapabilityMode": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "mechanism": {
+          "type": "string"
+        },
+        "availability": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string"
+        },
+        "recording_verified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "mechanism",
+        "availability",
+        "basis",
+        "recording_verified"
+      ]
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "executable": {
+          "type": ["string", "null"]
+        },
+        "version": {
+          "type": ["string", "null"]
+        },
+        "probe_status": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CapabilityMode"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verification": {
+          "type": "string"
+        }
+      },
+      "required": ["runtime", "available", "probe_status", "diagnostics"]
+    },
+    "NativeSamplingPermission": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string"
+        },
+        "probe": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "perf_event_paranoid": {
+          "type": ["string", "null"]
+        },
+        "prerequisite": {
+          "type": "string"
+        },
+        "setup_url": {
+          "type": "string"
+        },
+        "xperf_executable": {
+          "type": "string"
+        }
+      },
+      "required": ["state"]
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "object",
+          "properties": {
+            "os": {
+              "type": "string"
+            },
+            "arch": {
+              "type": "string"
+            }
+          },
+          "required": ["os", "arch"]
+        },
+        "runtimes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "native_sampling_permission": {
+          "$ref": "#/$defs/NativeSamplingPermission"
+        },
+        "probe_limits": {
+          "type": "object",
+          "properties": {
+            "timeout_seconds_per_command": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_bytes_per_stream": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["timeout_seconds_per_command", "output_bytes_per_stream"]
+        },
+        "verification": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "runtimes",
+        "schema_version",
+        "native_sampling_permission",
+        "probe_limits",
+        "verification"
+      ]
+    },
+    "SourceRead": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "identity_verified": {
+          "type": "boolean"
+        },
+        "source_kind": {
+          "type": "string",
+          "description": "Current labels include recorded_snapshot, current_file and recorded_source_map."
+        },
+        "build_mapping_verified": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "type": "string"
+        },
+        "provenance": {}
+      },
+      "required": [
+        "path",
+        "content",
+        "start_line",
+        "identity_verified",
+        "source_kind",
+        "build_mapping_verified",
+        "diagnostic"
+      ]
     }
   }
 }
