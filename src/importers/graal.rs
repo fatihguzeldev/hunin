@@ -1,3 +1,4 @@
+use super::StackSample;
 use super::{checked_us, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -30,22 +31,18 @@ pub(super) fn decode(
             .context("Graal thread profiles missing")?
         {
             let tid = thread["thread"].as_str().unwrap_or("unknown");
+            let profile = ThreadProfile {
+                tid,
+                pid,
+                interval,
+                run_id,
+                key,
+            };
             for root in thread["samples"]
                 .as_array()
                 .context("Graal samples missing")?
             {
-                walk(
-                    root,
-                    &[],
-                    tid,
-                    pid,
-                    interval,
-                    run_id,
-                    key,
-                    &mut records,
-                    &mut aggregate,
-                    0,
-                )?;
+                walk(root, &[], profile, &mut records, &mut aggregate, 0)?;
             }
         }
     }
@@ -63,18 +60,30 @@ pub(super) fn decode(
     Ok((records, diagnostics))
 }
 
+#[derive(Clone, Copy)]
+struct ThreadProfile<'a> {
+    tid: &'a str,
+    pid: u64,
+    interval: Option<f64>,
+    run_id: &'a str,
+    key: &'a str,
+}
+
 fn walk(
     node: &Value,
     parent: &[Value],
-    tid: &str,
-    pid: u64,
-    interval: Option<f64>,
-    run_id: &str,
-    key: &str,
+    profile: ThreadProfile<'_>,
     records: &mut Vec<Value>,
     aggregate: &mut bool,
     depth: usize,
 ) -> Result<()> {
+    let ThreadProfile {
+        tid,
+        pid,
+        interval,
+        run_id,
+        key,
+    } = profile;
     if depth > 4096 {
         bail!("Graal stack exceeds supported depth");
     }
@@ -106,13 +115,15 @@ fn walk(
                 run_id,
                 key,
                 records.len(),
-                pid,
-                tid,
-                0,
-                stack.clone(),
-                count as f64,
-                "samples",
-                json!({"source_format":"graal-cpusampler","clock":"unknown","clock_alignment":"unmapped","temporal_resolution":"aggregate","tid_kind":"graal_thread_label"}),
+                StackSample {
+                    pid,
+                    tid,
+                    timestamp_us: 0,
+                    stack: stack.clone(),
+                    weight: count as f64,
+                    weight_unit: "samples",
+                    attributes: json!({"source_format":"graal-cpusampler","clock":"unknown","clock_alignment":"unmapped","temporal_resolution":"aggregate","tid_kind":"graal_thread_label"}),
+                },
             );
             if let Some(interval) = interval {
                 record["interval_us"] = json!(interval);
@@ -128,13 +139,15 @@ fn walk(
                     run_id,
                     key,
                     records.len(),
-                    pid,
-                    tid,
-                    timestamp,
-                    stack.clone(),
-                    1.0,
-                    "samples",
-                    json!({"source_format":"graal-cpusampler","clock":"unix_epoch","clock_alignment":"collector_epoch_ms","tid_kind":"graal_thread_label"}),
+                    StackSample {
+                        pid,
+                        tid,
+                        timestamp_us: timestamp,
+                        stack: stack.clone(),
+                        weight: 1.0,
+                        weight_unit: "samples",
+                        attributes: json!({"source_format":"graal-cpusampler","clock":"unix_epoch","clock_alignment":"collector_epoch_ms","tid_kind":"graal_thread_label"}),
+                    },
                 );
                 if let Some(interval) = interval {
                     record["interval_us"] = json!(interval);
@@ -144,18 +157,7 @@ fn walk(
         }
     }
     for child in node["children"].as_array().into_iter().flatten() {
-        walk(
-            child,
-            &stack,
-            tid,
-            pid,
-            interval,
-            run_id,
-            key,
-            records,
-            aggregate,
-            depth + 1,
-        )?;
+        walk(child, &stack, profile, records, aggregate, depth + 1)?;
     }
     Ok(())
 }

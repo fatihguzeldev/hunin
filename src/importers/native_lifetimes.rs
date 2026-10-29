@@ -598,21 +598,21 @@ impl Timeline {
             Ok(Some(record))
         }).collect::<Result<Vec<_>>>()?;
         let mut records: Vec<_> = records.into_iter().flatten().collect();
-        if let Some(outcome) = &self.target_outcome {
-            if outcome["state"] == "exited" || outcome["state"] == "signaled" {
-                let pid = outcome["pid"].as_u64().unwrap();
-                let process = self
-                    .instances
-                    .iter()
-                    .find(|i| i.process["pid"].as_str() == Some(pid.to_string().as_str()))
-                    .map(|i| &i.process);
-                let producer = if let Some(process) = process {
-                    format!("profile:{key}:{pid}:{}", ms(&process["start_time_ms"])?)
-                } else {
-                    format!("profile:{key}:root-target:{pid}")
-                };
-                records.push(json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:root-target-outcome"),"run_id":run,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":outcome["wait_observed_at_us"],"basis":"observed","name":"process.wait_outcome","attributes":{"scope":"process","source_format":"samply-native-lifetimes","process_id_source":"root_target_os_wait_status","process_instance_id":process.map(|p|&p["key"]),"target_outcome":outcome,"clock":"unix_epoch","clock_alignment":"os_wait_wall_clock_observation","timestamp_semantics":"time the collector observed OS wait status; not exact process death time"}}));
-            }
+        if let Some(outcome) = &self.target_outcome
+            && (outcome["state"] == "exited" || outcome["state"] == "signaled")
+        {
+            let pid = outcome["pid"].as_u64().unwrap();
+            let process = self
+                .instances
+                .iter()
+                .find(|i| i.process["pid"].as_str() == Some(pid.to_string().as_str()))
+                .map(|i| &i.process);
+            let producer = if let Some(process) = process {
+                format!("profile:{key}:{pid}:{}", ms(&process["start_time_ms"])?)
+            } else {
+                format!("profile:{key}:root-target:{pid}")
+            };
+            records.push(json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:root-target-outcome"),"run_id":run,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":outcome["wait_observed_at_us"],"basis":"observed","name":"process.wait_outcome","attributes":{"scope":"process","source_format":"samply-native-lifetimes","process_id_source":"root_target_os_wait_status","process_instance_id":process.map(|p|&p["key"]),"target_outcome":outcome,"clock":"unix_epoch","clock_alignment":"os_wait_wall_clock_observation","timestamp_semantics":"time the collector observed OS wait status; not exact process death time"}}));
         }
         Ok(records)
     }

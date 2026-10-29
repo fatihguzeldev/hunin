@@ -82,12 +82,11 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
             let time = field(line, "Time")
                 .context("Go trace event time missing")?
                 .parse::<i128>()?;
-            if kind == "Sync" {
-                if let (Some(trace), Some(wall)) = (field(line, "Trace"), field(line, "Wall")) {
-                    let wall =
-                        chrono::DateTime::parse_from_rfc3339(wall)?.timestamp_micros() as i128;
-                    anchor = Some((trace.parse()?, wall));
-                }
+            if kind == "Sync"
+                && let (Some(trace), Some(wall)) = (field(line, "Trace"), field(line, "Wall"))
+            {
+                let wall = chrono::DateTime::parse_from_rfc3339(wall)?.timestamp_micros() as i128;
+                anchor = Some((trace.parse()?, wall));
             }
             let mapped = anchor.map(|(trace, wall)| wall + (time - trace) / 1000);
             let timestamp = mapped.unwrap_or(time / 1000);
@@ -106,13 +105,13 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
                 .unwrap_or_else(|| format!("go.{kind}"));
             let index = records.len();
             let mut record = json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:{index}"),"run_id":run_id,"producer_id":format!("profile:{key}:go"),"pid":0,"tid":m,"timestamp_us":timestamp as u64,"basis":"observed","name":name,"attributes":attrs});
-            if kind == "Metric" {
-                if let Some((value, unit)) = metric(line) {
-                    record["kind"] = json!("metric");
-                    record["value"] = json!(value);
-                    record["unit"] = json!(unit);
-                    record["scope"] = json!("process");
-                }
+            if kind == "Metric"
+                && let Some((value, unit)) = metric(line)
+            {
+                record["kind"] = json!("metric");
+                record["value"] = json!(value);
+                record["unit"] = json!(unit);
+                record["scope"] = json!("process");
             }
             current = Some(record);
             pending_function = None;
@@ -122,10 +121,10 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
             } else if let Some(mut frame) = pending_function.take() {
                 if let Some((file, line_number)) = line.trim().rsplit_once(':') {
                     frame["file"] = json!(file);
-                    if let Ok(number) = line_number.parse::<u64>() {
-                        if number > 0 {
-                            frame["line"] = json!(number);
-                        }
+                    if let Ok(number) = line_number.parse::<u64>()
+                        && number > 0
+                    {
+                        frame["line"] = json!(number);
                     }
                 }
                 if let Some(record) = current.as_mut() {
@@ -182,14 +181,14 @@ fn finish(
                 record.clone(),
             ),
         );
-    } else if kind == "RangeEnd" {
-        if let Some((start, begin, original)) = ranges.remove(&(name.clone(), scope)) {
-            if timestamp < start {
-                bail!("Go range ends before it begins");
-            }
-            let span = json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:range:{}",records.len()),"run_id":run_id,"producer_id":original["producer_id"],"pid":0,"tid":original["tid"],"timestamp_us":start,"duration_us":timestamp-start,"basis":"observed","name":format!("go.{name}"),"evidence":[begin,record["id"]],"attributes":original["attributes"]});
-            records.push(span);
+    } else if kind == "RangeEnd"
+        && let Some((start, begin, original)) = ranges.remove(&(name.clone(), scope))
+    {
+        if timestamp < start {
+            bail!("Go range ends before it begins");
         }
+        let span = json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:range:{}",records.len()),"run_id":run_id,"producer_id":original["producer_id"],"pid":0,"tid":original["tid"],"timestamp_us":start,"duration_us":timestamp-start,"basis":"observed","name":format!("go.{name}"),"evidence":[begin,record["id"]],"attributes":original["attributes"]});
+        records.push(span);
     }
     records.push(record);
     Ok(())

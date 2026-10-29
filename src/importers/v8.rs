@@ -1,3 +1,4 @@
+use super::StackSample;
 use super::{checked_us, javascript_sources::Scripts, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -129,7 +130,18 @@ pub(super) fn decode(
             attrs["script_sources"] = json!(script_proofs.into_values().collect::<Vec<_>>());
         }
         records.push(sample(
-            run_id, key, index, pid, &tid, timestamp, chain, 1.0, "samples", attrs,
+            run_id,
+            key,
+            index,
+            StackSample {
+                pid,
+                tid: &tid,
+                timestamp_us: timestamp,
+                stack: chain,
+                weight: 1.0,
+                weight_unit: "samples",
+                attributes: attrs,
+            },
         ));
     }
     let mut diagnostics = if origin.is_none() {

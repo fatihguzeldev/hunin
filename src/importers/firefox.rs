@@ -1,3 +1,4 @@
+use super::StackSample;
 use super::{checked_us, native_identity::Images, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -40,8 +41,7 @@ pub(super) fn decode_with_lifetimes(
         key,
         &mut records,
         &mut unresolved,
-        images,
-        lifetimes,
+        &NativeContext { images, lifetimes },
     )?;
     let mut diagnostics = images.diagnostics();
     if let Some(lifetimes) = lifetimes {
@@ -56,6 +56,11 @@ pub(super) fn decode_with_lifetimes(
     Ok((records, diagnostics))
 }
 
+struct NativeContext<'a> {
+    images: &'a Images,
+    lifetimes: Option<&'a super::native_lifetimes::Timeline>,
+}
+
 fn decode_process(
     raw: &Value,
     symbols: Option<&Value>,
@@ -63,9 +68,10 @@ fn decode_process(
     key: &str,
     records: &mut Vec<Value>,
     unresolved: &mut usize,
-    images: &Images,
-    lifetimes: Option<&super::native_lifetimes::Timeline>,
+    native: &NativeContext<'_>,
 ) -> Result<()> {
+    let images = native.images;
+    let lifetimes = native.lifetimes;
     let epoch_ms = raw["meta"]["startTime"].as_f64();
     let interval_us = raw["meta"]["interval"].as_f64().map(|v| v * 1000.0);
     let mut process_lifetimes = HashSet::new();
@@ -204,13 +210,15 @@ fn decode_process(
                 run_id,
                 key,
                 records.len(),
-                pid,
-                &tid,
-                timestamp,
-                stack,
-                weight,
-                "samples",
-                attributes,
+                StackSample {
+                    pid,
+                    tid: &tid,
+                    timestamp_us: timestamp,
+                    stack,
+                    weight,
+                    weight_unit: "samples",
+                    attributes,
+                },
             );
             record["producer_id"] = json!(producer);
             if let Some(interval) = interval_us {
@@ -225,9 +233,7 @@ fn decode_process(
         }
     }
     for child in raw["processes"].as_array().into_iter().flatten() {
-        decode_process(
-            child, symbols, run_id, key, records, unresolved, images, lifetimes,
-        )?;
+        decode_process(child, symbols, run_id, key, records, unresolved, native)?;
     }
     Ok(())
 }
@@ -301,10 +307,10 @@ fn frame_info(
             if let Some(s) = string_at(thread, value) {
                 result[output] = json!(s);
             }
-        } else if let Some(n) = value.as_u64() {
-            if output != "line" || n > 0 {
-                result[output] = json!(n);
-            }
+        } else if let Some(n) = value.as_u64()
+            && (output != "line" || n > 0)
+        {
+            result[output] = json!(n);
         }
     }
     let address = thread["frameTable"]["address"][frame].as_u64();
@@ -333,45 +339,42 @@ fn frame_info(
                 return Ok(vec![result]);
             }
         }
-        if let (Some(sidecar), Some(address)) = (sidecar, address) {
-            if let Some(data) = sidecar["data"]
+        if let (Some(sidecar), Some(address)) = (sidecar, address)
+            && let Some(data) = sidecar["data"]
                 .as_array()
                 .and_then(|a| a.iter().find(|s| same_library(lib, s)))
+            && let Some(pair) = data["known_addresses"]
+                .as_array()
+                .and_then(|a| a.iter().find(|p| p[0].as_u64() == Some(address)))
+        {
+            let symbol = &data["symbol_table"]
+                [pair[1].as_u64().context("invalid samply symbol index")? as usize];
+            let strings = &sidecar["string_table"];
+            if let Some(name) = symbol["symbol"]
+                .as_u64()
+                .and_then(|i| strings[i as usize].as_str())
             {
-                if let Some(pair) = data["known_addresses"]
-                    .as_array()
-                    .and_then(|a| a.iter().find(|p| p[0].as_u64() == Some(address)))
-                {
-                    let symbol = &data["symbol_table"]
-                        [pair[1].as_u64().context("invalid samply symbol index")? as usize];
-                    let strings = &sidecar["string_table"];
-                    if let Some(name) = symbol["symbol"]
-                        .as_u64()
-                        .and_then(|i| strings[i as usize].as_str())
-                    {
-                        result["function"] = json!(name);
-                    }
-                    if let Some(frames) = symbol["frames"].as_array() {
-                        let mut expanded = Vec::new();
-                        for inline in frames.iter().rev() {
-                            let mut item = result.clone();
-                            for (output, input) in [("function", "function"), ("file", "file")] {
-                                if let Some(s) = inline[input]
-                                    .as_u64()
-                                    .and_then(|i| strings[i as usize].as_str())
-                                {
-                                    item[output] = json!(s);
-                                }
-                            }
-                            if let Some(line) = inline["line"].as_u64().filter(|n| *n > 0) {
-                                item["line"] = json!(line);
-                            }
-                            expanded.push(item);
-                        }
-                        if !expanded.is_empty() {
-                            return Ok(expanded);
+                result["function"] = json!(name);
+            }
+            if let Some(frames) = symbol["frames"].as_array() {
+                let mut expanded = Vec::new();
+                for inline in frames.iter().rev() {
+                    let mut item = result.clone();
+                    for (output, input) in [("function", "function"), ("file", "file")] {
+                        if let Some(s) = inline[input]
+                            .as_u64()
+                            .and_then(|i| strings[i as usize].as_str())
+                        {
+                            item[output] = json!(s);
                         }
                     }
+                    if let Some(line) = inline["line"].as_u64().filter(|n| *n > 0) {
+                        item["line"] = json!(line);
+                    }
+                    expanded.push(item);
+                }
+                if !expanded.is_empty() {
+                    return Ok(expanded);
                 }
             }
         }
@@ -386,13 +389,13 @@ fn integer(value: &Value) -> Option<u64> {
 }
 
 fn same_library(lib: &Value, symbols: &Value) -> bool {
-    if let (Some(a), Some(b)) = (lib["codeId"].as_str(), symbols["code_id"].as_str()) {
-        if !a.is_empty() && !b.is_empty() {
-            // PE timestamp/image-size code IDs can collide across different builds.
-            // An available debug identity must agree as well.
-            return a.eq_ignore_ascii_case(b)
-                && same_debug_identifier(lib, symbols).unwrap_or(true);
-        }
+    if let (Some(a), Some(b)) = (lib["codeId"].as_str(), symbols["code_id"].as_str())
+        && !a.is_empty()
+        && !b.is_empty()
+    {
+        // PE timestamp/image-size code IDs can collide across different builds.
+        // An available debug identity must agree as well.
+        return a.eq_ignore_ascii_case(b) && same_debug_identifier(lib, symbols).unwrap_or(true);
     }
     same_debug_identifier(lib, symbols) == Some(true)
         && lib["debugName"].as_str() == symbols["debug_name"].as_str()

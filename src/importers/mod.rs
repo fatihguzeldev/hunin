@@ -9,6 +9,7 @@ mod pprof;
 mod python_cpu;
 mod v8;
 
+use crate::model::observations::StackSample;
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
@@ -255,18 +256,16 @@ fn sidecars(path: &Path, format: &str) -> Vec<PathBuf> {
     result
 }
 
-pub(crate) fn sample(
-    run_id: &str,
-    key: &str,
-    index: usize,
-    pid: u64,
-    tid: &str,
-    timestamp_us: u64,
-    stack: Vec<Value>,
-    weight: f64,
-    unit: &str,
-    attributes: Value,
-) -> Value {
+pub(crate) fn sample(run_id: &str, key: &str, index: usize, sample: StackSample<'_>) -> Value {
+    let StackSample {
+        pid,
+        tid,
+        timestamp_us,
+        stack,
+        weight,
+        weight_unit: unit,
+        attributes,
+    } = sample;
     json!({"schema_version":1,"kind":"sample","id":format!("profile:{key}:{index}"),
         "run_id":run_id,"producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":tid,
         "timestamp_us":timestamp_us,"basis":"sampled","stack":stack,"weight":weight,
@@ -311,19 +310,21 @@ fn decode_vmprof(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Ve
             run_id,
             key,
             index,
-            pid,
-            value["tid"].as_str().unwrap_or("unknown"),
-            value["timestamp_us"].as_u64().unwrap_or(0),
-            value["stack"]
-                .as_array()
-                .context("vmprof stack missing")?
-                .clone(),
-            1.0,
-            "samples",
-            json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
+            StackSample {
+                pid,
+                tid: value["tid"].as_str().unwrap_or("unknown"),
+                timestamp_us: value["timestamp_us"].as_u64().unwrap_or(0),
+                stack: value["stack"]
+                    .as_array()
+                    .context("vmprof stack missing")?
+                    .clone(),
+                weight: 1.0,
+                weight_unit: "samples",
+                attributes: json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
                 "estimated_timer_periods":value["estimated_timer_periods"],"source_format":"vmprof",
                 "sampling_basis":raw["sampling_basis"],"profile_os":raw["profile_os"],
                 "profile_metadata":raw["metadata"],"lost_time_seconds":raw["lost_time_seconds"]}),
+            },
         );
         record["interval_us"] = raw["interval_us"].clone();
         records.push(record);

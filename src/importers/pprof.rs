@@ -1,5 +1,5 @@
 //! The wire fields follow Google's canonical perftools.profiles profile.proto.
-use super::sample;
+use super::{StackSample, sample};
 use anyhow::{Context, Result, bail};
 use prost::Message;
 use serde_json::{Value, json};
@@ -233,13 +233,15 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
             run_id,
             key,
             records.len(),
-            0,
-            &tid,
-            (p.time_nanos.max(0) / 1000) as u64,
-            stack,
-            weight,
-            unit,
-            attributes,
+            StackSample {
+                pid: 0,
+                tid: &tid,
+                timestamp_us: (p.time_nanos.max(0) / 1000) as u64,
+                stack,
+                weight,
+                weight_unit: unit,
+                attributes,
+            },
         ));
     }
     Ok((records,vec!["pprof weights are aggregated over the profile interval; collection time does not establish individual sample times or an OS PID".into()]))
