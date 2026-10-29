@@ -5,7 +5,9 @@ from pathlib import Path, PureWindowsPath
 import unittest
 
 HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("windows_sessions", HERE / "verify_windows_sessions.py")
+spec = importlib.util.spec_from_file_location(
+    "windows_sessions", HERE / "verify_windows_sessions.py"
+)
 sessions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sessions)
 
@@ -14,7 +16,9 @@ class WindowsSessionEvidenceTests(unittest.TestCase):
     def setUp(self):
         # Actual EOF-first report from run40075860699/job120818930492. Its
         # cleanup succeeded without a process-watch stop_requested event.
-        self.after = json.loads((HERE / "fixtures" / "etw_eof_cleanup.json").read_text())
+        self.after = json.loads(
+            (HERE / "fixtures" / "etw_eof_cleanup.json").read_text()
+        )
         self.before = copy.deepcopy(self.after)
         self.before["state"] = "recording"
         self.before["events"] = self.before["events"][:3]
@@ -22,18 +26,25 @@ class WindowsSessionEvidenceTests(unittest.TestCase):
         self.profile = PureWindowsPath(self.before["owner"]["profile_output_path"])
 
     def check(self, active="0xffff", remaining="absent"):
-        sessions.verify_direct_cleanup(self.before, self.after, self.pid, self.profile, active, remaining)
+        sessions.verify_direct_cleanup(
+            self.before, self.after, self.pid, self.profile, active, remaining
+        )
 
     def test_captured_eof_first_cleanup_is_valid_without_a_watch_reason(self):
-        self.assertFalse(any(event["state"] == "stop_requested" for event in self.after["events"]))
+        self.assertFalse(
+            any(event["state"] == "stop_requested" for event in self.after["events"])
+        )
         self.check()
 
     def test_process_watch_cleanup_is_also_valid(self):
-        self.after["events"].insert(3, {
-            "state": "stop_requested",
-            "details": {"reason": "samply_client_exited"},
-            "observed_at_us": 1792828724800000,
-        })
+        self.after["events"].insert(
+            3,
+            {
+                "state": "stop_requested",
+                "details": {"reason": "samply_client_exited"},
+                "observed_at_us": 1792828724800000,
+            },
+        )
         self.check()
 
     def test_requires_live_recording_and_same_actual_kernel_handle(self):
@@ -42,7 +53,9 @@ class WindowsSessionEvidenceTests(unittest.TestCase):
             lambda report: report.update(sessions=[]),
             lambda report: report["owner"].update(wrapper_pid=123),
             lambda report: report["owner"].pop("wrapper_creation_100ns"),
-            lambda report: report["owner"].update(profile_output_path="another-run.json"),
+            lambda report: report["owner"].update(
+                profile_output_path="another-run.json"
+            ),
             lambda report: report.update(helper_pid=None),
             lambda report: report["sessions"][0].update(log_file="another-run.etl"),
         ]
@@ -60,7 +73,9 @@ class WindowsSessionEvidenceTests(unittest.TestCase):
 
     def test_final_report_cannot_substitute_another_owner_or_session(self):
         mutations = [
-            lambda report: report["owner"].update(wrapper_creation_100ns=134373023242232791),
+            lambda report: report["owner"].update(
+                wrapper_creation_100ns=134373023242232791
+            ),
             lambda report: report["owner"].update(wrapper_pid=123),
             lambda report: report.update(helper_pid=123),
             lambda report: report["sessions"][0].update(control_handle="0xfffe"),
@@ -103,15 +118,19 @@ class WindowsSessionEvidenceTests(unittest.TestCase):
                     self.check(remaining="0xffff")
 
     def test_stop_request_does_not_substitute_for_cleanup(self):
-        self.after["events"] = [{
-            "state": "stop_requested", "details": {"reason": "samply_client_exited"},
-        }]
+        self.after["events"] = [
+            {
+                "state": "stop_requested",
+                "details": {"reason": "samply_client_exited"},
+            }
+        ]
         with self.assertRaises(AssertionError):
             self.check()
 
     def test_success_for_one_session_cannot_hide_another_owned_session(self):
         additional = {
-            "name": "Hunin.User.8468", "control_handle": "0xfffe",
+            "name": "Hunin.User.8468",
+            "control_handle": "0xfffe",
             "log_file": str(self.profile.with_suffix(".user.etl")),
         }
         self.before["sessions"].append(copy.deepcopy(additional))
