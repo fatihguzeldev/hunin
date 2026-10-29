@@ -300,8 +300,7 @@ impl Engine {
             .err()
             .map(|error| format!("collector start evidence failed: {error:#}"));
         if let Some(diagnostic) = &collector_start_failure {
-            run.source["collection_start"] =
-                json!({"status":"failed","diagnostic":diagnostic});
+            run.source["collection_start"] = json!({"status":"failed","diagnostic":diagnostic});
             run.diagnostics.push(diagnostic.clone());
         }
         #[cfg(windows)]
