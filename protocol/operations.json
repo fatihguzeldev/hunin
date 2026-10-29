@@ -1794,11 +1794,23 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Covers scenario persistence/loading through actual blocking completion; scenarios.run then uses the independent recording Engine-family job admission."
       }
     }
   },
@@ -1845,7 +1857,11 @@
         "session_end": "MCP session EOF or service shutdown applies the existing cleanup policy for jobs owned by that service; disposing a read/view is separate."
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "capacity_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -1856,6 +1872,14 @@
         "default_maximum_in_flight": 4,
         "queue": "fail_fast",
         "reservation": "Preparation through terminal evidence, monitor and owner cleanup. Engine clones share the counter; separately constructed Engines and processes are independent. Constructor configuration may select another limit."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Covers scenario persistence/loading through actual blocking completion; scenarios.run then uses the independent recording Engine-family job admission."
       }
     }
   },
