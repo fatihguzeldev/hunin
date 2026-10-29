@@ -1,9 +1,19 @@
+use super::finalization::{CaptureProducer, ProducerCoverage};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 
-pub(super) fn validate(files: &[PathBuf], run_id: &str, required: bool) -> Result<()> {
+pub(super) fn validate(
+    files: &[PathBuf],
+    run_id: &str,
+    required: bool,
+) -> Result<ProducerCoverage> {
+    let mut coverage = ProducerCoverage::default();
     let reports = files
         .iter()
         .filter(|path| {
@@ -93,6 +103,7 @@ pub(super) fn validate(files: &[PathBuf], run_id: &str, required: bool) -> Resul
             "Deno worker finalization omitted registered workers"
         );
         let mut worker_ids = BTreeSet::new();
+        let mut registrations_by_worker = BTreeMap::new();
         for worker in workers {
             let registration = worker["registration_id"]
                 .as_str()
@@ -109,6 +120,8 @@ pub(super) fn validate(files: &[PathBuf], run_id: &str, required: bool) -> Resul
                 worker_ids.insert(id),
                 "duplicate Deno runtime worker identity"
             );
+            registrations_by_worker.insert(id, registration.to_owned());
+            coverage.expected.push(registration.to_owned());
         }
         for profile in profiles {
             let id = profile["worker_id"]
@@ -140,9 +153,19 @@ pub(super) fn validate(files: &[PathBuf], run_id: &str, required: bool) -> Resul
                 profile["sha256"].as_str() == Some(digest.as_str()),
                 "finalized Deno worker profile changed: {filename}"
             );
+            coverage.observed.push(CaptureProducer {
+                id: registrations_by_worker[&id].clone(),
+                process_id: pid,
+                runtime_id: id.to_string(),
+                profiles: vec![profile_path],
+            });
         }
     }
-    Ok(())
+    coverage.expected.sort();
+    coverage
+        .observed
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(coverage)
 }
 
 #[cfg(test)]

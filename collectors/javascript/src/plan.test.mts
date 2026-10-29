@@ -130,6 +130,10 @@ test('JavaScript runtime aliases and case preserve the selected Node executable'
       assert.deepEqual(capture.command, command, runtime);
       assert.equal(capture.runtime_version, process.version, runtime);
       assert.match(capture.env.NODE_OPTIONS, /--cpu-prof/, runtime);
+      assert.deepEqual(capture.output, {
+        kind: 'profiles',
+        format: 'v8-cpuprofile',
+      });
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -328,6 +332,10 @@ if (denoExecutable) {
       artifact_dir: artifacts,
       run_id: 'worker-lifecycle',
       runtime: 'deno',
+    });
+    assert.deepEqual(capture.output, {
+      kind: 'deno-workers',
+      producer_id: capture.env.HUNIN_DENO_WORKER_SESSION,
     });
     const result = spawnSync(capture.command[0], capture.command.slice(1), {
       cwd: directory,

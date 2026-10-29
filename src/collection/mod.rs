@@ -1,10 +1,11 @@
-pub use crate::importers::ImportedProfile;
 mod deno_workers;
+mod finalization;
 pub(crate) mod native_tool;
 pub(crate) mod probe;
 mod selection;
 mod settings;
 pub use selection::{CaptureAdapter, RuntimeRegistration, registered_runtimes, select_runtime};
+pub use finalization::{CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState, RawCaptureBundle, RawProfile, capture_artifacts};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,6 +39,8 @@ pub struct CapturePlan {
     /// Adapter-generated transient values, keyed by their stable semantic role.
     #[serde(default)]
     pub session_identity: BTreeMap<String, String>,
+    #[serde(default)]
+    pub output: CaptureOutput,
 }
 
 pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
@@ -57,31 +60,6 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
         CaptureAdapter::GoTrace => go_test(&canonical, true),
         CaptureAdapter::Native => native(&canonical),
     }
-}
-
-pub fn collect(request: &CaptureRequest) -> Result<Vec<ImportedProfile>> {
-    let mut files = Vec::new();
-    walk(&request.artifact_dir, &mut files)?;
-    files.sort();
-    deno_workers::validate(
-        &files,
-        &request.run_id,
-        request.runtime.eq_ignore_ascii_case("deno"),
-    )?;
-    let mut profiles = Vec::new();
-    for path in files {
-        let format = profile_format(&path);
-        if let Some(format) = format {
-            profiles.push(crate::importers::import(&path, format, &request.run_id)?);
-        }
-    }
-    if profiles.is_empty() {
-        bail!(
-            "collector produced no supported profile in {}; inspect target stderr and collection prerequisites",
-            request.artifact_dir.display()
-        );
-    }
-    Ok(profiles)
 }
 
 pub(crate) fn profile_format(path: &Path) -> Option<&'static str> {
@@ -134,7 +112,7 @@ fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
         request.artifact_dir.join("go-tool.json"),
         serde_json::to_vec(&serde_json::json!({"executable":request.command[0]}))?,
     )?;
-    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,session_identity:BTreeMap::new(),runtime_version:probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version")).ok().filter(|o|o.status.success()).map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
+    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:(if trace { "go-trace" } else { "pprof" }).into()},runtime_version:probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version")).ok().filter(|o|o.status.success()).map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
 }
 
 fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
@@ -179,7 +157,7 @@ fn python(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, session_identity:BTreeMap::new(), runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_owned()),
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:("vmprof").into()}, runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_owned()),
         diagnostics:vec!["vmprof captures Python threads in one process; child processes require separate collection".into(), "CPU-clock sample times are retained without an invented wall-clock mapping".into()] })
 }
 
@@ -207,7 +185,7 @@ fn python_cpu(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,session_identity:BTreeMap::new(),runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_string()),diagnostics:vec!["Python stacks are gated and weighted by measured OS thread CPU progress across bounded observation windows; weights are statistical attribution, not individual call durations. Delayed observations remain unattributed CPU evidence.".into(),"GIL scheduling, native-only threads and short-lived undiscovered threads limit CPU attribution coverage; raw counters, frame snapshots and timing uncertainty are retained.".into()]})
+    Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:("python-cpu-progress").into()},runtime_version:Some(String::from_utf8_lossy(&check.stdout).trim().to_string()),diagnostics:vec!["Python stacks are gated and weighted by measured OS thread CPU progress across bounded observation windows; weights are statistical attribution, not individual call durations. Delayed observations remain unattributed CPU evidence.".into(),"GIL scheduling, native-only threads and short-lived undiscovered threads limit CPU attribution coverage; raw counters, frame snapshots and timing uncertainty are retained.".into()]})
 }
 
 fn graal(request: &CaptureRequest) -> Result<CapturePlan> {
@@ -234,7 +212,7 @@ fn graal(request: &CaptureRequest) -> Result<CapturePlan> {
         "--".into(),
     ]);
     command.extend(target);
-    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, session_identity:BTreeMap::new(), runtime_version: probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("--version")).ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()),
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:None, session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:("graal-cpusampler").into()}, runtime_version: probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("--version")).ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()),
         diagnostics: vec!["GraalPy distribution must expose Truffle CPUSampler; native-image and JVM-hosted modes differ".into(), "CPU sampler call-tree weights are aggregated; no per-call duration is inferred".into()] })
 }
 
@@ -295,7 +273,7 @@ fn native(request: &CaptureRequest) -> Result<CapturePlan> {
     }
     command.push("--".into());
     command.extend(request.command.clone());
-    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:Some(collector_identity), session_identity:BTreeMap::new(), runtime_version, diagnostics:vec![
+    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:Some(collector_identity), session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:("firefox").into()}, runtime_version, diagnostics:vec![
         "Native symbols/source require debug information for the measured build".into(),
         "Target runtime version is separate from collector identity. Go reports build information from the launched executable when a Go inspection tool is available; generic native executables and subprocess toolchain versions remain unknown.".into(),
         "Linux perf permissions, Windows ETW elevation, and macOS signing restrictions are checked by samply at capture time".into(),

@@ -25,6 +25,10 @@ export interface CaptureRequest {
   env?: Record<string, string>;
 }
 
+export type CaptureOutput =
+  | { kind: 'profiles'; format: 'v8-cpuprofile' }
+  | { kind: 'deno-workers'; producer_id: string };
+
 export function plan(request: CaptureRequest) {
   const { command, cwd, artifact_dir, run_id } = request;
   if (
@@ -89,6 +93,7 @@ export function plan(request: CaptureRequest) {
     HUNIN_PROJECT_ROOT: project,
   };
   const session_identity: Record<string, string> = {};
+  let output: CaptureOutput = { kind: 'profiles', format: 'v8-cpuprofile' };
   const diagnostics = [];
   diagnostics.push(
     'JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.',
@@ -136,6 +141,7 @@ export function plan(request: CaptureRequest) {
           value.slice('--deny-sys='.length).split(',').includes('inspector')),
     );
     const producer = randomUUID();
+    output = { kind: 'deno-workers', producer_id: producer };
     session_identity['worker-session'] = producer;
     env.HUNIN_DENO_WORKER_SESSION = producer;
     writeFileSync(
@@ -178,9 +184,7 @@ export function plan(request: CaptureRequest) {
     command: launched,
     env,
     session_identity,
-    profiles: [
-      { path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' },
-    ],
+    output,
     diagnostics,
     runtime_version,
   };

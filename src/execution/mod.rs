@@ -245,6 +245,7 @@ impl Engine {
                 runtime_version: None,
                 collector_identity: None,
                 session_identity: Default::default(),
+                output: Default::default(),
             }
         } else {
             let planning = capture.clone();
@@ -261,7 +262,7 @@ impl Engine {
             Sha256::digest(serde_json::to_vec(&settings)?)
         ));
         run.source["collector_settings"] = settings;
-        run.diagnostics.extend(plan.diagnostics);
+        run.diagnostics.extend(plan.diagnostics.clone());
         run.source["runtime_version"] = json!(plan.runtime_version);
         self.store.save_run(&run)?;
         if *cancel.borrow() || self.store.document("cancellations", &run.id).is_ok() {
@@ -283,7 +284,7 @@ impl Engine {
         command
             .args(&plan.command[1..])
             .envs(&request.env)
-            .envs(plan.env)
+            .envs(&plan.env)
             .env("HUNIN_RUN_ID", &run.id)
             .env("HUNIN_RECORD_DIR", directory.join("sdk"))
             .current_dir(&run.cwd)
@@ -475,7 +476,16 @@ impl Engine {
                 .accept(&run.id, "process-resources-v1", &metrics)?;
         }
         if run.runtime != "none" {
-            match collection::collect(&capture) {
+            let profiles = plan.finalize(&capture).and_then(|bundle| {
+                run.source["collection_completion"] = serde_json::to_value(&bundle.completion)?;
+                bundle.completion.ensure_complete()?;
+                // Preserve the previous all-decode-before-publication behavior.
+                // Raw retention above also survives incomplete or invalid profiles.
+                bundle.profiles.iter().map(|profile| {
+                    crate::importers::import(&profile.path, &profile.format, &run.id)
+                }).collect::<Result<Vec<_>>>()
+            });
+            match profiles {
                 Ok(profiles) => {
                     for profile in profiles {
                         let publication =
@@ -530,33 +540,8 @@ impl Engine {
 }
 
 fn preserve_capture(store: &Store, run_id: &str, path: &std::path::Path) -> Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            preserve_capture(store, run_id, &entry.path())?;
-        } else if kind.is_file() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let format = collection::profile_format(&path).unwrap_or_else(|| {
-                if name.ends_with(".jsonl") {
-                    "hunin-jsonl"
-                } else if name.ends_with(".meta.json")
-                    || name.ends_with(".syms.json")
-                    || name == "go-tool.json"
-                {
-                    "profile-sidecar"
-                } else if name == "stdout.txt" {
-                    "stdout"
-                } else if name == "stderr.txt" {
-                    "stderr"
-                } else {
-                    "collector-artifact"
-                }
-            });
-            store.add_artifact(run_id, &path, format)?;
-        }
+    for artifact in collection::capture_artifacts(path)? {
+        store.add_artifact(run_id, &artifact.path, &artifact.format)?;
     }
     Ok(())
 }
