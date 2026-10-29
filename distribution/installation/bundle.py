@@ -9,7 +9,208 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import subprocess
 import tempfile
+import threading
+import time
+
+CONTRACT_FILES = {
+    "record": "protocol/record.schema.json",
+    "responses": "protocol/response.schema.json",
+    "operations": "protocol/operations.json",
+    "native_manifest": "collectors/native/manifest.json",
+}
+PROBE_OUTPUT_LIMIT = 64 * 1024
+
+
+def compiled_platform(target):
+    platforms = {
+        ("linux", "x86_64"): "linux-x64",
+        ("linux", "aarch64"): "linux-arm64",
+        ("macos", "x86_64"): "macos-x64",
+        ("macos", "aarch64"): "macos-arm64",
+        ("windows", "x86_64"): "windows-x64",
+    }
+    if not isinstance(target, dict):
+        raise ValueError("Invalid product compiled target")
+    platform_name = platforms.get((target.get("os"), target.get("arch")))
+    if platform_name is None:
+        raise ValueError("Unsupported product compiled target")
+    return platform_name
+
+
+def check_product(info, version, files, read, target=None, require_target=False):
+    """Validate declared executable contracts against already-hashed files."""
+    try:
+        if (
+            not isinstance(info, dict)
+            or type(info["schema_version"]) is not int
+            or info["schema_version"] != 1
+        ):
+            raise ValueError("Unsupported product descriptor schema")
+        app = info["app"]
+        if "target" in app:
+            if target is not None and compiled_platform(app["target"]) != target:
+                raise ValueError(
+                    "Product compiled target does not match package platform"
+                )
+        elif require_target:
+            raise ValueError(
+                "Product descriptor has no compiled target; rebuild the binary before packaging"
+            )
+        if (
+            app["name"] != "hunin"
+            or app["version"] != version
+            or not (
+                app["source_revision"] is None
+                or isinstance(app["source_revision"], str)
+            )
+        ):
+            raise ValueError("Product identity does not match package version")
+        maximum = info["storage"]["maximum_schema_version"]
+        if type(maximum) is not int or maximum < 0:
+            raise ValueError("Invalid product storage contract")
+        for name, path in CONTRACT_FILES.items():
+            contract = info["contracts"][name]
+            if contract["sha256"] != files[path]["sha256"]:
+                raise ValueError(
+                    f"Product contract hash mismatch: {path}. Rebuild the binary and its matching assets."
+                )
+            if name in ("record", "responses") and (
+                not isinstance(contract["id"], str)
+                or not contract["id"]
+                or contract["id"] != json.loads(read(path))["$id"]
+            ):
+                raise ValueError(f"Product contract schema identity mismatch: {path}")
+        native = json.loads(read(CONTRACT_FILES["native_manifest"]))
+        declared = info["contracts"]["native_manifest"]
+        extension = declared["extension"]
+        if (
+            type(extension["schema_version"]) is not int
+            or not isinstance(extension["flag"], str)
+            or declared["version"] != native["version"]
+            or json.dumps(extension, sort_keys=True)
+            != json.dumps(native["extension"], sort_keys=True)
+        ):
+            raise ValueError("Product native extension contract mismatch")
+    except (KeyError, TypeError, AttributeError, ValueError) as error:
+        raise ValueError(f"Invalid product contract descriptor: {error}") from error
+
+
+def _probe_output(command, work, environment, timeout=10):
+    """Drain both pipes under one byte budget and always reap our child."""
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(
+        command,
+        cwd=work,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    outputs = [bytearray(), bytearray()]
+    lock = threading.Lock()
+    exceeded = threading.Event()
+    total = 0
+
+    def drain(stream, output):
+        nonlocal total
+        try:
+            while chunk := stream.read(4096):
+                with lock:
+                    remaining = max(0, PROBE_OUTPUT_LIMIT - total)
+                    output.extend(chunk[:remaining])
+                    total += len(chunk)
+                    if total > PROBE_OUTPUT_LIMIT:
+                        exceeded.set()
+                if exceeded.is_set():
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    break
+        finally:
+            stream.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(stream, output), daemon=True)
+        for stream, output in zip((process.stdout, process.stderr), outputs)
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        for reader in readers:
+            reader.join(timeout=max(0, deadline - time.monotonic()))
+        if exceeded.is_set():
+            raise ValueError(
+                "Executable descriptor output exceeded the 64 KiB combined stdout/stderr byte limit"
+            )
+        if any(reader.is_alive() for reader in readers):
+            raise subprocess.TimeoutExpired(command, timeout)
+        return process.returncode, bytes(outputs[0]), bytes(outputs[1])
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(
+            f"Executable descriptor timed out after {timeout:g} seconds"
+        ) from error
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=1)
+        for reader in readers:
+            reader.join(timeout=1)
+
+
+def probe_binary(executable):
+    """Ask only the data-free descriptor command from an isolated directory."""
+    environment = dict(os.environ)
+    for key in ("HUNIN_DATA_DIR", "HUNIN_ASSETS_DIR", "HUNIN_UI_DIR", "HUNIN_SAMPLY"):
+        environment.pop(key, None)
+    try:
+        with tempfile.TemporaryDirectory(prefix="hunin-build-info-") as work:
+            status, stdout, stderr = _probe_output(
+                [str(executable.resolve()), "build-info"], work, environment
+            )
+        if status:
+            raise ValueError(
+                f"Executable descriptor command failed ({status}): {stderr[-2000:].decode('utf-8', errors='replace')}"
+            )
+        return json.loads(stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise ValueError(
+            f"Cannot read executable product descriptor; rebuild a matching Hunin binary. {error}"
+        ) from error
+
+
+def verify_executable(bundle, manifest):
+    if "product_build_info" not in manifest:
+        return "legacy_unknown"
+    executable = bundle / (
+        "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
+    )
+    actual = probe_binary(executable)
+    check_product(
+        actual,
+        manifest["version"],
+        manifest["files"],
+        lambda name: (bundle / name).read_bytes(),
+        target=manifest["platform"],
+    )
+    if json.dumps(actual, sort_keys=True) != json.dumps(
+        manifest["product_build_info"], sort_keys=True
+    ):
+        raise ValueError(
+            "Staged executable descriptor differs from the declared product descriptor"
+        )
+    return component_status(manifest)
+
+
+def component_status(manifest):
+    if "product_build_info" not in manifest:
+        return "legacy_unknown"
+    if "target" not in manifest["product_build_info"]["app"]:
+        return "legacy_unknown_target"
+    return "declared_contracts_verified"
 
 
 def host_platform():
@@ -80,6 +281,14 @@ def verify(bundle):
     executable = "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
     if executable not in manifest["files"] or "ui/index.html" not in manifest["files"]:
         raise ValueError("Package manifest is missing its executable or UI")
+    if "product_build_info" in manifest:
+        check_product(
+            manifest["product_build_info"],
+            manifest["version"],
+            manifest["files"],
+            lambda name: (bundle / name).read_bytes(),
+            target=manifest["platform"],
+        )
     return manifest
 
 
@@ -131,10 +340,11 @@ def activate(prefix, version, bin_dir):
     if manifest["version"] != version:
         raise ValueError("Installed directory does not match its declared version")
     executable = directory / "hunin"
+    compatibility = verify_executable(directory, manifest)
     _switch_link(executable, prefix, bin_dir)
     return {
         "executable": str(executable),
-        "component_compatibility": "legacy_unknown",
+        "component_compatibility": compatibility,
     }
 
 
@@ -168,6 +378,7 @@ def install(bundle, prefix, bin_dir=None):
         )
         if executable.name == "hunin":
             executable.chmod(0o755)
+        verify_executable(staged, staged_manifest)
         staged.rename(destination)
     executable = destination / executable.name
     if bin_dir:
@@ -176,7 +387,10 @@ def install(bundle, prefix, bin_dir=None):
 
 
 def main(bundle_root=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Version directories are immutable. Activation selects future invocations only; it does not stop running processes, open recording data, or reverse database migrations. Windows uses the printed versioned executable path.",
+    )
     parser.add_argument(
         "--prefix",
         type=Path,
@@ -214,6 +428,14 @@ def main(bundle_root=None):
                 print(
                     "Legacy installation: component compatibility is unknown; only manifest integrity and host identity were verified. The executable must accept its recording data schema."
                 )
+            elif selected["component_compatibility"] == "legacy_unknown_target":
+                print(
+                    "Legacy product descriptor: compiled target identity is unknown; component hashes and declared host were checked, not a target compatibility guarantee."
+                )
+            else:
+                print(
+                    "Declared component contract hashes verified; no recording data was opened."
+                )
         else:
             executable = install(
                 bundle_root or Path(__file__).resolve().parent,
@@ -223,6 +445,22 @@ def main(bundle_root=None):
             print(
                 f"Installed {executable}\nAdd {args.bin_dir or executable.parent} to your PATH, or invoke the executable directly. Version directories are immutable; choose another prefix for a different build of the same version."
             )
+            installed_manifest = json.loads(
+                (executable.parent / "manifest.json").read_text()
+            )
+            status = component_status(installed_manifest)
+            if status == "declared_contracts_verified":
+                print(
+                    "Declared component contract hashes verified; no recording data was opened."
+                )
+            elif status == "legacy_unknown_target":
+                print(
+                    "Legacy product descriptor: compiled target identity is unknown; no target compatibility guarantee is inferred."
+                )
+            else:
+                print(
+                    "Legacy installation: component compatibility is unknown; only manifest integrity and host identity were verified."
+                )
     except (OSError, ValueError) as error:
         parser.exit(1, f"Installation failed: {error}\n")
 

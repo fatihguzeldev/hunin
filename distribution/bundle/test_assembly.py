@@ -66,6 +66,39 @@ RUNTIME_FILES = (
 
 
 class PackageTests(unittest.TestCase):
+    def setUp(self):
+        # Assembly fixtures use non-executable bytes; only the descriptor probe
+        # is substituted. Its hashes still have to match every selected file.
+        for owner in (package, installer):
+            probe = patch.object(owner, "probe_binary", side_effect=self.product_info)
+            probe.start()
+            self.addCleanup(probe.stop)
+
+    def product_info(self, binary):
+        root = Path(binary).parent
+        paths = installer.CONTRACT_FILES
+        contracts = {
+            name: {"sha256": package.sha256((root / path).read_bytes())}
+            for name, path in paths.items()
+        }
+        for name in ("record", "responses"):
+            contracts[name]["id"] = json.loads((root / paths[name]).read_bytes())["$id"]
+        native = json.loads((root / paths["native_manifest"]).read_bytes())
+        contracts["native_manifest"].update(
+            {"version": native["version"], "extension": native["extension"]}
+        )
+        return {
+            "schema_version": 1,
+            "app": {
+                "name": "hunin",
+                "version": "0.1.0",
+                "source_revision": None,
+                "target": {"os": "linux", "arch": "x86_64"},
+            },
+            "contracts": contracts,
+            "storage": {"maximum_schema_version": 2},
+        }
+
     def test_existing_archive_or_checksum_is_not_overwritten(self):
         for reserved in ("archive", "checksum"):
             with (
@@ -186,6 +219,18 @@ class PackageTests(unittest.TestCase):
         )
         for name in ("main.js", "vendor.js", "lazy.js", "main.css", "font.woff2"):
             (ui / "assets" / name).write_text(name)
+        (root / "protocol/record.schema.json").write_text(
+            json.dumps({"$id": "https://fixture/record-v1"})
+        )
+        (root / "protocol/response.schema.json").write_text(
+            json.dumps({"$id": "https://fixture/response-v1"})
+        )
+        (root / "protocol/operations.json").write_text("[]")
+        (root / "sdk/javascript/package.json").write_text(
+            json.dumps({"version": "9.1.0"})
+        )
+        (root / "sdk/python/pyproject.toml").write_text('[project]\nversion="0.2.0"\n')
+        (root / "sdk/rust/Cargo.toml").write_text('[package]\nversion="0.3.0"\n')
         binary = root / "hunin"
         binary.write_bytes(b"test-binary")
         return binary
@@ -201,6 +246,11 @@ class PackageTests(unittest.TestCase):
                 bundle.extractall(root / "extracted", filter="data")
             extracted = next((root / "extracted").iterdir())
             manifest = installer.verify(extracted)
+            self.assertIsNone(manifest["product_build_info"]["app"]["source_revision"])
+            self.assertEqual(
+                manifest["sdk_versions"]["javascript"]["declared_version"], "9.1.0"
+            )
+            self.assertIsNone(manifest["sdk_versions"]["go"]["declared_version"])
             self.assertIn("collectors/python/cpu.py", manifest["files"])
             for name in RUNTIME_FILES:
                 self.assertIn(name, manifest["files"])
@@ -329,3 +379,29 @@ class PackageTests(unittest.TestCase):
                     del changed["collectors/native/bin/samply"]
                 with self.assertRaises(ValueError):
                     package.verify_native_collector(changed, target)
+
+    def test_binary_compiled_contract_mismatch_fails_before_creating_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            stale = self.product_info(binary)
+            stale["contracts"]["operations"]["sha256"] = "0" * 64
+            with patch.object(package, "probe_binary", return_value=stale):
+                with self.assertRaisesRegex(ValueError, "contract hash mismatch"):
+                    package.assemble(root, binary, root / "output", "linux-x64")
+            self.assertFalse((root / "output").exists())
+
+    def test_binary_compiled_target_must_match_the_package_label(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            wrong = self.product_info(binary)
+            wrong["app"]["target"] = {"os": "macos", "arch": "aarch64"}
+            with patch.object(package, "probe_binary", return_value=wrong):
+                with self.assertRaisesRegex(ValueError, "compiled target"):
+                    package.assemble(root, binary, root / "output", "linux-x64")
+            del wrong["app"]["target"]
+            with patch.object(package, "probe_binary", return_value=wrong):
+                with self.assertRaisesRegex(ValueError, "no compiled target"):
+                    package.assemble(root, binary, root / "output", "linux-x64")
+            self.assertFalse((root / "output").exists())

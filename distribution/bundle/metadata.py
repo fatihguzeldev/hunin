@@ -1,8 +1,11 @@
 """Record measured host and explicit build provenance without inventing compatibility."""
 
 import os
+import hashlib
+import json
 import platform
 import subprocess
+import tomllib
 
 
 def command_output(command):
@@ -13,7 +16,37 @@ def command_output(command):
         return None
 
 
-def build_metadata(root, rust_toolchain=None, rust_target=None):
+def sdk_versions(files):
+    """Report package identities without requiring SDK/app version lockstep."""
+    paths = {
+        "javascript": "sdk/javascript/package.json",
+        "python": "sdk/python/pyproject.toml",
+        "rust": "sdk/rust/Cargo.toml",
+        "go": "sdk/go/go.mod",
+        "c": "sdk/c/CMakeLists.txt",
+        "cpp": "sdk/cpp/include/hunin.hpp",
+    }
+    versions = {}
+    for name, path in paths.items():
+        data = files[path]
+        if name == "javascript":
+            value = json.loads(data).get("version")
+        elif name in ("python", "rust"):
+            document = tomllib.loads(data.decode())
+            value = document.get("project" if name == "python" else "package", {}).get(
+                "version"
+            )
+        else:
+            value = None
+        versions[name] = {
+            "declared_version": value if isinstance(value, str) else None,
+            "metadata_file": path,
+            "metadata_sha256": hashlib.sha256(data).hexdigest(),
+        }
+    return versions
+
+
+def build_metadata(root, rust_toolchain=None, rust_target=None, product_info=None):
     distribution = {}
     if platform.system() == "Linux":
         try:
@@ -53,8 +86,13 @@ def build_metadata(root, rust_toolchain=None, rust_target=None):
             },
         },
         "build_provenance": {
-            "source_revision": revision or "unknown",
-            "source_dirty": changes != "" if changes is not None else "unknown",
+            "packaging_checkout_revision": revision or "unknown",
+            "packaging_checkout_dirty": changes != ""
+            if changes is not None
+            else "unknown",
+            "binary_source_revision": product_info["app"]["source_revision"]
+            if product_info
+            else None,
             "github_sha": os.environ.get("GITHUB_SHA") or "unknown",
             "workflow_run_url": run_url,
             "rust": {
@@ -66,6 +104,7 @@ def build_metadata(root, rust_toolchain=None, rust_target=None):
         },
         "compatibility": {
             "minimum_os": "not_established",
+            "sdk_versions": "Independent package versions; shared record contracts and selected conformance controls establish compatibility, not matching package version numbers.",
             "validation": "Consult workflow evidence; packaging alone does not establish collector support.",
         },
     }

@@ -47,8 +47,11 @@ class BuildMetadataTests(unittest.TestCase):
             metadata["built_on"]["libc"], {"name": "glibc", "version": "2.39"}
         )
         self.assertEqual(metadata["built_on"]["distribution"], "Ubuntu 24.04")
-        self.assertEqual(metadata["build_provenance"]["source_revision"], "abc123")
-        self.assertTrue(metadata["build_provenance"]["source_dirty"])
+        self.assertEqual(
+            metadata["build_provenance"]["packaging_checkout_revision"], "abc123"
+        )
+        self.assertTrue(metadata["build_provenance"]["packaging_checkout_dirty"])
+        self.assertIsNone(metadata["build_provenance"]["binary_source_revision"])
         self.assertEqual(metadata["build_provenance"]["github_sha"], "def456")
         self.assertEqual(
             metadata["build_provenance"]["workflow_run_url"],
@@ -67,8 +70,9 @@ class BuildMetadataTests(unittest.TestCase):
         ):
             metadata = package.build_metadata(Path("/unversioned"))
         provenance = metadata["build_provenance"]
-        self.assertEqual(provenance["source_revision"], "unknown")
-        self.assertEqual(provenance["source_dirty"], "unknown")
+        self.assertEqual(provenance["packaging_checkout_revision"], "unknown")
+        self.assertEqual(provenance["packaging_checkout_dirty"], "unknown")
+        self.assertIsNone(provenance["binary_source_revision"])
         self.assertEqual(provenance["github_sha"], "unknown")
         self.assertEqual(provenance["workflow_run_url"], "unknown")
         self.assertEqual(set(provenance["rust"].values()), {"unknown"})

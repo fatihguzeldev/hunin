@@ -12,7 +12,12 @@ import tomllib
 import zipfile
 
 from . import inventory
-from .metadata import build_metadata
+from .metadata import build_metadata, sdk_versions
+
+if __package__.startswith("distribution."):
+    from ..installation.bundle import check_product, probe_binary
+else:
+    from installation.bundle import check_product, probe_binary
 
 PLATFORMS = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64")
 RUST_TARGETS = {
@@ -92,15 +97,27 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
                 f"Preserving existing bundle output: {path}. Choose a fresh --output directory."
             )
     files = contents(root, binary, target)
+    product_info = probe_binary(binary)
+    file_metadata = {
+        name: {"sha256": sha256(data), "size": len(data)}
+        for name, data in sorted(files.items())
+    }
+    check_product(
+        product_info,
+        version,
+        file_metadata,
+        files.__getitem__,
+        target=target,
+        require_target=True,
+    )
     manifest = {
         "schema_version": 1,
         "version": version,
         "platform": target,
-        **build_metadata(root, rust_toolchain, rust_target),
-        "files": {
-            name: {"sha256": sha256(data), "size": len(data)}
-            for name, data in sorted(files.items())
-        },
+        **build_metadata(root, rust_toolchain, rust_target, product_info),
+        "product_build_info": product_info,
+        "sdk_versions": sdk_versions(files),
+        "files": file_metadata,
     }
     files["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
     output.mkdir(parents=True, exist_ok=True)
