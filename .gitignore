@@ -6,6 +6,7 @@
 /sdk/javascript/*.mjs
 /sdk/javascript/*.d.mts
 /sdk/javascript/test/
+/sdk/conformance/javascript.mjs
 /target/
 /ui/node_modules/
 /ui/dist/

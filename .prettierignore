@@ -22,6 +22,8 @@
 !/sdk/javascript/src/**/*.mts
 !/sdk/conformance/
 !/sdk/conformance/*.mjs
+!/sdk/conformance/*.mts
+!/sdk/conformance/*.json
 !/collectors/
 !/collectors/javascript/
 !/collectors/javascript/*.mjs
@@ -37,4 +39,6 @@
 /collectors/javascript/*.mjs
 /sdk/javascript/*.mjs
 /sdk/javascript/*.d.mts
+/sdk/javascript/test/**
+/sdk/conformance/javascript.mjs
 **/package-lock.json

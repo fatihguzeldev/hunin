@@ -8,6 +8,13 @@
   "scripts": {
     "lint:js": "eslint .",
     "format:js": "prettier --check .",
+    "build:collectors": "tsc -p collectors/javascript/tsconfig.json",
+    "check:collectors": "tsc -p collectors/javascript/tsconfig.json --noEmit",
+    "build:sdk": "npm --prefix sdk/javascript run build && tsc -p sdk/conformance/tsconfig.json",
+    "check:sdk": "tsc -p sdk/javascript/tsconfig.json --emitDeclarationOnly && tsc -p sdk/conformance/tsconfig.json --noEmit",
+    "build:runtime": "npm run build:collectors && npm run build:sdk",
+    "check:runtime": "npm run check:tooling && npm run check:collectors && npm run check:sdk",
+    "check:tooling": "tsc -p tsconfig.tooling.json",
     "typecheck:ui": "npm --prefix ui run check"
   },
   "devDependencies": {

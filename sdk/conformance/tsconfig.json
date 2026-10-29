@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmitOnError": true,
+    "rootDir": ".",
+    "outDir": ".",
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": ["javascript.mts"],
+  "exclude": []
+}

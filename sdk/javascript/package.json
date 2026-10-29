@@ -2,9 +2,24 @@
   "name": "@hunin/sdk",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": { "types": "./index.d.ts", "import": "./index.mjs" } },
-  "files": ["index.mjs", "index.d.ts"],
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test sdk.test.mjs" },
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "import": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.mts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test sdk.test.mjs"
+  },
   "license": "MIT"
 }
