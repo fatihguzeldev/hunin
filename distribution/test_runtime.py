@@ -8,7 +8,9 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-spec = importlib.util.spec_from_file_location("fetch_runtime", Path(__file__).with_name("fetch_runtime.py"))
+spec = importlib.util.spec_from_file_location(
+    "fetch_runtime", Path(__file__).with_name("fetch_runtime.py")
+)
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 
@@ -16,26 +18,44 @@ spec.loader.exec_module(runtime)
 class RuntimeTests(unittest.TestCase):
     def test_manifest_has_explicit_host_coverage_and_unavailable_reason(self):
         for name, release in runtime.MANIFEST["runtimes"].items():
-            self.assertEqual(set(release["platforms"]) | set(release.get("unavailable", {})), set(runtime.PLATFORMS))
+            self.assertEqual(
+                set(release["platforms"]) | set(release.get("unavailable", {})),
+                set(runtime.PLATFORMS),
+            )
             for target, selected in release["platforms"].items():
                 self.assertRegex(selected["sha256"], r"^[a-f0-9]{64}$")
                 self.assertTrue(selected["url"].startswith("https://"))
         with self.assertRaisesRegex(ValueError, "macOS x64"):
             runtime.asset("graalpy", "macos-x64")
 
-    def test_verified_install_reuses_pristine_tree_and_preserves_modified_directory(self):
+    def test_verified_install_reuses_pristine_tree_and_preserves_modified_directory(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             archive = root / "runtime.zip"
             with zipfile.ZipFile(archive, "w") as bundle:
                 bundle.writestr("bin/example", "binary")
                 bundle.writestr("lib/runtime", "dependency")
-            selected = {"url": "https://example.invalid/runtime.zip", "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "executable": "example"}
-            manifest = {"runtimes": {"test": {"version": "1", "platforms": {"linux-x64": selected}}}}
+            selected = {
+                "url": "https://example.invalid/runtime.zip",
+                "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "executable": "example",
+            }
+            manifest = {
+                "runtimes": {
+                    "test": {"version": "1", "platforms": {"linux-x64": selected}}
+                }
+            }
             with patch.object(runtime, "MANIFEST", manifest):
-                binary = runtime.install("test", "linux-x64", root / "installed", archive)
+                binary = runtime.install(
+                    "test", "linux-x64", root / "installed", archive
+                )
                 self.assertEqual(binary.read_text(), "binary")
-                self.assertEqual(runtime.install("test", "linux-x64", root / "installed", archive), binary)
+                self.assertEqual(
+                    runtime.install("test", "linux-x64", root / "installed", archive),
+                    binary,
+                )
                 (root / "installed/lib/runtime").write_text("modified")
                 with self.assertRaisesRegex(ValueError, "Preserving existing"):
                     runtime.install("test", "linux-x64", root / "installed", archive)
@@ -44,7 +64,9 @@ class RuntimeTests(unittest.TestCase):
                     runtime.install("test", "linux-x64", root / "second", archive)
                 self.assertFalse((root / "second").exists())
 
-    def test_archive_rejects_traversal_and_external_links_but_retains_internal_links(self):
+    def test_archive_rejects_traversal_and_external_links_but_retains_internal_links(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             destination = root / "output"
