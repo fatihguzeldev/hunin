@@ -10,7 +10,10 @@ pub use finalization::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
     RawCaptureBundle, RawProfile, capture_artifacts,
 };
-pub use selection::{CaptureAdapter, RuntimeRegistration, registered_runtimes, select_runtime};
+pub use selection::{
+    CaptureAdapter, CaptureModeRegistration, LaunchExecutableKind, RuntimeRegistration,
+    capture_modes, registered_runtimes, select_runtime,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,

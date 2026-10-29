@@ -19,6 +19,63 @@ pub struct RuntimeRegistration {
     pub adapter: CaptureAdapter,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchExecutableKind {
+    RuntimeInterpreter,
+    GoTool,
+    TargetExecutable,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CaptureModeRegistration {
+    pub mode: &'static str,
+    pub launch: &'static RuntimeRegistration,
+    pub command_requirement: &'static str,
+    pub executable_kind: LaunchExecutableKind,
+}
+
+impl RuntimeRegistration {
+    fn capability_family(&self) -> &'static str {
+        match self.adapter {
+            CaptureAdapter::GoTestCpu | CaptureAdapter::GoTrace => "go",
+            _ => self.id,
+        }
+    }
+
+    fn launch_mode(&'static self) -> CaptureModeRegistration {
+        let (mode, command_requirement, executable_kind) = match self.adapter {
+            CaptureAdapter::GoTestCpu | CaptureAdapter::GoTrace => (
+                self.id,
+                "Use go test for one package, followed by test flags.",
+                LaunchExecutableKind::GoTool,
+            ),
+            CaptureAdapter::Native => (
+                "automatic-cpu",
+                "Pass the built target executable and its arguments.",
+                LaunchExecutableKind::TargetExecutable,
+            ),
+            CaptureAdapter::JavaScript => (
+                "automatic-cpu",
+                "Pass the selected runtime executable and its script, eval or test arguments.",
+                LaunchExecutableKind::RuntimeInterpreter,
+            ),
+            CaptureAdapter::PythonVmprof
+            | CaptureAdapter::PythonCpuProgress
+            | CaptureAdapter::GraalCpuSampler => (
+                "automatic-cpu",
+                "Pass the selected Python interpreter with a script, -m module or -c code.",
+                LaunchExecutableKind::RuntimeInterpreter,
+            ),
+        };
+        CaptureModeRegistration {
+            mode,
+            launch: self,
+            command_requirement,
+            executable_kind,
+        }
+    }
+}
+
 const PYTHON_ADAPTER: CaptureAdapter = if cfg!(windows) {
     CaptureAdapter::PythonCpuProgress
 } else {
@@ -123,6 +180,18 @@ pub fn select_runtime(name: &str) -> Result<&'static RuntimeRegistration> {
     )
 }
 
+/// Launch choices share the actual route registrations; prerequisite discovery is separate.
+pub fn capture_modes(runtime: &str) -> Result<Vec<CaptureModeRegistration>> {
+    let family = select_runtime(runtime)?.capability_family();
+    let mut modes = RUNTIMES
+        .iter()
+        .filter(|registration| registration.capability_family() == family)
+        .map(RuntimeRegistration::launch_mode)
+        .collect::<Vec<_>>();
+    modes.sort_by_key(|mode| mode.mode != "automatic-cpu");
+    Ok(modes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +249,36 @@ mod tests {
             select_runtime("none").is_err(),
             "disabled profiling is an execution policy"
         );
+    }
+
+    #[test]
+    fn capability_launch_modes_resolve_through_the_same_canonical_routes() {
+        let modes = capture_modes("GO").unwrap();
+        assert_eq!(
+            modes
+                .iter()
+                .map(|mode| (mode.mode, mode.launch.id))
+                .collect::<Vec<_>>(),
+            [
+                ("automatic-cpu", "go"),
+                ("go-test", "go-test"),
+                ("go-trace", "go-trace"),
+            ]
+        );
+        assert_eq!(
+            modes[0].executable_kind,
+            LaunchExecutableKind::TargetExecutable
+        );
+        assert_eq!(modes[1].executable_kind, LaunchExecutableKind::GoTool);
+        for registration in registered_runtimes() {
+            for mode in capture_modes(registration.id).unwrap() {
+                assert!(std::ptr::eq(
+                    mode.launch,
+                    select_runtime(mode.launch.id).unwrap()
+                ));
+            }
+        }
+        assert_eq!(capture_modes("TypeScript").unwrap()[0].launch.id, "node");
+        assert!(capture_modes("not-a-runtime").is_err());
     }
 }

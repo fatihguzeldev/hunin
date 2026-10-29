@@ -1,4 +1,4 @@
-use crate::collection::{probe, tool};
+use crate::collection::{CaptureAdapter, LaunchExecutableKind, capture_modes, probe, tool};
 use serde_json::{Value, json};
 use std::{env, process::Command, sync::Arc, time::Duration};
 
@@ -79,7 +79,6 @@ fn version_pair(text: &str) -> Option<(u32, u32)> {
 fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
     let found = names.iter().find_map(|name| tool(name));
     let mut diagnostics = Vec::new();
-    let mut modes = Vec::new();
     let mut version = None;
     let mut probe_status = "missing";
     if let Some(executable) = found.as_ref() {
@@ -215,10 +214,6 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                     _ => "target_permission_unverified",
                 };
             }
-            if runtime == "go" {
-                modes.push(json!({"mode":"go-test","mechanism":"Go runtime pprof","availability":if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"},"basis":"aggregated sampled CPU time; one test package per recording","recording_verified":false}));
-                modes.push(json!({"mode":"go-trace","mechanism":"Go execution tracer","availability":if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"},"basis":"runtime scheduler/GC events; not a CPU stack profile","recording_verified":false}));
-            }
             diagnostics.push("Basic permissions and prerequisites do not establish that an actual sampling session can attach to the selected target.".into());
         }
     }
@@ -229,7 +224,26 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
     if availability == "prerequisites_ready" {
         capabilities.push("cpu-sampling-prerequisites");
     }
-    modes.insert(0,json!({"mode":"automatic-cpu","mechanism":mechanism,"availability":availability,"basis":basis,"recording_verified":false}));
+    let modes = match capture_modes(runtime) {
+        Ok(registrations) => registrations.iter().map(|mode| {
+            let (mode_mechanism, mode_availability, mode_basis) = match mode.launch.adapter {
+                CaptureAdapter::GoTestCpu => ("Go runtime pprof", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "aggregated sampled CPU time; one test package per recording"),
+                CaptureAdapter::GoTrace => ("Go execution tracer", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "runtime scheduler/GC events; not a CPU stack profile"),
+                _ => (mechanism, availability, basis),
+            };
+            let default_executable = match mode.executable_kind {
+                LaunchExecutableKind::RuntimeInterpreter | LaunchExecutableKind::GoTool => found.as_ref(),
+                LaunchExecutableKind::TargetExecutable => None,
+            };
+            json!({"mode":mode.mode,"launch_runtime":mode.launch.id,"command_requirement":mode.command_requirement,
+                "default_executable":default_executable,"selectable":true,
+                "mechanism":mode_mechanism,"availability":mode_availability,"basis":mode_basis,"recording_verified":false})
+        }).collect::<Vec<_>>(),
+        Err(error) => {
+            diagnostics.push(format!("Launch selection unavailable: {error:#}"));
+            Vec::new()
+        }
+    };
     if found.is_none() {
         diagnostics.push(format!(
             "No {} executable found; install it on PATH or select an explicit executable",
@@ -263,4 +277,40 @@ pub fn discover() -> Value {
         .map(|(runtime,worker)|worker.join().unwrap_or_else(|_|json!({"runtime":runtime,"available":false,"probe_status":"internal_probe_failure","diagnostics":["Capability worker failed; availability is unknown"]})))
         .collect::<Vec<_>>();
     json!({"host":{"os":env::consts::OS,"arch":env::consts::ARCH},"native_sampling_permission":*permission,"runtimes":runtimes,"schema_version":1,"probe_limits":{"timeout_seconds_per_command":2,"output_bytes_per_stream":32768},"verification":"Discovery never labels executable presence as a verified CPU recording."})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_default_probe_keeps_an_explicit_runtime_command_selectable() {
+        let capability = runtime(
+            "node",
+            &["hunin-unavailable-probe-for-capability-contract"],
+            &json!({"state":"unknown"}),
+        );
+        assert_eq!(capability["available"], false);
+        assert_eq!(capability["modes"][0]["launch_runtime"], "node");
+        assert_eq!(capability["modes"][0]["selectable"], true);
+        assert!(capability["modes"][0]["default_executable"].is_null());
+        assert_eq!(capability["modes"][0]["recording_verified"], false);
+    }
+
+    #[test]
+    fn native_mode_requires_an_explicit_target_executable() {
+        let capability = runtime(
+            "native",
+            &["hunin-unavailable-probe-for-capability-contract"],
+            &json!({"state":"unknown"}),
+        );
+        assert_eq!(capability["modes"][0]["launch_runtime"], "native");
+        assert!(capability["modes"][0]["default_executable"].is_null());
+        assert!(
+            capability["modes"][0]["command_requirement"]
+                .as_str()
+                .unwrap()
+                .contains("target executable")
+        );
+    }
 }
