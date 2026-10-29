@@ -1,7 +1,8 @@
 use hunin::{
     model::runs::Run,
     operations::{Operations, catalog},
-    storage::Store,
+    query::QueryLimits,
+    storage::{ReadLimits, Store},
 };
 use serde_json::{Value, json};
 
@@ -14,6 +15,61 @@ fn validate_result(name: &str, result: &Value) {
         .unwrap()
         .validate(result)
         .unwrap_or_else(|error| panic!("{name} response violates its output contract: {error}"));
+}
+
+#[test]
+fn advertised_query_budgets_match_the_public_enforcement_defaults() {
+    let aggregate = QueryLimits::default();
+    let metadata = ReadLimits::default();
+    for (name, aggregation) in [
+        ("runs.get", true),
+        ("profiles.hotspots", true),
+        ("profiles.tree", true),
+        ("timeline.query", true),
+        ("resources.query", true),
+        ("comparisons.create", true),
+        ("contexts.query", false),
+        ("evidence.get", false),
+    ] {
+        let definition = catalog()
+            .iter()
+            .find(|operation| operation["name"] == name)
+            .unwrap();
+        let policy = &definition["_meta"]["hunin/query-budget"];
+        let read = if aggregation {
+            &aggregate.read
+        } else {
+            &metadata
+        };
+        for (field, expected) in [
+            ("maximum_rows", read.maximum_rows as u64),
+            ("maximum_selected_bytes", read.maximum_bytes as u64),
+            ("maximum_record_bytes", read.maximum_record_bytes as u64),
+            (
+                "maximum_selected_result_sets",
+                read.maximum_result_sets as u64,
+            ),
+            ("maximum_sqlite_steps_approx", read.maximum_sqlite_steps),
+        ] {
+            assert_eq!(policy[field].as_u64(), Some(expected), "{name}: {field}");
+        }
+        for (field, expected) in [
+            ("maximum_frame_visits", aggregate.maximum_frame_visits),
+            (
+                "maximum_aggregate_entries",
+                aggregate.maximum_aggregate_entries,
+            ),
+        ] {
+            if aggregation {
+                assert_eq!(policy[field].as_u64(), Some(expected), "{name}: {field}");
+            } else {
+                assert!(
+                    policy.get(field).is_none(),
+                    "{name} advertises unused {field}"
+                );
+            }
+        }
+    }
 }
 
 fn validate_transport(name: &str, result: &Value) {
