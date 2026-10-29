@@ -185,22 +185,62 @@ async fn cancellation_and_timeout_stop_owned_analyzers_without_accepting_partial
             .as_str()
             .unwrap(),
     );
-    for _ in 0..200 {
-        if fs::read_to_string(directory.join("stderr.txt"))
-            .unwrap_or_default()
-            .contains("ready")
-        {
-            break;
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if fs::read_to_string(directory.join("stderr.txt"))
+                .unwrap_or_default()
+                .contains("ready")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    })
+    .await
+    .expect("cancellation control must observe the analyzer running");
     fixture.engine.cancel(id).await.unwrap();
     let cancelled = fixture.wait(&started).await;
     assert_eq!(cancelled["status"], "cancelled", "{cancelled}");
-    let timed = fixture.start(&analysis, 0.1).await;
+    // This exercises an accepted attempt. Preparation is part of the budget,
+    // so 100ms can legitimately expire before admission on a loaded host.
+    let timed = fixture.start(&analysis, 5.0).await;
     let timed = fixture.wait(&timed).await;
     assert_eq!(timed["status"], "timed_out", "{timed}");
     assert_eq!(fixture.store.records("recording").unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn an_expired_preparation_budget_cannot_admit_a_job_or_publish_rows() {
+    let fixture = Fixture::new();
+    let analysis = fixture.register(RELATION, json!({}));
+    let artifacts = serde_json::to_value(fixture.store.artifacts("recording").unwrap()).unwrap();
+    // A positive input that rounds to a zero-duration timer expires at the
+    // first preparation checkpoint, without relying on host scheduling speed.
+    let error = fixture
+        .engine
+        .run(&json!({
+            "run_id":"recording",
+            "analysis_id":analysis["id"],
+            "timeout_seconds":f64::MIN_POSITIVE,
+        }))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("analysis timed out"),
+        "{error:#}"
+    );
+    assert!(
+        fixture
+            .store
+            .documents("analysis-results")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fixture.store.records("recording").unwrap().len(), 2);
+    assert_eq!(
+        serde_json::to_value(fixture.store.artifacts("recording").unwrap()).unwrap(),
+        artifacts
+    );
 }
 #[tokio::test]
 async fn output_budget_rejects_overflow_and_preserves_bounded_raw_evidence() {
