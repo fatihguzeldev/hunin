@@ -1,5 +1,7 @@
 mod bun;
 mod deno;
+mod validation;
+pub(super) use validation::Reads as ValidationReads;
 
 use super::finalization::ProducerCoverage;
 use super::{CapturePlan, CaptureRequest};
@@ -20,6 +22,7 @@ pub(super) fn finalize_deno(
     files: &[PathBuf],
     request: &CaptureRequest,
     producer_id: &str,
+    reads: &mut ValidationReads,
 ) -> Result<ProducerCoverage> {
     let expected = format!("deno-workers-{producer_id}.jsonl");
     ensure!(
@@ -28,7 +31,7 @@ pub(super) fn finalize_deno(
             .is_some_and(|name| name == expected.as_str())),
         "planned Deno worker lifecycle report is missing: {expected}"
     );
-    deno::validate(files, &request.run_id, true)
+    deno::validate_with_reads(files, &request.run_id, true, reads)
 }
 
 pub(super) fn finalize_bun(
@@ -36,13 +39,15 @@ pub(super) fn finalize_bun(
     request: &CaptureRequest,
     session_id: &str,
     root_registration_id: &str,
+    reads: &mut ValidationReads,
 ) -> Result<ProducerCoverage> {
-    bun::validate(
+    bun::validate_with_reads(
         files,
         &request.run_id,
         &request.artifact_dir,
         session_id,
         root_registration_id,
+        reads,
     )
 }
 

@@ -1,15 +1,16 @@
 use super::super::finalization::{CaptureProducer, ProducerCoverage};
+use super::ValidationReads;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
-const MAX_REPORT_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+use std::fs;
 
 #[derive(Deserialize)]
 struct PlannedSession {
@@ -52,51 +53,31 @@ struct Worker {
     thread_id: u64,
 }
 
-fn read_report<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let mut file = fs::File::open(path)?;
-    ensure!(
-        file.metadata()?.len() <= MAX_REPORT_BYTES,
-        "Bun producer report exceeds the 64MiB validation limit"
-    );
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(MAX_REPORT_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_REPORT_BYTES,
-        "Bun producer report grew beyond the 64MiB validation limit"
-    );
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("invalid Bun producer report {}", path.display()))
+fn read_report<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    reads: &mut ValidationReads,
+) -> Result<T> {
+    let bytes = reads.metadata(path)?;
+    let result = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid Bun producer report {}", path.display()));
+    reads.check()?;
+    result
 }
 
-fn digest(path: &Path) -> Result<String> {
-    let mut file = fs::File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-pub(super) fn validate(
+pub(super) fn validate_with_reads(
     files: &[PathBuf],
     run_id: &str,
     directory: &Path,
     session_id: &str,
     root_registration_id: &str,
+    reads: &mut ValidationReads,
 ) -> Result<ProducerCoverage> {
     let planned_path = directory.join(format!("bun-session-{session_id}.json"));
     ensure!(
         files.contains(&planned_path),
         "planned Bun capture session is missing"
     );
-    let planned: PlannedSession = read_report(&planned_path)?;
+    let planned: PlannedSession = read_report(&planned_path, reads)?;
     ensure!(
         planned.schema_version == 1
             && planned.runtime == "bun"
@@ -116,7 +97,7 @@ pub(super) fn validate(
                 name.starts_with(&prefix) && name.ends_with(".json")
             })
     }) {
-        let producer: Producer = read_report(path)?;
+        let producer: Producer = read_report(path, reads)?;
         ensure!(
             producer.schema_version == 1
                 && producer.runtime == "bun"
@@ -187,6 +168,7 @@ pub(super) fn validate(
             producer.producer_id
         );
         for worker in &producer.workers {
+            reads.check()?;
             ensure!(
                 worker.thread_id != producer.tid,
                 "Bun producer cannot register its own thread as a child worker"
@@ -209,6 +191,7 @@ pub(super) fn validate(
         }
         let mut paths = Vec::new();
         for (index, segment) in producer.segments.iter().enumerate() {
+            reads.check()?;
             ensure!(
                 segment.sequence == index as u64 + 1,
                 "Bun producer CPU segment sequence has a gap"
@@ -232,7 +215,8 @@ pub(super) fn validate(
                 "duplicate finalized Bun CPU segment"
             );
             ensure!(
-                digest(&profile)? == segment.sha256 && digest(&clock)? == segment.clock_sha256,
+                reads.raw_digest(&profile)? == segment.sha256
+                    && reads.metadata_digest(&clock)? == segment.clock_sha256,
                 "finalized Bun CPU segment or clock metadata changed: {expected}"
             );
             paths.push(profile);
@@ -255,7 +239,26 @@ pub(super) fn validate(
             path.display()
         );
     }
+    reads.check()?;
     Ok(coverage)
+}
+
+#[cfg(test)]
+fn validate(
+    files: &[PathBuf],
+    run_id: &str,
+    directory: &Path,
+    session_id: &str,
+    root_registration_id: &str,
+) -> Result<ProducerCoverage> {
+    validate_with_reads(
+        files,
+        run_id,
+        directory,
+        session_id,
+        root_registration_id,
+        &mut ValidationReads::new(None),
+    )
 }
 
 #[cfg(test)]
@@ -325,6 +328,52 @@ mod tests {
                 "root"
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn validation_limits_reject_before_accepting_complete_reports_and_preserve_raw() {
+        let (directory, main, worker) = fixture();
+        let files = write(directory.path(), &main, Some(&worker));
+        let limits = super::super::validation::Limits {
+            profile_bytes: 10,
+            ..Default::default()
+        };
+        let mut reads = ValidationReads::with_limits(limits, None);
+        let error = validate_with_reads(
+            &files,
+            "recording",
+            directory.path(),
+            "session",
+            "root",
+            &mut reads,
+        )
+        .unwrap_err();
+        assert!(error.is::<crate::host::FileReadLimit>());
+        let limits = super::super::validation::Limits {
+            metadata_bytes: 1,
+            ..Default::default()
+        };
+        let mut reads = ValidationReads::with_limits(limits, None);
+        let error = validate_with_reads(
+            &files,
+            "recording",
+            directory.path(),
+            "session",
+            "root",
+            &mut reads,
+        )
+        .unwrap_err();
+        assert!(error.is::<crate::host::FileReadLimit>());
+        assert_eq!(
+            fs::read(directory.path().join("CPU.123.0.main.1.cpuprofile")).unwrap(),
+            b"raw profile"
+        );
+        assert!(
+            directory
+                .path()
+                .join("bun-producer-session-worker.json")
+                .is_file()
         );
     }
 

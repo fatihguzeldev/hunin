@@ -106,11 +106,21 @@ impl CapturePlan {
         request: &CaptureRequest,
         artifacts: Vec<CaptureArtifact>,
     ) -> Result<RawCaptureBundle> {
+        self.finalize_inventory_controlled(request, artifacts, None)
+    }
+
+    pub(crate) fn finalize_inventory_controlled(
+        &self,
+        request: &CaptureRequest,
+        artifacts: Vec<CaptureArtifact>,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<RawCaptureBundle> {
         let files = artifacts
             .iter()
             .map(|artifact| artifact.path.clone())
             .collect::<Vec<_>>();
         let mut diagnostics = Vec::new();
+        let mut reads = javascript::ValidationReads::new(deadline);
         let mut coverage = None;
         let (format, scope, limitations) = match &self.output {
             CaptureOutput::Unspecified => {
@@ -133,7 +143,7 @@ impl CapturePlan {
                 ])
             }
             CaptureOutput::DenoWorkers { producer_id } => {
-                match javascript::finalize_deno(&files, request, producer_id) {
+                match javascript::finalize_deno(&files, request, producer_id, &mut reads) {
                     Ok(value) => coverage = Some(value),
                     Err(error) => diagnostics.push(format!("{error:#}")),
                 }
@@ -143,7 +153,7 @@ impl CapturePlan {
                 ])
             }
             CaptureOutput::BunProducers { session_id, root_registration_id } => {
-                match javascript::finalize_bun(&files, request, session_id, root_registration_id) {
+                match javascript::finalize_bun(&files, request, session_id, root_registration_id, &mut reads) {
                     Ok(value) => coverage = Some(value),
                     Err(error) => diagnostics.push(format!("{error:#}")),
                 }
@@ -153,6 +163,12 @@ impl CapturePlan {
                 ])
             }
         };
+        if let Err(error) = reads.check() {
+            let diagnostic = format!("{error:#}");
+            if !diagnostics.contains(&diagnostic) {
+                diagnostics.push(diagnostic);
+            }
+        }
         let profiles = artifacts
             .iter()
             .filter_map(|artifact| {
@@ -251,6 +267,31 @@ mod tests {
             json!({ "command": ["node", "target.ts"], "runtime_version": null, "output": output }),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn expired_controlled_finalization_never_claims_complete_delivery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cpu.cpuprofile");
+        fs::write(&path, b"original raw profile").unwrap();
+        let artifacts = capture_artifacts(directory.path()).unwrap();
+        let bundle = plan(json!({"kind":"profiles","format":"v8-cpuprofile"}))
+            .finalize_inventory_controlled(
+                &request(directory.path()),
+                artifacts,
+                Some(std::time::Instant::now()),
+            )
+            .unwrap();
+        assert!(bundle.completion.ensure_complete().is_err());
+        assert_eq!(bundle.artifacts.len(), 1);
+        assert!(
+            bundle
+                .completion
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("deadline"))
+        );
+        assert_eq!(fs::read(path).unwrap(), b"original raw profile");
     }
 
     #[test]

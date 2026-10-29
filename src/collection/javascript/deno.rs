@@ -1,17 +1,17 @@
 use super::super::finalization::{CaptureProducer, ProducerCoverage};
+use super::ValidationReads;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::PathBuf,
 };
 
-pub(super) fn validate(
+pub(super) fn validate_with_reads(
     files: &[PathBuf],
     run_id: &str,
     required: bool,
+    reads: &mut ValidationReads,
 ) -> Result<ProducerCoverage> {
     let mut coverage = ProducerCoverage::default();
     let reports = files
@@ -29,11 +29,15 @@ pub(super) fn validate(
         reports.len()
     );
     for path in reports {
-        let records = fs::read_to_string(path)?
+        let bytes = reads.metadata(path)?;
+        let records = std::str::from_utf8(&bytes)?
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str::<Value>)
-            .collect::<std::result::Result<Vec<_>, _>>()
+            .map(|line| {
+                reads.check()?;
+                Ok(serde_json::from_str::<Value>(line)?)
+            })
+            .collect::<Result<Vec<_>>>()
             .with_context(|| {
                 format!("invalid Deno worker finalization report {}", path.display())
             })?;
@@ -73,6 +77,7 @@ pub(super) fn validate(
             .filter(|pid| *pid > 0)
             .context("Deno worker finalization report has no process identity")?;
         for record in &records[1..] {
+            reads.check()?;
             ensure!(
                 ["schema_version", "runtime", "run_id", "producer_id"]
                     .iter()
@@ -124,6 +129,7 @@ pub(super) fn validate(
             coverage.expected.push(registration.to_owned());
         }
         for profile in profiles {
+            reads.check()?;
             let id = profile["worker_id"]
                 .as_u64()
                 .context("missing Deno profile worker identity")?;
@@ -148,7 +154,7 @@ pub(super) fn validate(
                 files.contains(&profile_path),
                 "finalized Deno worker profile is missing: {filename}"
             );
-            let digest = format!("{:x}", Sha256::digest(fs::read(&profile_path)?));
+            let digest = reads.raw_digest(&profile_path)?;
             ensure!(
                 profile["sha256"].as_str() == Some(digest.as_str()),
                 "finalized Deno worker profile changed: {filename}"
@@ -165,13 +171,20 @@ pub(super) fn validate(
     coverage
         .observed
         .sort_by(|left, right| left.id.cmp(&right.id));
+    reads.check()?;
     Ok(coverage)
+}
+
+#[cfg(test)]
+fn validate(files: &[PathBuf], run_id: &str, required: bool) -> Result<ProducerCoverage> {
+    validate_with_reads(files, run_id, required, &mut ValidationReads::new(None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
 
     fn capture() -> (tempfile::TempDir, Vec<PathBuf>, Vec<Value>) {
         let directory = tempfile::tempdir().unwrap();
@@ -212,6 +225,28 @@ mod tests {
                 + "\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn validation_limits_bound_both_report_and_profile_rereads_without_changing_raw() {
+        let (_directory, files, records) = capture();
+        write_report(&files, &records);
+        let limits = super::super::validation::Limits {
+            profile_bytes: 1,
+            ..Default::default()
+        };
+        let mut reads = ValidationReads::with_limits(limits, None);
+        let error = validate_with_reads(&files, "recording", true, &mut reads).unwrap_err();
+        assert!(error.is::<crate::host::FileReadLimit>());
+        let limits = super::super::validation::Limits {
+            metadata_bytes: fs::metadata(&files[1]).unwrap().len() - 1,
+            ..Default::default()
+        };
+        let mut reads = ValidationReads::with_limits(limits, None);
+        let error = validate_with_reads(&files, "recording", true, &mut reads).unwrap_err();
+        assert!(error.is::<crate::host::FileReadLimit>());
+        assert_eq!(fs::read(&files[0]).unwrap(), b"{}");
+        assert_eq!(fs::read_to_string(&files[1]).unwrap().lines().count(), 3);
     }
 
     #[test]

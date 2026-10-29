@@ -276,7 +276,13 @@ impl Engine {
         if run.runtime != "none" {
             run.source["finishing"] = state("normalization", "running");
             let profiles = checkpoint(deadline)
-                .and_then(|_| plan.finalize_inventory(&capture, preserved.artifacts))
+                .and_then(|_| {
+                    plan.finalize_inventory_controlled(
+                        &capture,
+                        preserved.artifacts,
+                        Some(deadline),
+                    )
+                })
                 .and_then(|mut bundle| {
                     checkpoint(deadline)?;
                     if let Some(diagnostic) = &collector_start_failure {
