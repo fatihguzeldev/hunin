@@ -3,6 +3,10 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+// Includes handlers waiting to write their replies, independently of operation
+// work admission and the existing per-message input byte limit.
+const MAX_PENDING_RESPONSES: usize = 8;
+
 pub async fn serve(operations: Operations) -> Result<()> {
     let result = serve_session(operations.clone()).await;
     let shutdown = operations.shutdown().await;
@@ -11,15 +15,48 @@ pub async fn serve(operations: Operations) -> Result<()> {
 }
 
 async fn serve_session(operations: Operations) -> Result<()> {
-    let mut input = BufReader::new(tokio::io::stdin());
-    let output = std::sync::Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
+    serve_io(
+        operations,
+        BufReader::new(tokio::io::stdin()),
+        tokio::io::stdout(),
+    )
+    .await
+}
+
+async fn serve_io<R, W>(operations: Operations, mut input: R, output: W) -> Result<()>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let output = std::sync::Arc::new(tokio::sync::Mutex::new(output));
     let mut initialized = false;
     let mut negotiated = false;
     let mut requests = tokio::task::JoinSet::new();
+    let mut interrupted = false;
     loop {
+        // Backpressure includes response delivery. A caller that stops reading
+        // cannot accumulate an unbounded set of completed response values.
+        if requests.len() >= MAX_PENDING_RESPONSES {
+            let completed = tokio::select! {
+                result = requests.join_next() => Some(result.unwrap()),
+                _ = tokio::signal::ctrl_c() => {
+                    interrupted = true;
+                    requests.abort_all();
+                    None
+                },
+            };
+            let Some(completed) = completed else {
+                break;
+            };
+            completed??;
+        }
         let message = tokio::select! {
             message = read_message(&mut input) => message?,
-            _ = tokio::signal::ctrl_c() => None,
+            _ = tokio::signal::ctrl_c() => {
+                interrupted = true;
+                requests.abort_all();
+                None
+            },
         };
         let Some((line, too_large)) = message else {
             break;
@@ -69,13 +106,17 @@ async fn serve_session(operations: Operations) -> Result<()> {
         }
     }
     while let Some(result) = requests.join_next().await {
-        result??;
+        match result {
+            Ok(result) => result?,
+            Err(error) if interrupted && error.is_cancelled() => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
 
-async fn write_response(
-    output: &tokio::sync::Mutex<tokio::io::Stdout>,
+async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
+    output: &tokio::sync::Mutex<W>,
     response: &Value,
 ) -> Result<()> {
     let mut output = output.lock().await;
@@ -169,5 +210,68 @@ async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
                 too_large,
             )));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Store;
+
+    #[tokio::test]
+    async fn reply_backpressure_bounds_requests_that_have_already_mutated_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let operations = Operations::new(store.clone());
+        let (client, server) = tokio::io::duplex(64);
+        let (read, write) = tokio::io::split(server);
+        let serving = tokio::spawn(serve_io(operations, BufReader::new(read), write));
+        let (read, mut write) = tokio::io::split(client);
+        let mut read = BufReader::new(read);
+        write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{}}}\n").await.unwrap();
+        let mut initialized = String::new();
+        read.read_line(&mut initialized).await.unwrap();
+        assert!(
+            serde_json::from_str::<Value>(&initialized)
+                .unwrap()
+                .get("result")
+                .is_some()
+        );
+        write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+            .await
+            .unwrap();
+        let sending = tokio::spawn(async move {
+            for index in 0..100 {
+                let request = json!({"jsonrpc":"2.0","id":index+2,"method":"tools/call","params":{"name":"scenarios.save","arguments":{"id":format!("queued-{index}"),"name":"x".repeat(1024),"command":["unused"]}}});
+                write
+                    .write_all(format!("{request}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        // Stop reading replies. Even fully executed mutations must continue
+        // occupying a response slot until their bytes have been delivered.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if store.documents("scenarios").unwrap().len() >= MAX_PENDING_RESPONSES {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            store.documents("scenarios").unwrap().len(),
+            MAX_PENDING_RESPONSES
+        );
+        sending.abort();
+        serving.abort();
+        let _ = sending.await;
+        let _ = serving.await;
     }
 }
