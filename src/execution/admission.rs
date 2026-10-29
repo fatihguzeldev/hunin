@@ -27,9 +27,12 @@ impl Engine {
         {
             bail!("timeout_seconds must be positive and at most 86400");
         }
-        let permit = self.slots.clone().try_acquire_owned().map_err(|_| anyhow::anyhow!(
-            "recording capacity reached: at most {} recordings per shared engine family, including preparation and terminal retention/publication", self.maximum_in_flight
-        ))?;
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            crate::model::CapacityExceeded::new(
+                "shared_recording_engine_family",
+                self.maximum_in_flight,
+            )
+        })?;
         self.check_admission()?;
         let engine = self.clone();
         // A disconnected acknowledgement must not detach a committed recording

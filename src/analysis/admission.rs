@@ -76,10 +76,12 @@ impl Engine {
             started_at_us: now_us(),
             deadline: Instant::now() + Duration::from_secs_f64(timeout),
         };
-        let permit = self.slots.clone().try_acquire_owned().map_err(|_| anyhow::anyhow!(
-            "analysis capacity reached: at most {} attempts per shared engine family, including preparation and terminal retention/publication",
-            self.maximum_in_flight
-        ))?;
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            crate::model::CapacityExceeded::new(
+                "shared_analyzer_engine_family",
+                self.maximum_in_flight,
+            )
+        })?;
         self.check_preparation(Some(request.deadline))?;
         let engine = self.clone();
         // Dropping a request or its acknowledgement wait must not abandon a

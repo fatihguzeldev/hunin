@@ -1,3 +1,5 @@
+mod admission;
+pub use admission::CapacityExceeded;
 pub(crate) mod observations;
 pub(crate) mod relations;
 pub mod runs;

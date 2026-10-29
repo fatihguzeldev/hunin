@@ -32,9 +32,15 @@ impl WorkPool {
             .slots
             .clone()
             .try_acquire_owned()
-            .map_err(|error| match error {
-                TryAcquireError::Closed => Failure::conflict("operation service is shutting down"),
-                TryAcquireError::NoPermits => Failure::capacity(self.scope, self.maximum),
+            .map_err(|error| -> anyhow::Error {
+                match error {
+                    TryAcquireError::Closed => {
+                        Failure::conflict("operation service is shutting down").into()
+                    }
+                    TryAcquireError::NoPermits => {
+                        crate::model::CapacityExceeded::new(self.scope, self.maximum).into()
+                    }
+                }
             })?;
         tokio::task::spawn_blocking(move || {
             // Dropping the caller must not free capacity while the disk/SQL
