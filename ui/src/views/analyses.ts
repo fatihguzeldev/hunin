@@ -6,12 +6,10 @@ import { date } from '../format';
 import { parseCommand } from '../command';
 import type { ViewContext } from '../workspace';
 import { pagedList } from '../paged-list';
-import { AnalysisProgress } from '../analysis-progress';
 
 export async function analyses(context: ViewContext): Promise<HTMLElement> {
   const source = runSource(context.run);
   const feedback = el('div', { role: 'status' });
-  const progress = new AnalysisProgress();
   const packages = pagedList<Analysis>({
     label: 'analyzer packages',
     signal: context.signal,
@@ -40,20 +38,15 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
         },
         context.signal,
       );
-      if (
-        progress.observe(page.results.map(analysisAttemptMetadata)) &&
-        !context.signal.aborted
-      )
-        context.refresh(
-          'Analyzer attempt state updated. Views were refreshed from the selected results.',
-        );
+      if (!context.signal.aborted)
+        for (const row of page.results) {
+          const attempt = analysisAttemptMetadata(row);
+          if (attempt.id && attempt.status === 'running')
+            context.followAttempt(attempt.id);
+        }
       return { items: page.results, next_cursor: page.next_cursor };
     },
     render: renderAttempts,
-    pollWhen: (items) =>
-      items.some(
-        (result) => analysisAttemptMetadata(result).status === 'running',
-      ),
   });
   const body = el(
     'div',
@@ -120,9 +113,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
                 );
                 return;
               }
-              progress.observe([
-                { id: result.result_set_id, status: 'running' },
-              ]);
+              context.followAttempt(result.result_set_id);
               if (context.signal.aborted) return;
               feedback.replaceChildren(
                 el(
