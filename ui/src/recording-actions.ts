@@ -1,5 +1,6 @@
 import { operation, type Run } from './api';
 import { button, el, field, lockFields } from './dom';
+import { importFormat } from './import-format';
 
 export function importRecordingDialog(actions: {
   imported: (id: string, foreground: boolean) => void;
@@ -11,11 +12,8 @@ export function importRecordingDialog(actions: {
     placeholder: 'Absolute local profile path',
     autocomplete: 'off',
   });
-  const format = el('input', {
-    required: true,
-    placeholder: 'e.g. v8-cpuprofile',
-    autocomplete: 'off',
-  });
+  const discovery = new AbortController();
+  const format = importFormat(discovery.signal);
   const name = el('input', {
     placeholder: 'Optional recording name',
     autocomplete: 'off',
@@ -43,17 +41,12 @@ export function importRecordingDialog(actions: {
       'div',
       { class: 'dialog-body stack' },
       field('Local profile path', path),
-      field('Profile format', format),
+      format.element,
       field('Name', name),
       el(
         'p',
         { class: 'metric-note' },
         'The local service reads this path and retains the original profile and supported sidecars. Imported observations retain their collection limits; import does not establish workload correctness.',
-      ),
-      el(
-        'p',
-        { class: 'metric-note' },
-        'Use the format accepted by the Hunin importer. A filename extension alone does not establish its format.',
       ),
       feedback,
     ),
@@ -65,7 +58,10 @@ export function importRecordingDialog(actions: {
   });
   dialog.append(form);
   document.body.append(dialog);
-  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('close', () => {
+    discovery.abort();
+    dialog.remove();
+  });
   dialog.showModal();
   path.focus();
   async function save(): Promise<void> {
@@ -78,7 +74,7 @@ export function importRecordingDialog(actions: {
     try {
       const result = await operation('recordings.import', {
         path: path.value,
-        format: format.value,
+        format: format.value(),
         name: name.value || undefined,
       });
       const foreground = dialog.open;
