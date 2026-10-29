@@ -91,6 +91,25 @@ async fn exact_analysis_attempt_lookup_preserves_replay_identity_and_run_scope()
 }
 
 #[tokio::test]
+async fn schema_integer_parameters_accept_integral_json_float_representations() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    let artifact = store
+        .add_artifact_bytes("recording", "bytes.txt", "raw", b"0123456789")
+        .unwrap();
+    let result = Operations::new(store)
+        .call(
+            "artifacts.read",
+            json!({"run_id":"recording","artifact_id":artifact.id,"offset":2.0,"limit":3.0}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["content"], "234");
+    assert_eq!(result["next_offset"], 5);
+}
+
+#[tokio::test]
 async fn durable_metadata_lists_page_without_losing_history_or_crossing_runs() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

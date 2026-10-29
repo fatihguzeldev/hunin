@@ -2,6 +2,7 @@ mod capabilities;
 mod comparison;
 mod contracts;
 mod errors;
+mod inputs;
 pub(crate) use errors::operation_failure;
 
 use crate::{
@@ -59,7 +60,7 @@ impl Operations {
         analyses?;
         Ok(())
     }
-    pub async fn call(&self, name: &str, params: Value) -> Result<Value> {
+    pub async fn call(&self, name: &str, mut params: Value) -> Result<Value> {
         let definition = catalog()
             .iter()
             .find(|s| s["name"] == name)
@@ -71,6 +72,7 @@ impl Operations {
                     "invalid operation parameters: {error}"
                 ))
             })?;
+        inputs::canonicalize_integers(&definition["inputSchema"], &mut params);
         let store = self.engine.store();
         let id = || params["run_id"].as_str().context("run_id required");
         let limit = params["limit"].as_u64().unwrap_or(100) as usize;
