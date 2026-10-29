@@ -90,10 +90,9 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
             "retained source integrity check failed"
         );
         let text = String::from_utf8(content)?;
-        let line = params["line"].as_u64().unwrap_or(1) as usize;
-        let count = params["count"].as_u64().unwrap_or(80).min(500) as usize;
+        let window = source_window(&text, params);
         return Ok(
-            json!({"path":requested_uri,"start_line":line,"content":text.lines().skip(line.saturating_sub(1)).take(count).collect::<Vec<_>>().join("\n"),"identity_verified":true,"source_kind":"recorded_source_map","build_mapping_verified":false,"provenance":snapshot["provenance"],"diagnostic":"Showing immutable source retained with the measured script and its runtime-linked mapping. Mapping provenance is retained; compiler semantic correctness is not independently proven."}),
+            json!({"path":requested_uri,"start_line":window.start_line,"content":window.content,"next_line":window.next_line,"total_lines":window.total_lines,"identity_verified":true,"source_kind":"recorded_source_map","build_mapping_verified":false,"provenance":snapshot["provenance"],"diagnostic":"Showing immutable source retained with the measured script and its runtime-linked mapping. Mapping provenance is retained; compiler semantic correctness is not independently proven."}),
         );
     }
     let root = PathBuf::from(&run.cwd);
@@ -153,11 +152,38 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
             "Showing current project source. Measured-build/source provenance has not been established.",
         )
     };
-    let line = params["line"].as_u64().unwrap_or(1) as usize;
-    let count = params["count"].as_u64().unwrap_or(80).min(500) as usize;
+    let window = source_window(&text, params);
     Ok(
-        json!({"path":path,"start_line":line,"content":text.lines().skip(line.saturating_sub(1)).take(count).collect::<Vec<_>>().join("\n"),"identity_verified":identity_verified,"source_kind":if identity_verified{"recorded_snapshot"}else{"current_file"},"build_mapping_verified":false,"diagnostic":diagnostic}),
+        json!({"path":path,"start_line":window.start_line,"content":window.content,"next_line":window.next_line,"total_lines":window.total_lines,"identity_verified":identity_verified,"source_kind":if identity_verified{"recorded_snapshot"}else{"current_file"},"build_mapping_verified":false,"diagnostic":diagnostic}),
     )
+}
+
+struct SourceWindow {
+    start_line: usize,
+    content: String,
+    next_line: Option<usize>,
+    total_lines: usize,
+}
+
+fn source_window(text: &str, params: &Value) -> SourceWindow {
+    let start_line = params["line"].as_u64().unwrap_or(1) as usize;
+    let count = params["count"].as_u64().unwrap_or(80).min(500) as usize;
+    let start = start_line.saturating_sub(1);
+    let mut total_lines = 0;
+    let mut lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        total_lines = index + 1;
+        if index >= start && lines.len() < count {
+            lines.push(line);
+        }
+    }
+    let next = start.saturating_add(lines.len());
+    SourceWindow {
+        start_line,
+        content: lines.join("\n"),
+        next_line: (next < total_lines).then_some(next.saturating_add(1)),
+        total_lines,
+    }
 }
 
 fn source_key(uri: &str) -> String {
@@ -225,4 +251,33 @@ fn normalize(path: &Path) -> PathBuf {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::source_window;
+    use serde_json::json;
+
+    #[test]
+    fn source_windows_preserve_line_semantics_and_distinguish_empty_content_from_end() {
+        let first = source_window("first\r\n\r\nlast\r\n", &json!({"count":2}));
+        assert_eq!(first.content, "first\n");
+        assert_eq!(first.next_line, Some(3));
+        assert_eq!(first.total_lines, 3);
+        let last = source_window("first\n\nlast\n", &json!({"line":3,"count":2}));
+        assert_eq!(last.content, "last");
+        assert_eq!(last.next_line, None);
+        assert_eq!(source_window("", &json!({})).total_lines, 0);
+        assert_eq!(source_window("\n", &json!({})).total_lines, 1);
+        assert_eq!(source_window("one", &json!({"line":5001})).next_line, None);
+    }
+
+    #[test]
+    fn source_window_count_remains_bounded_and_existing_default_is_preserved() {
+        let text = (0..1000).map(|_| "line").collect::<Vec<_>>().join("\n");
+        assert_eq!(source_window(&text, &json!({})).next_line, Some(81));
+        let window = source_window(&text, &json!({"count":5000}));
+        assert_eq!(window.content.lines().count(), 500);
+        assert_eq!(window.next_line, Some(501));
+    }
 }

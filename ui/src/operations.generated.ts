@@ -146,6 +146,8 @@ export type SourceRead = {
   "build_mapping_verified": boolean;
   "diagnostic": string;
   "provenance"?: unknown;
+  "next_line"?: number | null;
+  "total_lines"?: number;
 };
 
 export type AnalysisPage = {
@@ -669,7 +671,7 @@ export function isCapabilities(value: unknown): value is Capabilities {
 }
 
 export function isSourceRead(value: unknown): value is SourceRead {
-  return (isOutputObject(value) && Object.hasOwn(value, "path") && Object.hasOwn(value, "content") && Object.hasOwn(value, "start_line") && Object.hasOwn(value, "identity_verified") && Object.hasOwn(value, "source_kind") && Object.hasOwn(value, "build_mapping_verified") && Object.hasOwn(value, "diagnostic") && (typeof value["path"] === "string") && (typeof value["content"] === "string") && (typeof value["start_line"] === "number" && Number.isInteger(value["start_line"]) && value["start_line"] >= 1) && (typeof value["identity_verified"] === "boolean") && (typeof value["source_kind"] === "string") && (typeof value["build_mapping_verified"] === "boolean") && (typeof value["diagnostic"] === "string") && (!Object.hasOwn(value, "provenance") || true));
+  return (isOutputObject(value) && Object.hasOwn(value, "path") && Object.hasOwn(value, "content") && Object.hasOwn(value, "start_line") && Object.hasOwn(value, "identity_verified") && Object.hasOwn(value, "source_kind") && Object.hasOwn(value, "build_mapping_verified") && Object.hasOwn(value, "diagnostic") && (typeof value["path"] === "string") && (typeof value["content"] === "string") && (typeof value["start_line"] === "number" && Number.isInteger(value["start_line"]) && value["start_line"] >= 1) && (typeof value["identity_verified"] === "boolean") && (typeof value["source_kind"] === "string") && (typeof value["build_mapping_verified"] === "boolean") && (typeof value["diagnostic"] === "string") && (!Object.hasOwn(value, "provenance") || true) && (!Object.hasOwn(value, "next_line") || ((typeof value["next_line"] === "number" && Number.isInteger(value["next_line"]) && value["next_line"] >= 1) || (value["next_line"] === null))) && (!Object.hasOwn(value, "total_lines") || (typeof value["total_lines"] === "number" && Number.isInteger(value["total_lines"]) && value["total_lines"] >= 0)));
 }
 
 export function isAnalysisPage(value: unknown): value is AnalysisPage {

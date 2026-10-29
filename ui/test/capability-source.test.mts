@@ -63,6 +63,34 @@ test('source responses preserve nullable provenance while checking the measured-
       await operation('source.read', { run_id: 'r', path: result.path }),
       result,
     );
+    const continued = {
+      ...result,
+      start_line: 5001,
+      next_line: 5121,
+      total_lines: 6003,
+    };
+    globalThis.fetch = async () => Response.json({ result: continued });
+    assert.deepEqual(
+      await operation('source.read', {
+        run_id: 'r',
+        path: result.path,
+        line: 5001,
+      }),
+      continued,
+    );
+    globalThis.fetch = async () =>
+      Response.json({ result: { ...continued, next_line: null } });
+    assert.equal(
+      (await operation('source.read', { run_id: 'r', path: result.path }))
+        .next_line,
+      null,
+    );
+    globalThis.fetch = async () =>
+      Response.json({ result: { ...continued, next_line: 0 } });
+    await assert.rejects(
+      operation('source.read', { run_id: 'r', path: result.path }),
+      /invalid source.read result/,
+    );
     globalThis.fetch = async () =>
       Response.json({ result: { ...result, start_line: 'one' } });
     await assert.rejects(

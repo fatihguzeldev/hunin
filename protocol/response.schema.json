@@ -468,7 +468,17 @@
         "diagnostic": {
           "type": "string"
         },
-        "provenance": {}
+        "provenance": {},
+        "next_line": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Start line for the next bounded source window, or null at the end. Older services may omit continuation metadata."
+        },
+        "total_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Line count of the source bytes selected by this response; this is not proof of their mapping to built code."
+        }
       },
       "required": [
         "path",
