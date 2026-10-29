@@ -133,7 +133,7 @@ fn snapshot(
             && path.extension().and_then(|s| s.to_str()).is_some_and(|e| {
                 [
                     "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "go", "py", "pyi", "js", "mjs",
-                    "cjs", "jsx", "ts", "tsx", "json", "toml", "yaml", "yml", "lock",
+                    "cjs", "jsx", "ts", "tsx", "mts", "cts", "json", "toml", "yaml", "yml", "lock",
                 ]
                 .contains(&e)
             })
@@ -294,6 +294,35 @@ pub fn workload_inputs(cwd: &Path, paths: &[PathBuf]) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn module_typescript_sources_participate_in_gitless_snapshot_identity() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("input.json"), "{\"work\":42}").unwrap();
+        fs::write(root.path().join("workload.mts"), "export const work = 1;\n").unwrap();
+        fs::write(
+            root.path().join("support.cts"),
+            "export const support = 1;\n",
+        )
+        .unwrap();
+        let first = source(root.path(), &[], None);
+        assert!(first["source_files"]["workload.mts"].is_string());
+        assert!(first["source_files"]["support.cts"].is_string());
+        assert_eq!(first["source_snapshot_complete"], true);
+        assert_eq!(first["build_source_verified"], false);
+        fs::write(root.path().join("workload.mts"), "export const work = 2;\n").unwrap();
+        let changed_module = source(root.path(), &[], None);
+        assert_ne!(first["fingerprint"], changed_module["fingerprint"]);
+        fs::write(
+            root.path().join("support.cts"),
+            "export const support = 2;\n",
+        )
+        .unwrap();
+        assert_ne!(
+            changed_module["fingerprint"],
+            source(root.path(), &[], None)["fingerprint"]
+        );
+    }
+
     #[test]
     fn launch_resolution_rejects_directories_and_keeps_relative_path_search() {
         let root = tempfile::tempdir().unwrap();
