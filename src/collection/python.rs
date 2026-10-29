@@ -1,4 +1,5 @@
-use super::{CaptureOutput, CapturePlan, CaptureRequest, assets, probe};
+use super::{CaptureOutput, CapturePlan, CaptureRequest};
+use crate::host::{assets, probe};
 use anyhow::{Context, Result, bail};
 use std::{collections::BTreeMap, path::Path, process::Command, time::Duration};
 

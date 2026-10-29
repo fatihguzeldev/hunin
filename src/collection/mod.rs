@@ -3,10 +3,10 @@ mod deno_workers;
 mod finalization;
 mod javascript;
 pub(crate) mod native_tool;
-pub(crate) use crate::host::probe;
 mod python;
 mod selection;
 mod settings;
+use crate::host::{probe, tool};
 use anyhow::{Context, Result, bail};
 pub use finalization::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
@@ -125,21 +125,8 @@ fn go_test(request: &CaptureRequest, trace: bool) -> Result<CapturePlan> {
     Ok(CapturePlan{command,env:BTreeMap::new(),collector_identity:None,session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:(if trace { "go-trace" } else { "pprof" }).into()},runtime_version:probe::standard(Command::new(&request.command[0]).envs(&request.env).current_dir(&request.cwd).arg("version")).ok().filter(|o|o.status.success()).map(|r|String::from_utf8_lossy(&r.stdout).trim().to_owned()),diagnostics:vec!["Go test profiling uses one package per recording; CPU profile and execution trace are separate collection modes to avoid unnecessary profiler interference".into()]})
 }
 
-fn walk(path: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if kind.is_file() {
-            result.push(entry.path());
-        } else if kind.is_dir() {
-            walk(&entry.path(), result)?;
-        }
-    }
-    Ok(())
-}
-
 fn native(request: &CaptureRequest) -> Result<CapturePlan> {
-    let samply = tool("samply").context("native/Go sampling requires Hunin's bundled samply0.13.1-hunin-native1; reinstall collector assets or set HUNIN_SAMPLY to a patched executable (an explicit override must be an existing file)")?;
+    let samply = native_tool::resolve().context("native/Go sampling requires Hunin's bundled samply0.13.1-hunin-native1; reinstall collector assets or set HUNIN_SAMPLY to a patched executable (an explicit override must be an existing file)")?;
     let sampler_version = native_tool::check(&samply, None, std::time::Duration::from_secs(10))?;
     let collector_identity = native_tool::identity(&samply, &sampler_version)?;
     let runtime_version = native_runtime_version(request);
@@ -236,84 +223,6 @@ fn native_runtime_version(request: &CaptureRequest) -> Option<String> {
 fn go_build_version(output: &str) -> Option<String> {
     let (_, version) = output.lines().next()?.rsplit_once(": ")?;
     (version.starts_with("go") || version.starts_with("devel ")).then(|| version.trim().to_owned())
-}
-
-pub(crate) fn assets() -> PathBuf {
-    env::var_os("HUNIN_ASSETS_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(Path::to_path_buf))
-                .filter(|p| p.join("collectors").is_dir())
-        })
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
-}
-
-pub(crate) fn vmprof_decoder() -> PathBuf {
-    if let Some(value) = env::var_os("HUNIN_VMPROF_PYTHON") {
-        return PathBuf::from(value);
-    }
-    if let Some(data) = dirs::data_local_dir() {
-        let path = data.join("hunin/tools/vmprof").join(if cfg!(windows) {
-            "Scripts/python.exe"
-        } else {
-            "bin/python"
-        });
-        if path.is_file() {
-            return path;
-        }
-    }
-    tool("python3")
-        .or_else(|| tool("python"))
-        .unwrap_or_else(|| PathBuf::from("python3"))
-}
-
-pub(crate) fn tool(name: &str) -> Option<PathBuf> {
-    if let Some(path) = env::var_os(format!("HUNIN_{}", name.to_uppercase())) {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-        if name == "samply" {
-            return None;
-        }
-    }
-    if name == "samply" {
-        let bundled = assets()
-            .join("collectors/native/bin")
-            .join(if cfg!(windows) {
-                "samply.exe"
-            } else {
-                "samply"
-            });
-        if bundled.is_file() {
-            return Some(bundled);
-        }
-    }
-    for directory in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
-        let path = directory.join(if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            name.into()
-        });
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    if name == "samply" {
-        let root = dirs::data_local_dir()?.join("hunin/tools");
-        let mut candidates = Vec::new();
-        if root.is_dir() {
-            let _ = walk(&root, &mut candidates);
-        }
-        candidates.sort();
-        return candidates.into_iter().rev().find(|p| {
-            p.file_name()
-                .is_some_and(|n| n == "samply" || n == "samply.exe")
-        });
-    }
-    None
 }
 
 #[cfg(test)]

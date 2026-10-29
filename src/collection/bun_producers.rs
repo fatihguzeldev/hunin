@@ -304,7 +304,7 @@ mod tests {
             .unwrap();
         }
         let mut files = Vec::new();
-        super::super::walk(directory, &mut files).unwrap();
+        crate::host::walk_files(directory, &mut files).unwrap();
         files
     }
 

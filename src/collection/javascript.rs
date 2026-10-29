@@ -1,5 +1,5 @@
-use super::{CapturePlan, CaptureRequest, assets, probe};
-use crate::host::{resolve_launch_executable, tool_path};
+use super::{CapturePlan, CaptureRequest};
+use crate::host::{assets, probe, resolve_launch_executable, tool_path};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use std::{collections::BTreeMap, env, fs, path::Path, process::Command, time::Duration};

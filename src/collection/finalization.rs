@@ -1,4 +1,5 @@
-use super::{CapturePlan, CaptureRequest, bun_producers, deno_workers, profile_format, walk};
+use super::{CapturePlan, CaptureRequest, bun_producers, deno_workers, profile_format};
+use crate::host::walk_files;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -170,7 +171,7 @@ impl CapturePlan {
 /// Preserve these artifacts before checking completeness or decoding profile bytes.
 pub fn capture_artifacts(directory: &Path) -> Result<Vec<CaptureArtifact>> {
     let mut files = Vec::new();
-    walk(directory, &mut files)?;
+    walk_files(directory, &mut files)?;
     files.sort();
     Ok(files
         .into_iter()

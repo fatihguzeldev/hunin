@@ -8,6 +8,7 @@ mod native_sampling;
 mod pprof;
 mod python_cpu;
 mod v8;
+mod vmprof;
 
 use crate::model::observations::StackSample;
 use anyhow::{Context, Result, bail};
@@ -19,7 +20,6 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 #[derive(Debug, Clone)]
@@ -177,7 +177,7 @@ fn import_inner(
         "pprof" | "go-pprof" => pprof::decode(&raw, run_id, &key)?,
         "python-cpu-progress" => python_cpu::decode(path, run_id, &key)?,
         "go-trace" => go_trace::decode(path, run_id, &key)?,
-        "vmprof" => decode_vmprof(path, run_id, &key)?,
+        "vmprof" => vmprof::decode(path, run_id, &key)?,
         "hunin-jsonl" | "jsonl" => {
             let mut records = Vec::new();
             for (line, text) in std::str::from_utf8(&raw)?.lines().enumerate() {
@@ -277,70 +277,6 @@ pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
         bail!("invalid {description}: {value}");
     }
     Ok(value.round() as u64)
-}
-
-fn decode_vmprof(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
-    let python = crate::collection::vmprof_decoder();
-    let output = crate::collection::probe::output(
-        Command::new(&python)
-            .arg(crate::collection::assets().join("collectors/python/decode.py"))
-            .arg(path),
-        None,
-        std::time::Duration::from_secs(60),
-        64 * 1024 * 1024,
-    )
-    .with_context(|| format!("run vmprof decoder with {}", python.display()))?;
-    if !output.status.success() {
-        bail!(
-            "vmprof decoding failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let raw: Value = serde_json::from_slice(&output.stdout)?;
-    let pid = raw["pid"].as_u64().unwrap_or(0);
-    let clock = raw["clock"].as_str().unwrap_or("unknown");
-    let mut records = Vec::new();
-    for (index, value) in raw["samples"]
-        .as_array()
-        .context("vmprof samples missing")?
-        .iter()
-        .enumerate()
-    {
-        let mut record = sample(
-            run_id,
-            key,
-            index,
-            StackSample {
-                pid,
-                tid: value["tid"].as_str().unwrap_or("unknown"),
-                timestamp_us: value["timestamp_us"].as_u64().unwrap_or(0),
-                stack: value["stack"]
-                    .as_array()
-                    .context("vmprof stack missing")?
-                    .clone(),
-                weight: 1.0,
-                weight_unit: "samples",
-                attributes: json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
-                "estimated_timer_periods":value["estimated_timer_periods"],"source_format":"vmprof",
-                "sampling_basis":raw["sampling_basis"],"profile_os":raw["profile_os"],
-                "profile_metadata":raw["metadata"],"lost_time_seconds":raw["lost_time_seconds"]}),
-            },
-        );
-        record["interval_us"] = raw["interval_us"].clone();
-        records.push(record);
-        if let Some(bytes) = value["rss_bytes"].as_u64() {
-            records.push(json!({"schema_version":1,"kind":"metric","id":format!("profile:{key}:rss:{index}"),"run_id":run_id,
-                "producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":"","timestamp_us":value["timestamp_us"],
-                "basis":"observed","name":"rss","value":bytes,"unit":"bytes","scope":"process",
-                "attributes":{"clock":clock,"clock_alignment":"unmapped","source_format":"vmprof"}}));
-        }
-    }
-    Ok((
-        records,
-        vec![format!(
-            "vmprof timestamps use an unaligned {clock} clock; inspect hotspots separately from the epoch timeline"
-        )],
-    ))
 }
 
 #[cfg(test)]

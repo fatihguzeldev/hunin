@@ -1,9 +1,47 @@
+use crate::host::{assets, find_on_path, probe, walk_files};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{fs, io::Read, path::Path, process::Command, time::Duration};
+use std::{
+    env, fs,
+    io::Read,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 pub(crate) const VERSION: &str = "samply 0.13.1-hunin-native1";
+
+/// Retain native-specific override and installed collector precedence.
+pub(crate) fn resolve() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("HUNIN_SAMPLY") {
+        let path = PathBuf::from(path);
+        return path.is_file().then_some(path);
+    }
+    let bundled = assets()
+        .join("collectors/native/bin")
+        .join(if cfg!(windows) {
+            "samply.exe"
+        } else {
+            "samply"
+        });
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    if let Some(path) = find_on_path("samply") {
+        return Some(path);
+    }
+    let root = dirs::data_local_dir()?.join("hunin/tools");
+    let mut candidates = Vec::new();
+    if root.is_dir() {
+        let _ = walk_files(&root, &mut candidates);
+    }
+    candidates.sort();
+    candidates.into_iter().rev().find(|p| {
+        p.file_name()
+            .is_some_and(|n| n == "samply" || n == "samply.exe")
+    })
+}
 
 pub(crate) fn check(path: &Path, reported: Option<&str>, timeout: Duration) -> Result<String> {
     let version = match reported {
@@ -30,7 +68,7 @@ pub(crate) fn check(path: &Path, reported: Option<&str>, timeout: Duration) -> R
             "selected native collector lacks the required Windows wrapper lifetime cleanup protocol; reinstall Hunin's bundled collector"
         );
     }
-    let bundled = super::assets()
+    let bundled = assets()
         .join("collectors/native/bin")
         .join(if cfg!(windows) {
             "samply.exe"
@@ -55,7 +93,7 @@ pub(crate) fn identity(binary: &Path, version: &str) -> Result<Value> {
 }
 
 fn output(command: &mut Command, timeout: Duration) -> Result<String> {
-    let output = super::probe::output(command, None, timeout, 32 * 1024)?;
+    let output = probe::output(command, None, timeout, 32 * 1024)?;
     ensure!(
         output.status.success(),
         "native collector prerequisite probe failed: {}",

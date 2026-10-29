@@ -1,6 +1,7 @@
 use crate::collection::{
-    CaptureAdapter, LaunchExecutableKind, capture_modes, probe, python_cpu_prerequisite, tool,
+    CaptureAdapter, LaunchExecutableKind, capture_modes, python_cpu_prerequisite,
 };
+use crate::host::{probe, tool};
 use serde_json::{Value, json};
 use std::{env, process::Command, sync::Arc, time::Duration};
 
@@ -82,7 +83,11 @@ fn version_pair(text: &str) -> Option<(u32, u32)> {
 }
 
 fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
-    let found = names.iter().find_map(|name| tool(name));
+    let found = if runtime == "native" {
+        crate::collection::native_tool::resolve()
+    } else {
+        names.iter().find_map(|name| tool(name))
+    };
     let mut diagnostics = Vec::new();
     let mut version = None;
     let mut probe_status = "missing";
@@ -184,7 +189,7 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             let sampler = if runtime == "native" {
                 found.clone()
             } else {
-                tool("samply")
+                crate::collection::native_tool::resolve()
             };
             if let Some(sampler) = sampler {
                 if let Err(error) = crate::collection::native_tool::check(

@@ -15,13 +15,13 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
     let go = metadata["executable"]
         .as_str()
         .map(std::path::PathBuf::from)
-        .or_else(|| crate::collection::tool("go"))
+        .or_else(|| crate::host::tool("go"))
         .context(
             "Go execution trace import requires a compatible Go toolchain on PATH or HUNIN_GO",
         )?;
     let began = std::time::Instant::now();
     let deadline = std::time::Duration::from_secs(60);
-    let mut output = crate::collection::probe::output(
+    let mut output = crate::host::probe::output(
         Command::new(&go)
             .args(["tool", "trace", "-d=parsed"])
             .arg(path),
@@ -36,7 +36,7 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
             .checked_sub(began.elapsed())
             .filter(|time| !time.is_zero())
             .context("Go trace decoder deadline elapsed before legacy-format fallback")?;
-        output = crate::collection::probe::output(
+        output = crate::host::probe::output(
             Command::new(&go).args(["tool", "trace", "-d=1"]).arg(path),
             None,
             remaining,
