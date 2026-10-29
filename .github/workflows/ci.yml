@@ -197,6 +197,9 @@ jobs:
       - name: Verify Deno SDK bridge into canonical storage
         if: always() && steps.deno.outcome == 'success'
         run: cargo +stable test --locked --test sdk_contract deno_runtime_sdk_conforms -- --ignored --exact --nocapture
+      - name: Verify incomplete collector evidence retention
+        if: always() && steps.deno.outcome == 'success'
+        run: cargo +stable test --locked --test collector_completion -- --include-ignored
       - name: Verify installed JavaScript runtime worker collection
         if: always() && steps.build.outcome == 'success'
         run: node --test collectors/javascript/plan.test.mjs
