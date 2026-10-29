@@ -12,6 +12,72 @@ use std::{
 const MAX_FILES: usize = 2000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+struct InventoryLimits {
+    entries: usize,
+    depth: usize,
+    path_bytes: usize,
+}
+impl Default for InventoryLimits {
+    fn default() -> Self {
+        Self {
+            entries: 8000,
+            depth: 64,
+            path_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+#[derive(Default)]
+struct InventoryUsage {
+    entries: usize,
+    path_bytes: usize,
+}
+impl InventoryUsage {
+    fn entry(&mut self, limits: &InventoryLimits) -> Result<()> {
+        self.entries = self.entries.saturating_add(1);
+        anyhow::ensure!(
+            self.entries <= limits.entries,
+            "analyzer package inventory exceeds {} entries; declare only required paths",
+            limits.entries
+        );
+        Ok(())
+    }
+    fn path(&mut self, path: &Path, limits: &InventoryLimits) -> Result<()> {
+        let depth = path
+            .components()
+            .filter(|part| matches!(part, Component::Normal(_)))
+            .count();
+        anyhow::ensure!(
+            depth <= limits.depth,
+            "analyzer package inventory exceeds {} path components",
+            limits.depth
+        );
+        self.path_bytes = self.path_bytes.saturating_add(path.to_string_lossy().len());
+        anyhow::ensure!(
+            self.path_bytes <= limits.path_bytes,
+            "analyzer package inventory exceeds {} relative-path bytes",
+            limits.path_bytes
+        );
+        Ok(())
+    }
+}
+
+struct InventoryControl<'a> {
+    usage: InventoryUsage,
+    limits: &'a InventoryLimits,
+    checkpoint: &'a mut dyn FnMut() -> Result<()>,
+}
+impl InventoryControl<'_> {
+    fn check(&mut self) -> Result<()> {
+        (self.checkpoint)()
+    }
+    fn entry(&mut self) -> Result<()> {
+        self.usage.entry(self.limits)
+    }
+    fn path(&mut self, path: &Path) -> Result<()> {
+        self.usage.path(path, self.limits)
+    }
+}
+
 fn source_read_error(error: anyhow::Error) -> anyhow::Error {
     if error.downcast_ref::<files::ByteLimitExceeded>().is_some() {
         error.context(
@@ -82,7 +148,10 @@ fn collect(
     destination: &Path,
     total: &mut u64,
     explicit: bool,
+    control: &mut InventoryControl<'_>,
 ) -> Result<()> {
+    control.check()?;
+    control.path(relative)?;
     let full = source.join(relative);
     if !full.canonicalize()?.starts_with(source) {
         bail!(
@@ -100,7 +169,9 @@ fn collect(
     }
     if metadata.is_dir() {
         for entry in fs::read_dir(full)? {
+            control.check()?;
             let entry = entry?;
+            control.entry()?;
             let name = entry.file_name();
             if !explicit
                 && matches!(
@@ -126,6 +197,7 @@ fn collect(
                 destination,
                 total,
                 explicit,
+                control,
             )?;
         }
     } else if metadata.is_file() {
@@ -136,7 +208,8 @@ fn collect(
         if files.len() >= MAX_FILES {
             bail!("analyzer package exceeds {MAX_FILES} files; declare only the required files");
         }
-        let bytes = files::read(&full, MAX_BYTES - *total, || Ok(())).map_err(source_read_error)?;
+        let bytes = files::read(&full, MAX_BYTES - *total, || control.check())
+            .map_err(source_read_error)?;
         *total += bytes.len() as u64;
         let target = destination.join(relative);
         fs::create_dir_all(target.parent().context("package file has no parent")?)?;
@@ -149,9 +222,18 @@ fn collect(
             relative.display()
         );
     }
-    Ok(())
+    control.check()
 }
 pub fn register(store: &Store, params: &Value) -> Result<Value> {
+    register_controlled(store, params, &InventoryLimits::default(), || Ok(()))
+}
+fn register_controlled(
+    store: &Store,
+    params: &Value,
+    limits: &InventoryLimits,
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<Value> {
+    checkpoint()?;
     let name = params["name"]
         .as_str()
         .filter(|name| !name.is_empty())
@@ -185,7 +267,7 @@ pub fn register(store: &Store, params: &Value) -> Result<Value> {
         .context("declared applicability requirements are required")?;
     super::applicability::validate_declaration(required)?;
     let original_executable = executable(&command[0], &cwd)?;
-    let executable_sha256 = files::hash(&original_executable, || Ok(()))?;
+    let executable_sha256 = files::hash(&original_executable, &mut checkpoint)?;
     let executable_is_packaged = original_executable.starts_with(&cwd);
     for (index, argument) in command.iter_mut().enumerate() {
         let path = PathBuf::from(&*argument);
@@ -206,17 +288,41 @@ pub fn register(store: &Store, params: &Value) -> Result<Value> {
     let result = (|| -> Result<Value> {
         let mut files = BTreeMap::new();
         let mut total = 0;
+        let mut control = InventoryControl {
+            usage: InventoryUsage::default(),
+            limits,
+            checkpoint: &mut checkpoint,
+        };
         if let Some(list) = params["files"].as_array() {
             if list.is_empty() {
                 bail!("analyzer files cannot be empty");
             }
             for file in list {
+                control.check()?;
+                control.entry()?;
                 let path = PathBuf::from(file.as_str().context("package files must be strings")?);
                 relative(&path)?;
-                collect(&cwd, &path, &mut files, &source, &mut total, true)?;
+                collect(
+                    &cwd,
+                    &path,
+                    &mut files,
+                    &source,
+                    &mut total,
+                    true,
+                    &mut control,
+                )?;
             }
         } else {
-            collect(&cwd, Path::new(""), &mut files, &source, &mut total, false)?;
+            control.entry()?;
+            collect(
+                &cwd,
+                Path::new(""),
+                &mut files,
+                &source,
+                &mut total,
+                false,
+                &mut control,
+            )?;
         }
         if files.is_empty() {
             bail!("analyzer package contains no files");
@@ -238,6 +344,7 @@ pub fn register(store: &Store, params: &Value) -> Result<Value> {
             staging.join("manifest.json"),
             serde_json::to_vec_pretty(&analysis)?,
         )?;
+        checkpoint()?;
         if managed.exists() {
             fs::remove_dir_all(&staging)?;
         } else {
@@ -335,6 +442,134 @@ pub(super) fn copy_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn registration_fixture() -> (tempfile::TempDir, Store, PathBuf, Value) {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("runner"), b"analyzer source").unwrap();
+        let store = Store::open(&directory.path().join("store")).unwrap();
+        let params = json!({"name":"inventory control","command":["./runner"],"cwd":source,"requirements":{"runtime":"fixture","source_fingerprint":"build-v1"}});
+        (directory, store, source, params)
+    }
+
+    fn assert_unadmitted(store: &Store) {
+        assert!(store.documents("analyses").unwrap().is_empty());
+        assert_eq!(
+            fs::read_dir(store.root().join("analysis-packages"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn registration_counts_empty_directories_and_cleans_its_failed_staging() {
+        let (_directory, store, source, params) = registration_fixture();
+        for index in 0..4 {
+            fs::create_dir(source.join(format!("empty-{index}"))).unwrap();
+        }
+        let error = register_controlled(
+            &store,
+            &params,
+            &InventoryLimits {
+                entries: 2,
+                ..Default::default()
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("2 entries"));
+        assert_unadmitted(&store);
+    }
+
+    #[test]
+    fn registration_bounds_repeated_explicit_roots_even_when_files_are_deduplicated() {
+        let (_directory, store, _source, mut params) = registration_fixture();
+        params["files"] = json!(["runner", "runner", "runner"]);
+        let error = register_controlled(
+            &store,
+            &params,
+            &InventoryLimits {
+                entries: 2,
+                ..Default::default()
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("2 entries"));
+        assert_unadmitted(&store);
+    }
+
+    #[test]
+    fn registration_limits_explicit_depth_and_cumulative_path_text() {
+        let (_directory, store, source, mut params) = registration_fixture();
+        fs::create_dir_all(source.join("one/two")).unwrap();
+        fs::write(source.join("one/two/code.py"), b"source").unwrap();
+        params["files"] = json!(["one/two/code.py"]);
+        let error = register_controlled(
+            &store,
+            &params,
+            &InventoryLimits {
+                depth: 2,
+                ..Default::default()
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("2 path components"));
+        assert_unadmitted(&store);
+        params["files"] = json!(["runner"]);
+        let error = register_controlled(
+            &store,
+            &params,
+            &InventoryLimits {
+                path_bytes: 5,
+                ..Default::default()
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("5 relative-path bytes"));
+        assert_unadmitted(&store);
+    }
+
+    #[test]
+    fn a_registration_checkpoint_after_source_copy_cannot_publish_a_package() {
+        let (_directory, store, _source, params) = registration_fixture();
+        let root = store.root().join("analysis-packages");
+        let error = register_controlled(&store, &params, &InventoryLimits::default(), || {
+            if root.is_dir()
+                && fs::read_dir(&root)?.any(|entry| {
+                    entry.is_ok_and(|entry| entry.path().join("source/runner").is_file())
+                })
+            {
+                anyhow::bail!("registration caller checkpoint stopped");
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "registration caller checkpoint stopped");
+        assert_unadmitted(&store);
+    }
+
+    #[test]
+    fn default_registration_preserves_exclusions_digests_and_explicit_file_semantics() {
+        let (_directory, store, source, params) = registration_fixture();
+        fs::create_dir(source.join("node_modules")).unwrap();
+        fs::write(source.join("node_modules/dependency"), b"excluded").unwrap();
+        let first = register(&store, &params).unwrap();
+        let second = register(&store, &params).unwrap();
+        assert_eq!(
+            first["analysis"]["package_digest"],
+            second["analysis"]["package_digest"]
+        );
+        assert_eq!(first["analysis"]["files"].as_object().unwrap().len(), 1);
+        let mut explicit = params;
+        explicit["files"] = json!(["runner", "node_modules/dependency"]);
+        let declared = register(&store, &explicit).unwrap();
+        assert_eq!(declared["analysis"]["files"].as_object().unwrap().len(), 2);
+    }
 
     fn legacy_package() -> (tempfile::TempDir, Value, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
