@@ -3,14 +3,18 @@ import { PagedQuery, type Page } from './pagination';
 
 export function pagedList<T>(options: {
   label: string;
+  signal?: AbortSignal;
   nextLabel: string;
   load: (cursor?: string) => Promise<Page<T>>;
   render: (items: T[]) => HTMLElement;
   pollWhen?: (items: T[]) => boolean;
 }): { element: HTMLElement; refresh: (reset?: boolean) => Promise<void> } {
   const element = el('div', { class: 'stack' });
-  const query = new PagedQuery(options.load);
+  const query = new PagedQuery(options.load, options.signal);
   let poll: ReturnType<typeof setTimeout> | undefined;
+  options.signal?.addEventListener('abort', () => clearTimeout(poll), {
+    once: true,
+  });
 
   function navigation(): HTMLElement {
     return el(
@@ -48,15 +52,17 @@ export function pagedList<T>(options: {
 
   async function update(request: () => Promise<boolean>): Promise<void> {
     clearTimeout(poll);
+    if (options.signal?.aborted) return;
     element.replaceChildren(loading(`Loading ${options.label}…`));
     try {
-      if (!(await request())) return;
+      if (!(await request()) || options.signal?.aborted) return;
       element.replaceChildren(options.render(query.page.items), navigation());
       if (options.pollWhen?.(query.page.items))
         poll = setTimeout(() => {
-          if (element.isConnected) void refresh();
+          if (element.isConnected && !options.signal?.aborted) void refresh();
         }, 1_500);
     } catch (error) {
+      if (options.signal?.aborted) return;
       element.replaceChildren(
         errorView(error, () => {
           void update(request);

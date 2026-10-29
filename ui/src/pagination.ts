@@ -7,7 +7,10 @@ export class PagedQuery<T> {
   private previousCursors: (string | undefined)[] = [];
   private version = 0;
 
-  constructor(private fetchPage: (cursor?: string) => Promise<Page<T>>) {}
+  constructor(
+    private fetchPage: (cursor?: string) => Promise<Page<T>>,
+    private signal?: AbortSignal,
+  ) {}
 
   get hasPrevious(): boolean {
     return this.previousCursors.length > 0;
@@ -39,16 +42,17 @@ export class PagedQuery<T> {
     cursor: string | undefined,
     previous: (string | undefined)[],
   ): Promise<boolean> {
+    if (this.signal?.aborted) return false;
     const version = ++this.version;
     try {
       const page = await this.fetchPage(cursor);
-      if (version !== this.version) return false;
+      if (version !== this.version || this.signal?.aborted) return false;
       this.page = page;
       this.cursor = cursor;
       this.previousCursors = previous;
       return true;
     } catch (error) {
-      if (version === this.version) throw error;
+      if (version === this.version && !this.signal?.aborted) throw error;
       return false;
     }
   }
