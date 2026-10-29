@@ -50,10 +50,15 @@ def required_checks(target, extra_filters=()):
             ]
         )
     elif "linux" in target:
-        checks.append(
-            SourceCheck(
-                "samply", "linux::profiler::hunin_clock_tests", expected_passed=2
-            )
+        checks.extend(
+            [
+                SourceCheck(
+                    "samply", "linux::profiler::hunin_clock_tests", expected_passed=2
+                ),
+                SourceCheck(
+                    "samply", "linux::perf_event::hunin_wakeup_tests", expected_passed=1
+                ),
+            ]
         )
     checks.extend(SourceCheck("samply", value) for value in extra_filters)
     selected = {}
