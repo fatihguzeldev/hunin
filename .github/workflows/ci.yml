@@ -151,6 +151,9 @@ jobs:
       - name: Python SDK tests
         if: always()
         run: python -m unittest discover -s sdk/python
+      - name: Python target entry semantics
+        if: always()
+        run: python -m unittest discover -s collectors/python -p test_entry.py
       - name: Go SDK tests
         if: always()
         working-directory: sdk/go
@@ -243,6 +246,9 @@ jobs:
       - name: Verify Bun producer completion and partial evidence retention
         if: always() && steps.bun.outcome == 'success'
         run: cargo +stable test --locked --test collector_completion bun_ -- --ignored
+      - name: Verify selected Bun controller without a global Node
+        if: always() && steps.bun.outcome == 'success'
+        run: cargo +stable test --locked --test javascript_controllers selected_bun_ -- --ignored
       - name: Install checksum-pinned Deno
         id: deno
         if: always() && steps.build.outcome == 'success'
@@ -262,6 +268,9 @@ jobs:
       - name: Verify incomplete Deno worker evidence retention
         if: always() && steps.deno.outcome == 'success'
         run: cargo +stable test --locked --test collector_completion deno_ -- --ignored
+      - name: Verify selected Deno controller and target permissions
+        if: always() && steps.deno.outcome == 'success'
+        run: cargo +stable test --locked --test javascript_controllers selected_deno_ -- --ignored
       - name: Verify installed JavaScript runtime worker collection
         if: always() && steps.build.outcome == 'success'
         run: node --test collectors/javascript/plan.test.mjs
