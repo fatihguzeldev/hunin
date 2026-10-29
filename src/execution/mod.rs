@@ -183,7 +183,7 @@ impl Engine {
                 return Err(error);
             }
         };
-        let mut metrics = Vec::new();
+        let mut metrics = resources::Retention::default();
         let (observer, mut observations) =
             resources::Observer::start(pid, run.id.clone(), collector_wrapper);
         let mut observations_open = true;
@@ -237,9 +237,13 @@ impl Engine {
         run.source["supervised_execution_finished_at_us"] = json!(execution_finished_at_us);
         run.source["supervised_elapsed_us"] =
             json!(execution_finished_at_us.saturating_sub(execution_started_at_us));
-        if let Err(error) = observer.finish().await {
+        let observation = observer.finish().await;
+        if let Some(error) = &observation.worker_error {
             run.diagnostics
                 .push(format!("resource observer stopped unexpectedly: {error}"));
+        }
+        if observation.delivery.discarded_rows() > 0 {
+            run.diagnostics.push(format!("{} generated resource observation rows were not delivered; see resource_observation.queue_delivery. This does not quantify unobserved CPU weights or OS gaps",observation.delivery.discarded_rows()));
         }
         while let Ok(rows) = observations.try_recv() {
             metrics.extend(rows);
@@ -262,6 +266,14 @@ impl Engine {
             run.source["native_session_cleanup"] = cleanup;
         }
         run.source["resource_observation"] = json!({"scope":"observed processes in supervised tree","requested_interval_us":100000,"implementation":"CPU/memory-only process discovery on a blocking worker, bracketed by native process birth identities","limitations":"observer work can perturb the target; refresh duration and actual point intervals are recorded; missing or changing birth identities are omitted; newly discovered children need a subsequent stable observation; short-lived processes or final cumulative values may be missed"});
+        run.source["resource_observation"]["queue_delivery"] =
+            serde_json::to_value(&observation.delivery)?;
+        run.source["resource_observation"]["observer_state"] =
+            json!(if observation.worker_error.is_some() {
+                "failed"
+            } else {
+                "stopped"
+            });
         run.source["process_elapsed_limitation"] = json!(if collector_wrapper {
             "includes collector startup/shutdown, observer overhead and supervised command; not isolated target elapsed"
         } else if run.runtime == "none" {

@@ -1,17 +1,86 @@
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+mod retention;
+pub(super) use retention::Retention;
+
+const QUEUE_CAPACITY: usize = 4;
+
+#[derive(Default)]
+struct DeliveryCounters {
+    generated_batches: AtomicU64,
+    generated_rows: AtomicU64,
+    empty_generated_batches: AtomicU64,
+    queued_batches: AtomicU64,
+    queued_rows: AtomicU64,
+    queue_full_dropped_batches: AtomicU64,
+    queue_full_dropped_rows: AtomicU64,
+    receiver_closed_dropped_batches: AtomicU64,
+    receiver_closed_dropped_rows: AtomicU64,
+    stop_discarded_batches: AtomicU64,
+    stop_discarded_rows: AtomicU64,
+}
+#[derive(Serialize)]
+pub(super) struct Delivery {
+    scope: &'static str,
+    queue_capacity_batches: usize,
+    generated_batches: u64,
+    generated_rows: u64,
+    empty_generated_batches: u64,
+    queued_batches: u64,
+    queued_rows: u64,
+    queue_full_dropped_batches: u64,
+    queue_full_dropped_rows: u64,
+    receiver_closed_dropped_batches: u64,
+    receiver_closed_dropped_rows: u64,
+    stop_discarded_batches: u64,
+    stop_discarded_rows: u64,
+    os_observation_gaps: &'static str,
+}
+impl DeliveryCounters {
+    fn snapshot(&self) -> Delivery {
+        Delivery {
+            scope: "generated_observation_rows; not unobserved CPU weights or OS coverage",
+            queue_capacity_batches: QUEUE_CAPACITY,
+            generated_batches: self.generated_batches.load(Ordering::Relaxed),
+            generated_rows: self.generated_rows.load(Ordering::Relaxed),
+            empty_generated_batches: self.empty_generated_batches.load(Ordering::Relaxed),
+            queued_batches: self.queued_batches.load(Ordering::Relaxed),
+            queued_rows: self.queued_rows.load(Ordering::Relaxed),
+            queue_full_dropped_batches: self.queue_full_dropped_batches.load(Ordering::Relaxed),
+            queue_full_dropped_rows: self.queue_full_dropped_rows.load(Ordering::Relaxed),
+            receiver_closed_dropped_batches: self
+                .receiver_closed_dropped_batches
+                .load(Ordering::Relaxed),
+            receiver_closed_dropped_rows: self.receiver_closed_dropped_rows.load(Ordering::Relaxed),
+            stop_discarded_batches: self.stop_discarded_batches.load(Ordering::Relaxed),
+            stop_discarded_rows: self.stop_discarded_rows.load(Ordering::Relaxed),
+            os_observation_gaps: "unknown",
+        }
+    }
+}
+impl Delivery {
+    pub fn discarded_rows(&self) -> u64 {
+        self.queue_full_dropped_rows + self.receiver_closed_dropped_rows + self.stop_discarded_rows
+    }
+}
+pub(super) struct Completion {
+    pub delivery: Delivery,
+    pub worker_error: Option<String>,
+}
 
 pub struct Observer {
     stopped: Arc<AtomicBool>,
     task: Option<tokio::task::JoinHandle<()>>,
+    delivery: Arc<DeliveryCounters>,
 }
 
 impl Observer {
@@ -22,7 +91,9 @@ impl Observer {
     ) -> (Self, tokio::sync::mpsc::Receiver<Vec<Value>>) {
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stopped = stopped.clone();
-        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        let (sender, receiver) = tokio::sync::mpsc::channel(QUEUE_CAPACITY);
+        let delivery = Arc::new(DeliveryCounters::default());
+        let worker_delivery = delivery.clone();
         let task = tokio::task::spawn_blocking(move || {
             let mut system = System::new();
             let mut identities = ObservationIdentities::new(root);
@@ -38,7 +109,25 @@ impl Observer {
                     sequence,
                     collector_wrapper,
                 );
+                let row_count = rows.len() as u64;
+                worker_delivery
+                    .generated_batches
+                    .fetch_add(1, Ordering::Relaxed);
+                worker_delivery
+                    .generated_rows
+                    .fetch_add(row_count, Ordering::Relaxed);
+                if rows.is_empty() {
+                    worker_delivery
+                        .empty_generated_batches
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 if worker_stopped.load(Ordering::Acquire) {
+                    worker_delivery
+                        .stop_discarded_batches
+                        .fetch_add(1, Ordering::Relaxed);
+                    worker_delivery
+                        .stop_discarded_rows
+                        .fetch_add(row_count, Ordering::Relaxed);
                     break;
                 }
                 if let Some(timestamp) = rows.first().and_then(|r| r["timestamp_us"].as_u64()) {
@@ -50,7 +139,32 @@ impl Observer {
                 }
                 // A slow consumer must not block process termination. Missing
                 // observations remain missing rather than replayed as fresh data.
-                let _ = sender.try_send(rows);
+                match sender.try_send(rows) {
+                    Ok(()) => {
+                        worker_delivery
+                            .queued_batches
+                            .fetch_add(1, Ordering::Relaxed);
+                        worker_delivery
+                            .queued_rows
+                            .fetch_add(row_count, Ordering::Relaxed);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        worker_delivery
+                            .queue_full_dropped_batches
+                            .fetch_add(1, Ordering::Relaxed);
+                        worker_delivery
+                            .queue_full_dropped_rows
+                            .fetch_add(row_count, Ordering::Relaxed);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        worker_delivery
+                            .receiver_closed_dropped_batches
+                            .fetch_add(1, Ordering::Relaxed);
+                        worker_delivery
+                            .receiver_closed_dropped_rows
+                            .fetch_add(row_count, Ordering::Relaxed);
+                    }
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
         });
@@ -58,14 +172,25 @@ impl Observer {
             Self {
                 stopped,
                 task: Some(task),
+                delivery,
             },
             receiver,
         )
     }
 
-    pub async fn finish(mut self) -> Result<(), tokio::task::JoinError> {
+    pub async fn finish(mut self) -> Completion {
         self.stopped.store(true, Ordering::Release);
-        self.task.take().unwrap().await
+        let worker_error = self
+            .task
+            .take()
+            .unwrap()
+            .await
+            .err()
+            .map(|error| error.to_string());
+        Completion {
+            delivery: self.delivery.snapshot(),
+            worker_error,
+        }
     }
 }
 
@@ -189,6 +314,42 @@ fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn actual_saturated_queue_reports_generated_row_delivery_loss() {
+        let (observer, mut receiver) =
+            Observer::start(std::process::id(), "queue-control".into(), false);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while receiver.capacity() > 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        let completion = observer.finish().await;
+        assert!(completion.worker_error.is_none());
+        let report = completion.delivery;
+        assert!(report.queue_full_dropped_batches > 0);
+        assert!(report.queue_full_dropped_rows > 0);
+        let mut received_rows = 0;
+        while let Ok(rows) = receiver.try_recv() {
+            received_rows += rows.len() as u64;
+        }
+        assert_eq!(report.queued_rows, received_rows);
+        assert_eq!(
+            report.generated_rows,
+            report.queued_rows + report.discarded_rows()
+        );
+        assert_eq!(
+            report.generated_batches,
+            report.queued_batches
+                + report.queue_full_dropped_batches
+                + report.receiver_closed_dropped_batches
+                + report.stop_discarded_batches
+        );
+        assert_eq!(report.os_observation_gaps, "unknown");
+    }
 
     #[test]
     fn reused_parent_pid_rejects_older_child_and_unknown_births() {

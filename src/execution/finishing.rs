@@ -1,5 +1,7 @@
 //! Synchronous correctness, raw retention, normalization and SDK publication.
-use super::{CaptureRequest, Engine, Run, RunStatus, collection, correctness, native, sdk};
+use super::{
+    CaptureRequest, Engine, Run, RunStatus, collection, correctness, native, resources, sdk,
+};
 use crate::model::now_us;
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -22,7 +24,7 @@ impl Engine {
         mut run: Run,
         target: Target,
         capture: Capture,
-        metrics: Vec<Value>,
+        metrics: resources::Retention,
     ) -> Result<()> {
         let Capture {
             request: capture,
@@ -33,6 +35,11 @@ impl Engine {
         let stdout = directory.join("stdout.txt");
         let stderr = directory.join("stderr.txt");
         let native_collection = native::handles_runtime(&run.runtime);
+        let (metrics, retention) = metrics.finish();
+        if retention.truncated {
+            run.diagnostics.push(format!("Resource retention safety budget reached; {} received observation rows were not retained. Target correctness is independent; see resource_observation.retention",retention.discarded_rows));
+        }
+        run.source["resource_observation"]["retention"] = serde_json::to_value(retention)?;
         run.exit_code = if let Some(outcome) = &target.outcome {
             if outcome["state"] == "exited" {
                 outcome["exit_code"]
