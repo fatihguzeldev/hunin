@@ -10,7 +10,7 @@
     "generate": "npm run build:generator && node .tools/scripts/generate-record.mjs",
     "build": "npm run check && vite build",
     "check": "npm run build:tooling && node .tools/scripts/generate-record.mjs --check && tsc --noEmit",
-    "test": "npm run build:tooling && node --test .tools/test/*.test.mjs"
+    "test": "npm run build:tooling && node .tools/scripts/run-tests.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
