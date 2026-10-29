@@ -19,7 +19,14 @@ fn validate_result(name: &str, result: &Value) {
 fn validate_transport(name: &str, result: &Value) {
     let definitions: Value =
         serde_json::from_str(include_str!("../protocol/response.schema.json")).unwrap();
-    jsonschema::validator_for(&definitions["$defs"][name])
+    let record: Value =
+        serde_json::from_str(include_str!("../protocol/record.schema.json")).unwrap();
+    jsonschema::options()
+        .with_resource(
+            "https://hunin.dev/protocol/record-v1.schema.json",
+            jsonschema::Resource::from_contents(record).unwrap(),
+        )
+        .build(&json!({"$ref":format!("#/$defs/{name}"),"$defs":definitions["$defs"]}))
         .unwrap()
         .validate(result)
         .unwrap();

@@ -127,7 +127,7 @@ pub async fn handle(operations: &Operations, message: &Value, initialized: bool)
                     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
                 }
                 Err(e) => {
-                    json!({"content":[{"type":"text","text":format!("{e:#}")}],"isError":true})
+                    json!({"content":[{"type":"text","text":format!("{e:#}")}],"isError":true,"_meta":{"hunin/operation-error":crate::operations::operation_failure(name, &e)}})
                 }
             }
         }

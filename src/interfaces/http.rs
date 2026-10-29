@@ -87,7 +87,7 @@ async fn call(
         Ok(result) => Json(json!({"result":result})).into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":{"code":"operation_failed","message":format!("{error:#}")}})),
+            Json(json!({"error":{"code":"operation_failed","message":format!("{error:#}"),"details":{"operation_error":crate::operations::operation_failure(&request.operation, &error)}}})),
         )
             .into_response(),
     }
@@ -110,4 +110,92 @@ async fn headers(request: axum::extract::Request, next: Next) -> Response {
         );
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{model::runs::Run, storage::Store};
+
+    #[tokio::test]
+    async fn operation_failures_have_the_same_typed_origin_in_http_and_mcp() {
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        store
+            .save_run(&Run {
+                id: "recording".into(),
+                name: "error control".into(),
+                status: "completed".into(),
+                command: vec![],
+                cwd: ".".into(),
+                runtime: "none".into(),
+                started_at_us: 1,
+                finished_at_us: Some(2),
+                exit_code: Some(0),
+                diagnostics: vec![],
+                source: json!({}),
+                correctness: json!({}),
+            })
+            .unwrap();
+        store
+            .save_document(
+                "analysis-results",
+                "active",
+                &json!({"run_id":"recording","status":"running"}),
+            )
+            .unwrap();
+        let operations = Operations::new(store);
+        for (name, params, code) in [
+            ("not-an-operation", json!({}), "unknown_operation"),
+            ("runs.get", json!({}), "invalid_parameters"),
+            ("runs.remove", json!({"run_id":"recording"}), "conflict"),
+            (
+                "runs.get",
+                json!({"run_id":"unknown operation invalid parameters conflict"}),
+                "operation_failed",
+            ),
+        ] {
+            let rpc = crate::interfaces::mcp::handle(&operations, &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":params}}), true).await;
+            let host = "127.0.0.1:17879";
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, host.parse().unwrap());
+            headers.insert(header::ORIGIN, format!("http://{host}").parse().unwrap());
+            let response = call(
+                State(HttpState {
+                    operations: operations.clone(),
+                    host: host.into(),
+                }),
+                headers,
+                Json(Request {
+                    operation: name.into(),
+                    params,
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let http: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(http["error"]["code"], "operation_failed");
+            assert_eq!(rpc["result"]["isError"], true);
+            assert!(rpc["result"].get("structuredContent").is_none());
+            assert_eq!(
+                http["error"]["message"],
+                rpc["result"]["content"][0]["text"]
+            );
+            let failure = &http["error"]["details"]["operation_error"];
+            assert_eq!(failure["code"], code, "{http}");
+            assert_eq!(failure["operation"], name);
+            assert_eq!(failure, &rpc["result"]["_meta"]["hunin/operation-error"]);
+            assert_eq!(failure["message"], http["error"]["message"]);
+            let definitions: Value =
+                serde_json::from_str(include_str!("../../protocol/response.schema.json")).unwrap();
+            let schema = &definitions["$defs"]["OperationFailure"];
+            jsonschema::validator_for(schema)
+                .unwrap()
+                .validate(failure)
+                .unwrap();
+        }
+    }
 }

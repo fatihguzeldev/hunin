@@ -1,6 +1,8 @@
 mod capabilities;
 mod comparison;
 mod contracts;
+mod errors;
+pub(crate) use errors::operation_failure;
 
 use crate::{
     execution::{Engine, StartRequest},
@@ -61,17 +63,22 @@ impl Operations {
         let definition = catalog()
             .iter()
             .find(|s| s["name"] == name)
-            .context("unknown operation")?;
+            .ok_or_else(errors::Failure::unknown_operation)?;
         jsonschema::validator_for(&definition["inputSchema"])?
             .validate(&params)
-            .map_err(|e| anyhow::anyhow!("invalid operation parameters: {e}"))?;
+            .map_err(|error| {
+                errors::Failure::invalid_parameters(format!(
+                    "invalid operation parameters: {error}"
+                ))
+            })?;
         let store = self.engine.store();
         let id = || params["run_id"].as_str().context("run_id required");
         let limit = params["limit"].as_u64().unwrap_or(100) as usize;
         let cursor = params["cursor"]
             .as_str()
             .map(str::parse::<usize>)
-            .transpose()?
+            .transpose()
+            .map_err(errors::Failure::invalid_parameters)?
             .unwrap_or(0);
         match name {
             "capabilities" => tokio::task::spawn_blocking(capabilities::discover)
@@ -91,7 +98,7 @@ impl Operations {
                 )
             }
             "runs.start" => Ok(
-                json!({"run":self.engine.start(serde_json::from_value::<StartRequest>(params)?).await?}),
+                json!({"run":self.engine.start(serde_json::from_value::<StartRequest>(params).map_err(errors::Failure::invalid_parameters)?).await?}),
             ),
             "runs.cancel" => Ok(json!({"run":self.engine.cancel(id()?).await?})),
             "runs.remove" => {
@@ -100,7 +107,10 @@ impl Operations {
                     .iter()
                     .any(|r| r["run_id"] == id().unwrap() && r["status"] == "running")
                 {
-                    bail!("cancel active analyzer executions before removing this recording");
+                    return Err(errors::Failure::conflict(
+                        "cancel active analyzer executions before removing this recording",
+                    )
+                    .into());
                 }
                 store.remove_run(id()?)?;
                 Ok(json!({"removed":true}))
