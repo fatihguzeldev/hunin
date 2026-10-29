@@ -9,6 +9,7 @@ export default defineConfig(
     'target/**',
     'dist/**',
     'ui/dist/**',
+    'ui/.tools/**',
     'context/**',
     '.hunin/**',
     // Recorded source maps and profiles refer to these exact source bytes/lines.
@@ -18,13 +19,13 @@ export default defineConfig(
     'ui/src/*.generated.ts',
   ]),
   {
-    files: ['**/*.{js,mjs,cjs,ts}'],
+    files: ['**/*.{ts,mts}'],
     extends: [js.configs.recommended],
     languageOptions: { ecmaVersion: 2022 },
     linterOptions: { reportUnusedDisableDirectives: 'error' },
   },
   {
-    files: ['**/*.ts'],
+    files: ['**/*.{ts,mts}'],
     extends: [tseslint.configs.recommended],
   },
   {
@@ -33,21 +34,21 @@ export default defineConfig(
   },
   {
     files: [
-      '*.mjs',
-      'quality/**/*.mjs',
-      'ui/scripts/**/*.mjs',
-      'ui/test/**/*.mjs',
+      '*.mts',
+      'quality/**/*.mts',
+      'ui/scripts/**/*.mts',
+      'ui/test/**/*.mts',
       'ui/vite.config.ts',
-      'collectors/javascript/**/*.mjs',
-      'sdk/javascript/**/*.{mjs,ts}',
-      'sdk/conformance/*.mjs',
+      'collectors/javascript/src/**/*.mts',
+      'sdk/javascript/src/**/*.mts',
+      'sdk/conformance/*.mts',
     ],
     languageOptions: { globals: globals.node },
   },
   {
     files: [
-      'collectors/javascript/clock-preload.mjs',
-      'collectors/javascript/deno-workers.mjs',
+      'collectors/javascript/src/clock-preload.mts',
+      'collectors/javascript/src/deno-workers.mts',
     ],
     languageOptions: { globals: { Deno: 'readonly' } },
   },
