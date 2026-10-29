@@ -1,7 +1,7 @@
 use super::Store;
 use crate::model::runs::Artifact;
 use anyhow::{Context, Result, bail};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
     fmt, fs,
@@ -267,17 +267,19 @@ impl Store {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Artifact>> {
-        self.run(run_id)?;
-        let c = self.connection()?;
-        let mut statement = c.prepare(
-            "SELECT metadata FROM artifacts WHERE run_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3",
+        let mut c = self.connection()?;
+        let tx = c.transaction()?;
+        tx.query_row("SELECT 1 FROM runs WHERE id=?1", [run_id], |_| Ok(()))
+            .optional()?
+            .with_context(|| format!("run not found: {run_id}"))?;
+        let values = super::metadata::read_page(
+            &tx,
+            "SELECT rowid FROM artifacts WHERE run_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3",
+            params![run_id, limit.min(501), offset],
+            "SELECT metadata FROM artifacts WHERE rowid=?1",
         )?;
-        statement
-            .query_map(params![run_id, limit.min(501), offset], |r| {
-                r.get::<_, String>(0)
-            })?
-            .map(|r| Ok(serde_json::from_str(&r?)?))
-            .collect()
+        tx.commit()?;
+        Ok(values)
     }
 
     pub fn artifact_path(&self, run_id: &str, id: &str) -> Result<PathBuf> {

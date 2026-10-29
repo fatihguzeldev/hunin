@@ -21,6 +21,8 @@ pub use bootstrap::SCHEMA_VERSION;
 mod inspection;
 mod maintenance;
 pub(crate) use maintenance::ActiveAnalysisRemoval;
+mod metadata;
+pub use metadata::{MetadataPageBudgetExceeded, MetadataPageDimension};
 mod observations;
 pub use inspection::{
     InspectionArea, InspectionFinding, InspectionLimit, InspectionLimits, InspectionPathKind,
@@ -81,7 +83,8 @@ impl Store {
         Ok(text.map(|text| serde_json::from_str(&text)).transpose()?)
     }
 
-    /// Page in SQL before decoding payloads; completed attempts keep creation order.
+    /// Page scalar keys before bounded JSON decode; completed attempts keep
+    /// creation order, including the existing timestamp fallback.
     pub fn documents_page(
         &self,
         namespace: &str,
@@ -89,14 +92,16 @@ impl Store {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let c = self.connection()?;
-        let mut statement = c.prepare("SELECT payload FROM documents WHERE namespace=?1 AND (?2 IS NULL OR owner_run_id=?2) ORDER BY COALESCE(json_extract(payload,'$.created_at_us'),updated_at_us) DESC,id LIMIT ?3 OFFSET ?4")?;
-        statement
-            .query_map(params![namespace, run_id, limit.min(501), offset], |r| {
-                r.get::<_, String>(0)
-            })?
-            .map(|r| Ok(serde_json::from_str(&r?)?))
-            .collect()
+        let mut c = self.connection()?;
+        let tx = c.transaction()?;
+        let values = metadata::read_page(
+            &tx,
+            "SELECT rowid FROM documents WHERE namespace=?1 AND (?2 IS NULL OR owner_run_id=?2) ORDER BY COALESCE(json_extract(payload,'$.created_at_us'),updated_at_us) DESC,id LIMIT ?3 OFFSET ?4",
+            params![namespace, run_id, limit.min(501), offset],
+            "SELECT payload FROM documents WHERE rowid=?1",
+        )?;
+        tx.commit()?;
+        Ok(values)
     }
 
     pub fn documents_with_status(&self, namespace: &str, status: &str) -> Result<Vec<Value>> {
@@ -182,13 +187,16 @@ impl Store {
     }
 
     pub fn runs(&self, limit: usize, offset: usize) -> Result<Vec<Run>> {
-        let c = self.connection()?;
-        let mut statement = c.prepare(
-            "SELECT manifest FROM runs ORDER BY started_at_us DESC,id LIMIT ?1 OFFSET ?2",
+        let mut c = self.connection()?;
+        let tx = c.transaction()?;
+        let values = metadata::read_page(
+            &tx,
+            "SELECT rowid FROM runs ORDER BY started_at_us DESC,id LIMIT ?1 OFFSET ?2",
+            params![limit.min(500), offset],
+            "SELECT manifest FROM runs WHERE rowid=?1",
         )?;
-        let rows =
-            statement.query_map(params![limit.min(500), offset], |r| r.get::<_, String>(0))?;
-        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+        tx.commit()?;
+        Ok(values)
     }
 
     /// Validate and publish a whole result set in one transaction. Replays are no-ops.
