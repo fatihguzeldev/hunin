@@ -15,6 +15,7 @@ export type ViewContext = {
   investigation: Investigation;
   signal: AbortSignal;
   persist: (mode?: 'push' | 'replace') => void;
+  refresh: (message?: string) => void;
   source: (path: string, line?: number | null, codeId?: string | null) => void;
 };
 export type View = {
@@ -39,6 +40,7 @@ export class Workspace {
   private renderController: AbortController | undefined;
   private pendingInvalidation: 'changed' | 'unconfirmed' | undefined;
   private returningFromSource = false;
+  private messages = new Map<string, string>();
 
   constructor(
     views: Record<string, View>,
@@ -428,11 +430,16 @@ export class Workspace {
               'p',
               { class: 'notice', role: 'status' },
               invalidation === 'changed'
-                ? 'Selected results changed. Saved stack and source locations were reset; your filters are retained.'
-                : 'This service cannot confirm the saved result identity. Stack and source locations were reset; your filters are retained.',
+                ? 'Selected results changed. Saved observation and source locations were reset; your filters are retained.'
+                : 'This service cannot confirm the saved result identity. Observation and source locations were reset; your filters are retained.',
             ),
           ]
         : [];
+      const message = this.messages.get(run.id);
+      if (message) {
+        this.messages.delete(run.id);
+        notices.push(el('p', { class: 'notice', role: 'status' }, message));
+      }
       if (!this.investigations.persistent)
         notices.push(
           el(
@@ -501,6 +508,10 @@ export class Workspace {
           signal,
           persist: (mode = 'replace') => {
             if (!signal.aborted) this.writeLocation(mode);
+          },
+          refresh: (message) => {
+            if (message) this.messages.set(run.id, message);
+            if (this.selected === run.id) void this.render();
           },
         });
         if (epoch !== this.epoch || signal.aborted) return;

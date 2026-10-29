@@ -19,6 +19,15 @@ export type TimelineInvestigation = {
   selectedId?: string;
 };
 
+export type EvidenceSelection =
+  | { kind: 'observation'; id: string }
+  | { kind: 'artifact'; id: string; name: string; offset: number };
+
+export type EvidenceInvestigation = {
+  cursor?: string;
+  selection?: EvidenceSelection;
+};
+
 export type SourceSelection = {
   view: string;
   path: string;
@@ -29,6 +38,7 @@ export type SourceSelection = {
 export type Investigation = {
   profile: ProfileInvestigation;
   timeline: TimelineInvestigation;
+  evidence: EvidenceInvestigation;
   source?: SourceSelection;
 };
 
@@ -63,6 +73,7 @@ function empty(): Investigation {
   return {
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
     timeline: { kind: '', alignment: 'aligned' },
+    evidence: {},
   };
 }
 
@@ -122,6 +133,26 @@ function decode(value: unknown): SavedInvestigation | undefined {
       };
     result.timeline.cursor = text(timeline.cursor);
     result.timeline.selectedId = text(timeline.selectedId);
+  }
+  const evidence = object(state?.evidence);
+  result.evidence.cursor = text(evidence?.cursor);
+  const selection = object(evidence?.selection);
+  if (selection && typeof selection.id === 'string') {
+    if (selection.kind === 'observation')
+      result.evidence.selection = { kind: 'observation', id: selection.id };
+    else if (
+      selection.kind === 'artifact' &&
+      typeof selection.name === 'string' &&
+      typeof selection.offset === 'number' &&
+      Number.isSafeInteger(selection.offset) &&
+      selection.offset >= 0
+    )
+      result.evidence.selection = {
+        kind: 'artifact',
+        id: selection.id,
+        name: selection.name,
+        offset: selection.offset,
+      };
   }
   const source = object(state?.source);
   const path = text(source?.path);
@@ -234,6 +265,9 @@ export class Investigations {
       entry.state.timeline.window = undefined;
       entry.state.timeline.cursor = undefined;
       entry.state.timeline.selectedId = undefined;
+      entry.state.evidence.cursor = undefined;
+      if (entry.state.evidence.selection?.kind === 'observation')
+        entry.state.evidence.selection = undefined;
     }
     entry.resultIdentity = identity;
     entry.restored = false;

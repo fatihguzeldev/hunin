@@ -6,28 +6,47 @@ import { date } from '../format';
 import { parseCommand } from '../command';
 import type { ViewContext } from '../workspace';
 import { pagedList } from '../paged-list';
+import { AnalysisProgress } from '../analysis-progress';
 
 export async function analyses(context: ViewContext): Promise<HTMLElement> {
   const source = runSource(context.run);
   const feedback = el('div', { role: 'status' });
+  const progress = new AnalysisProgress();
   const packages = pagedList<Analysis>({
     label: 'analyzer packages',
+    signal: context.signal,
     nextLabel: 'More analyzer packages',
     load: async (cursor) => {
-      const page = await operation('analyses.list', { cursor, limit: 25 });
+      const page = await operation(
+        'analyses.list',
+        { cursor, limit: 25 },
+        context.signal,
+      );
       return { items: page.analyses, next_cursor: page.next_cursor };
     },
     render: renderPackages,
   });
   const attempts = pagedList<AnalysisResult>({
     label: 'analyzer attempts',
+    signal: context.signal,
     nextLabel: 'Older attempts',
     load: async (cursor) => {
-      const page = await operation('analyses.results', {
-        run_id: context.run.id,
-        cursor,
-        limit: 25,
-      });
+      const page = await operation(
+        'analyses.results',
+        {
+          run_id: context.run.id,
+          cursor,
+          limit: 25,
+        },
+        context.signal,
+      );
+      if (
+        progress.observe(page.results.map(analysisAttemptMetadata)) &&
+        !context.signal.aborted
+      )
+        context.refresh(
+          'Analyzer attempt state updated. Views were refreshed from the selected results.',
+        );
       return { items: page.results, next_cursor: page.next_cursor };
     },
     render: renderAttempts,
@@ -95,6 +114,16 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
             analysis_id: analysisId,
           })
             .then((result) => {
+              if (result.status !== 'running') {
+                context.refresh(
+                  `Analyzer attempt ${result.result_set_id}: ${result.status}.`,
+                );
+                return;
+              }
+              progress.observe([
+                { id: result.result_set_id, status: 'running' },
+              ]);
+              if (context.signal.aborted) return;
               feedback.replaceChildren(
                 el(
                   'p',
@@ -110,6 +139,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
               void attempts.refresh(true);
             })
             .catch((error) => {
+              if (context.signal.aborted) return;
               feedback.replaceChildren(errorView(error, () => run.click()));
             })
             .finally(() => {
@@ -231,7 +261,11 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
                     void operation('analyses.cancel', {
                       execution_id: executionId,
                     })
-                      .then(() => attempts.refresh())
+                      .then(() =>
+                        context.refresh(
+                          'Analyzer cancellation request completed. The retained attempt status is authoritative.',
+                        ),
+                      )
                       .catch((error) =>
                         feedback.replaceChildren(
                           errorView(error, () => {

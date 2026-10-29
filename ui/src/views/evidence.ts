@@ -9,6 +9,7 @@ import { canReanalyze } from '../artifact';
 import { observationLabel, referenceIds } from '../observation';
 import { nativeEvidence } from '../native-evidence';
 import { pagedList } from '../paged-list';
+import { linkedRequest } from '../requests';
 
 export async function source(
   run: Run,
@@ -118,15 +119,20 @@ export async function source(
   );
 }
 
-export async function evidence(
-  context: ViewContext,
-  cursor?: string,
-): Promise<HTMLElement> {
-  const relationships = await operation('contexts.query', {
-    run_id: context.run.id,
-    cursor,
-    limit: 100,
-  });
+export async function evidence(context: ViewContext): Promise<HTMLElement> {
+  const state = context.investigation.evidence;
+  const cursor = state.cursor;
+  let selectionRequest: AbortController | undefined;
+  const relationships = await operation(
+    'contexts.query',
+    {
+      run_id: context.run.id,
+      cursor,
+      limit: 100,
+    },
+    context.signal,
+  );
+  context.signal.throwIfAborted();
   const body = el('div', { class: 'stack' });
   const inspector = el('div');
   const names = new Map(
@@ -144,30 +150,58 @@ export async function evidence(
     ),
   ].slice(0, 100);
   if (moduleIds.length) {
-    const modules = await operation('evidence.get', {
-      run_id: context.run.id,
-      ids: moduleIds,
-    });
+    const modules = await operation(
+      'evidence.get',
+      {
+        run_id: context.run.id,
+        ids: moduleIds,
+      },
+      context.signal,
+    );
+    context.signal.throwIfAborted();
     modules.records.forEach((record) =>
       names.set(record.id, observationLabel(record)),
     );
   }
-  function resolve(id: string): void {
-    void operation('evidence.get', { run_id: context.run.id, ids: [id] })
-      .then((data) => {
-        if (!data.records.length)
-          inspector.append(
-            el(
-              'p',
-              { class: 'notice' },
-              `Evidence ${id} is unavailable in this recording.`,
-            ),
-          );
-        else data.records.forEach((value) => inspect(value));
-      })
-      .catch((error) => inspector.append(errorView(error, () => resolve(id))));
+  async function resolve(id: string, scroll = true): Promise<void> {
+    selectionRequest?.abort();
+    selectionRequest = new AbortController();
+    const linked = linkedRequest(context.signal, selectionRequest.signal);
+    try {
+      const data = await operation(
+        'evidence.get',
+        { run_id: context.run.id, ids: [id] },
+        linked.signal,
+      );
+      if (linked.signal.aborted) return;
+      if (data.records[0]) inspect(data.records[0], scroll);
+      else {
+        state.selection = undefined;
+        context.persist();
+        inspector.replaceChildren(
+          el(
+            'p',
+            { class: 'notice' },
+            `Evidence ${id} is unavailable in the current selected results.`,
+          ),
+        );
+      }
+    } catch (error) {
+      if (!linked.signal.aborted)
+        inspector.replaceChildren(
+          errorView(error, () => {
+            void resolve(id, scroll);
+          }),
+        );
+    } finally {
+      linked.finish();
+    }
   }
-  function inspect(record: Observation): void {
+  function inspect(record: Observation, scroll = true): void {
+    if (context.signal.aborted) return;
+    selectionRequest?.abort();
+    state.selection = { kind: 'observation', id: record.id };
+    context.persist();
     const references = referenceIds(record);
     const frame = record.stack?.find((value) =>
       hasInspectableSource(value.file, value.code_id),
@@ -211,7 +245,8 @@ export async function evidence(
           : null,
       ),
     );
-    inspector.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (scroll)
+      inspector.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
   function reanalyze(id: string, action: HTMLButtonElement): void {
     action.disabled = true;
@@ -220,46 +255,18 @@ export async function evidence(
       run_id: context.run.id,
       artifact_id: id,
     })
-      .then(async (result) => {
-        const refreshed = await evidence(context, cursor);
-        refreshed.prepend(
-          el(
-            'section',
-            { class: 'panel' },
-            el(
-              'div',
-              { class: 'panel-head' },
-              el(
-                'h2',
-                {},
-                result.accepted
-                  ? 'Normalization updated'
-                  : 'Normalization unchanged',
-              ),
-            ),
-            el(
-              'div',
-              { class: 'panel-body stack' },
-              el(
-                'p',
-                {},
-                'Evidence and artifacts refreshed from accepted storage. Other recording views reload when selected.',
-              ),
-              ...result.diagnostics.map((message) =>
-                el('p', { class: 'notice' }, message),
-              ),
-              el(
-                'details',
-                {},
-                el('summary', {}, 'Accepted recording summary'),
-                el('pre', {}, JSON.stringify(result.summary, null, 2)),
-              ),
-            ),
-          ),
+      .then((result) => {
+        context.refresh(
+          [
+            result.accepted
+              ? 'Normalization updated.'
+              : 'Normalization unchanged.',
+            ...result.diagnostics,
+          ].join(' '),
         );
-        body.replaceWith(refreshed);
       })
       .catch((error) => {
+        if (context.signal.aborted) return;
         action.disabled = false;
         inspector.replaceChildren(
           errorView(error, () => reanalyze(id, action)),
@@ -270,14 +277,26 @@ export async function evidence(
     id: string,
     name: string,
     offset = 0,
+    scroll = true,
   ): Promise<void> {
+    if (context.signal.aborted) return;
+    selectionRequest?.abort();
+    selectionRequest = new AbortController();
+    const linked = linkedRequest(context.signal, selectionRequest.signal);
     try {
-      const result = await operation('artifacts.read', {
-        run_id: context.run.id,
-        artifact_id: id,
-        offset,
-        limit: 5000,
-      });
+      const result = await operation(
+        'artifacts.read',
+        {
+          run_id: context.run.id,
+          artifact_id: id,
+          offset,
+          limit: 5000,
+        },
+        linked.signal,
+      );
+      if (linked.signal.aborted) return;
+      state.selection = { kind: 'artifact', id, name, offset };
+      context.persist();
       inspector.replaceChildren(
         el(
           'section',
@@ -313,13 +332,16 @@ export async function evidence(
             : null,
         ),
       );
-      inspector.scrollIntoView({ block: 'nearest' });
+      if (scroll) inspector.scrollIntoView({ block: 'nearest' });
     } catch (error) {
+      if (linked.signal.aborted) return;
       inspector.replaceChildren(
         errorView(error, () => {
-          void inspectArtifact(id, name, offset);
+          void inspectArtifact(id, name, offset, scroll);
         }),
       );
+    } finally {
+      linked.finish();
     }
   }
   const contexts = el(
@@ -448,13 +470,18 @@ export async function evidence(
       );
   const artifacts = pagedList<Artifact>({
     label: 'artifacts',
+    signal: context.signal,
     nextLabel: 'More artifacts',
     load: async (pageCursor) => {
-      const page = await operation('artifacts.list', {
-        run_id: context.run.id,
-        cursor: pageCursor,
-        limit: 50,
-      });
+      const page = await operation(
+        'artifacts.list',
+        {
+          run_id: context.run.id,
+          cursor: pageCursor,
+          limit: 50,
+        },
+        context.signal,
+      );
       return { items: page.artifacts, next_cursor: page.next_cursor };
     },
     render: (items) =>
@@ -547,16 +574,11 @@ export async function evidence(
     inspector,
     artifacts.element,
   );
-  async function showPage(page?: string): Promise<void> {
-    try {
-      body.replaceWith(await evidence(context, page));
-    } catch (error) {
-      inspector.replaceChildren(
-        errorView(error, () => {
-          void showPage(page);
-        }),
-      );
-    }
+  function showPage(page?: string): void {
+    state.cursor = page;
+    state.selection = undefined;
+    context.persist('push');
+    context.refresh();
   }
   if (relationships.next_cursor)
     body.append(
@@ -575,5 +597,11 @@ export async function evidence(
       ),
     );
   await artifacts.refresh();
+  if (!context.signal.aborted && state.selection) {
+    const selected = state.selection;
+    if (selected.kind === 'observation') await resolve(selected.id, false);
+    else
+      await inspectArtifact(selected.id, selected.name, selected.offset, false);
+  }
   return body;
 }

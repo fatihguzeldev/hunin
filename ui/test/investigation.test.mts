@@ -110,3 +110,35 @@ test('timeline ranges and evidence identities restore only within the selected o
     selectedId: undefined,
   });
 });
+
+test('evidence restores observation IDs against result identity and immutable artifact chunks by artifact identity', () => {
+  const storage = session();
+  const first = new Investigations(storage);
+  first.observeResult('run', 'a');
+  first.forRun('run').evidence = {
+    cursor: 'page',
+    selection: { kind: 'observation', id: 'evidence-a' },
+  };
+  first.persist('run');
+  const reload = new Investigations(storage);
+  reload.observeResult('run', 'a');
+  assert.deepEqual(reload.forRun('run').evidence, first.forRun('run').evidence);
+  reload.observeResult('run', 'b');
+  assert.equal(reload.forRun('run').evidence.cursor, undefined);
+  assert.equal(reload.forRun('run').evidence.selection, undefined);
+  reload.forRun('run').evidence.selection = {
+    kind: 'artifact',
+    id: 'immutable',
+    name: 'input',
+    offset: 5000,
+  };
+  reload.persist('run');
+  const after = new Investigations(storage);
+  after.observeResult('run', 'c');
+  assert.deepEqual(after.forRun('run').evidence.selection, {
+    kind: 'artifact',
+    id: 'immutable',
+    name: 'input',
+    offset: 5000,
+  });
+});
