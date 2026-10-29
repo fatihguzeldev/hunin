@@ -1,4 +1,4 @@
-use super::StackSample;
+use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, native_identity::Images, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -216,7 +216,7 @@ fn decode_process(
                     timestamp_us: timestamp,
                     stack,
                     weight,
-                    weight_unit: "samples",
+                    weight_unit: SampleWeightUnit::Samples,
                     attributes,
                 },
             );

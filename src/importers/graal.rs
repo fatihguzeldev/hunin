@@ -1,4 +1,4 @@
-use super::StackSample;
+use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -121,7 +121,7 @@ fn walk(
                     timestamp_us: 0,
                     stack: stack.clone(),
                     weight: count as f64,
-                    weight_unit: "samples",
+                    weight_unit: SampleWeightUnit::Samples,
                     attributes: json!({"source_format":"graal-cpusampler","clock":"unknown","clock_alignment":"unmapped","temporal_resolution":"aggregate","tid_kind":"graal_thread_label"}),
                 },
             );
@@ -145,7 +145,7 @@ fn walk(
                         timestamp_us: timestamp,
                         stack: stack.clone(),
                         weight: 1.0,
-                        weight_unit: "samples",
+                        weight_unit: SampleWeightUnit::Samples,
                         attributes: json!({"source_format":"graal-cpusampler","clock":"unix_epoch","clock_alignment":"collector_epoch_ms","tid_kind":"graal_thread_label"}),
                     },
                 );

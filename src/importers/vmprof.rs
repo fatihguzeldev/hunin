@@ -1,7 +1,7 @@
 use super::sample;
 use crate::{
     host::{assets, probe, tool},
-    model::observations::StackSample,
+    model::observations::{SampleWeightUnit, StackSample},
 };
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -198,7 +198,7 @@ pub(super) fn decode(
                     .context("vmprof stack missing")?
                     .clone(),
                 weight: 1.0,
-                weight_unit: "samples",
+                weight_unit: SampleWeightUnit::Samples,
                 attributes: json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
                 "estimated_timer_periods":value["estimated_timer_periods"],"source_format":"vmprof",
                 "sampling_basis":raw["sampling_basis"],"profile_os":raw["profile_os"],

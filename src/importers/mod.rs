@@ -13,7 +13,7 @@ mod python_cpu;
 mod v8;
 mod vmprof;
 
-use crate::model::observations::StackSample;
+use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
@@ -287,7 +287,7 @@ pub(crate) fn sample(run_id: &str, key: &str, index: usize, sample: StackSample<
     json!({"schema_version":1,"kind":"sample","id":format!("profile:{key}:{index}"),
         "run_id":run_id,"producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":tid,
         "timestamp_us":timestamp_us,"basis":"sampled","stack":stack,"weight":weight,
-        "weight_unit":unit,"attributes":attributes})
+        "weight_unit":unit.as_wire(),"attributes":attributes})
 }
 
 pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
@@ -301,6 +301,39 @@ pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
 mod recorded_controls {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn canonical_sample_units_emit_the_authoritative_wire_contract_without_losing_attributes() {
+        for (unit, wire) in [
+            (SampleWeightUnit::Samples, "samples"),
+            (SampleWeightUnit::Microseconds, "microseconds"),
+            (SampleWeightUnit::Bytes, "bytes"),
+            (SampleWeightUnit::Count, "count"),
+        ] {
+            let attributes = json!({"clock":"process_cpu","clock_alignment":"unmapped","extension":{"retained":[null,"opaque"]}});
+            let row = sample(
+                "unit-control",
+                "input",
+                0,
+                StackSample {
+                    pid: 3,
+                    tid: "thread",
+                    timestamp_us: 0,
+                    stack: vec![json!({"function":"measured"})],
+                    weight: 2.5,
+                    weight_unit: unit,
+                    attributes: attributes.clone(),
+                },
+            );
+            crate::ingestion::validate("unit-control", std::slice::from_ref(&row), &HashSet::new())
+                .unwrap();
+            assert_eq!(row["weight_unit"], wire);
+            assert_eq!(row["weight"], 2.5);
+            assert_eq!(row["basis"], "sampled");
+            assert_eq!(row["attributes"], attributes);
+            assert_eq!(crate::query::summary(&[row])["weight_unit"], wire);
+        }
+    }
 
     #[test]
     fn real_native_recording_resolves_known_hotspot_and_validates() {

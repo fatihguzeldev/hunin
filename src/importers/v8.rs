@@ -1,4 +1,4 @@
-use super::StackSample;
+use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, javascript_sources::Scripts, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -139,7 +139,7 @@ pub(super) fn decode(
                 timestamp_us: timestamp,
                 stack: chain,
                 weight: 1.0,
-                weight_unit: "samples",
+                weight_unit: SampleWeightUnit::Samples,
                 attributes: attrs,
             },
         ));

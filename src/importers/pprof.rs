@@ -1,5 +1,5 @@
 //! The wire fields follow Google's canonical perftools.profiles profile.proto.
-use super::{StackSample, sample};
+use super::{SampleWeightUnit, StackSample, sample};
 use anyhow::{Context, Result, bail};
 use prost::Message;
 use serde_json::{Value, json};
@@ -129,16 +129,16 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
     let metric = text(kind.r#type)?;
     let source_unit = text(kind.unit)?;
     let (unit, factor) = match source_unit {
-        "nanoseconds" => ("microseconds", 0.001),
-        "microseconds" => ("microseconds", 1.0),
-        "milliseconds" => ("microseconds", 1000.0),
-        "seconds" => ("microseconds", 1_000_000.0),
-        "bytes" => ("bytes", 1.0),
+        "nanoseconds" => (SampleWeightUnit::Microseconds, 0.001),
+        "microseconds" => (SampleWeightUnit::Microseconds, 1.0),
+        "milliseconds" => (SampleWeightUnit::Microseconds, 1000.0),
+        "seconds" => (SampleWeightUnit::Microseconds, 1_000_000.0),
+        "bytes" => (SampleWeightUnit::Bytes, 1.0),
         "count" => (
             if metric == "samples" {
-                "samples"
+                SampleWeightUnit::Samples
             } else {
-                "count"
+                SampleWeightUnit::Count
             },
             1.0,
         ),
@@ -250,6 +250,37 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn canonical_units_keep_each_source_scaling_and_sample_count_distinct() {
+        for (metric, source_unit, expected_unit, expected_weight) in [
+            ("cpu", "nanoseconds", "microseconds", 0.002),
+            ("cpu", "microseconds", "microseconds", 2.0),
+            ("cpu", "milliseconds", "microseconds", 2000.0),
+            ("cpu", "seconds", "microseconds", 2_000_000.0),
+            ("allocations", "bytes", "bytes", 2.0),
+            ("allocations", "count", "count", 2.0),
+            ("samples", "count", "samples", 2.0),
+        ] {
+            let profile = Profile {
+                sample_type: vec![ValueType { r#type: 1, unit: 2 }],
+                string_table: vec!["".into(), metric.into(), source_unit.into()],
+                sample: vec![Sample {
+                    location_id: vec![],
+                    value: vec![2],
+                    label: vec![],
+                }],
+                ..Default::default()
+            };
+            let (rows, _) = decode(&profile.encode_to_vec(), "unit-control", "input").unwrap();
+            assert_eq!(rows[0]["weight"], expected_weight);
+            assert_eq!(rows[0]["weight_unit"], expected_unit);
+            assert_eq!(rows[0]["basis"], "sampled");
+            assert_eq!(rows[0]["attributes"]["source_unit"], source_unit);
+            assert_eq!(rows[0]["attributes"]["clock_alignment"], "unmapped");
+            crate::ingestion::validate("unit-control", &rows, &Default::default()).unwrap();
+        }
+    }
+
     #[test]
     fn keeps_cpu_units_and_rejects_broken_location_references() {
         let mut p = Profile {
