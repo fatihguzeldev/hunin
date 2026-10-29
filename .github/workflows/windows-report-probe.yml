@@ -1,0 +1,87 @@
+name: Windows report rename probe
+
+on:
+  push:
+    paths:
+      - .github/workflows/windows-report-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - name: Match the failed native compiler
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustc +1.99.1 --version --verbose
+      - name: Measure rename and DELETE access on owned temporary files
+        shell: pwsh
+        run: |
+          @'
+          use std::{env, fs, io::{self, Read}, os::windows::fs::OpenOptionsExt, path::Path};
+
+          fn outcome(label: &str, result: &io::Result<()>) {
+              match result {
+                  Ok(()) => println!("{label}: Ok"),
+                  Err(error) => println!("{label}: {error:?}; raw={:?}; kind={:?}", error.raw_os_error(), error.kind()),
+              }
+          }
+
+          fn delete_access(path: &Path) -> io::Result<()> {
+              fs::OpenOptions::new().access_mode(0x0001_0000).share_mode(7).open(path).map(drop)
+          }
+
+          fn main() -> io::Result<()> {
+              let root = env::temp_dir().join("hunin-report-probe-output");
+              fs::create_dir(&root)?;
+              println!("owned_root={}", root.display());
+              for (name, lock_source, share) in [
+                  ("unlocked", false, None),
+                  ("destination_reader_no_delete", false, Some(1)),
+                  ("source_reader_no_delete", true, Some(1)),
+                  ("destination_reader_delete_shared", false, Some(7)),
+                  ("source_reader_delete_shared", true, Some(7)),
+              ] {
+                  let directory = root.join(name);
+                  fs::create_dir(&directory)?;
+                  let target = directory.join("session.json");
+                  let staged = directory.join("session.json.tmp");
+                  fs::write(&target, br#"{"state":"session_stopped"}"#)?;
+                  fs::write(&staged, br#"{"state":"stopped"}"#)?;
+                  let mut reader = match share {
+                      Some(mode) => Some(fs::OpenOptions::new().read(true).share_mode(mode)
+                          .open(if lock_source { &staged } else { &target })?),
+                      None => None,
+                  };
+                  println!("case={name}; reader_share={share:?}");
+                  outcome("source_DELETE_access", &delete_access(&staged));
+                  outcome("destination_DELETE_access", &delete_access(&target));
+                  outcome("rename_while_reader_held", &fs::rename(&staged, &target));
+                  println!("target_exists={}; staged_exists={}; target={:?}", target.exists(), staged.exists(), fs::read_to_string(&target));
+                  if let Some(handle) = &mut reader {
+                      let mut value = String::new();
+                      handle.read_to_string(&mut value)?;
+                      println!("held_reader_content={value}");
+                  }
+                  drop(reader);
+                  if staged.exists() {
+                      outcome("rename_after_reader_release", &fs::rename(&staged, &target));
+                  }
+                  println!("final_target={:?}", fs::read_to_string(&target));
+              }
+              Ok(())
+          }
+          '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\hunin-report-probe.rs"
+          rustc +1.99.1 --edition 2021 "$env:RUNNER_TEMP\hunin-report-probe.rs" -o "$env:RUNNER_TEMP\hunin-report-probe.exe"
+          & "$env:RUNNER_TEMP\hunin-report-probe.exe"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-report-rename-probe
+          path: |
+            ${{ runner.temp }}/hunin-report-probe.rs
+            ${{ runner.temp }}/hunin-report-probe-output

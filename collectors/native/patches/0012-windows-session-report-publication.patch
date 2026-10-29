@@ -10,7 +10,7 @@
  
 --- /dev/null
 +++ b/samply/src/windows/session_report.rs
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,247 @@
 +//! Replace only the owned report name; a staged file is never cleanup acknowledgement.
 +use std::fs::{self, File};
 +use std::io::{self, Write};
@@ -162,10 +162,12 @@
 +                attempts += 1;
 +                let result = fs::rename(&temporary, &path);
 +                if attempts == 1 {
-+                    assert!(matches!(
-+                        result.as_ref().unwrap_err().raw_os_error(),
-+                        Some(32 | 33)
-+                    ));
++                    let error = result.as_ref().unwrap_err();
++                    assert!(
++                        matches!(error.raw_os_error(), Some(32 | 33)),
++                        "first replacement error: {error:?}; raw={:?}",
++                        error.raw_os_error()
++                    );
 +                    assert_eq!(fs::read(&path).unwrap(), old);
 +                    let mut retained = Vec::new();
 +                    let mut handle = reader.take().unwrap();
@@ -195,7 +197,11 @@
 +        fs::write(&path, old).unwrap();
 +        let _reader = conflicting_reader(&path);
 +        let error = publish(&path, &json!({"state":"stopped"})).unwrap_err();
-+        assert!(matches!(error.raw_os_error(), Some(32 | 33)));
++        assert!(
++            matches!(error.raw_os_error(), Some(32 | 33)),
++            "persistent replacement error: {error:?}; raw={:?}",
++            error.raw_os_error()
++        );
 +        assert_eq!(fs::read(&path).unwrap(), old);
 +        assert!(path.with_extension("json.tmp").is_file());
 +        let diagnostic: Value = serde_json::from_slice(
