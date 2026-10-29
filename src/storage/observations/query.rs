@@ -208,11 +208,14 @@ impl QueryReadPort<'_> {
         let connection = self.connection;
         // Full timelines stream in timestamp/sequence order. Kind selectors
         // seek through the kind index so unrelated sample-heavy data stays out
-        // of resource/context work. The VM budget covers the matched-row sort.
+        // of resource/context work. Sort only scalar keys, then fetch each
+        // payload by primary key after its row sentinel. Sorting raw records
+        // could otherwise spool many large values before any byte check.
+        // The shared VM budget covers both the key sort and payload lookups.
         let sql = if kinds.is_empty() {
             "SELECT o.record FROM observations o INDEXED BY observation_timeline JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq"
         } else {
-            "SELECT o.record FROM observations o INDEXED BY observation_kind JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.kind IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq"
+            "SELECT o.seq FROM observations o INDEXED BY observation_kind JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.kind IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq"
         };
         let mut statement = self.control.sql(connection.prepare(sql))?;
         let mut rows = if kinds.is_empty() {
@@ -221,6 +224,7 @@ impl QueryReadPort<'_> {
             self.control
                 .sql(statement.query(params![self.run_id, serde_json::to_string(kinds)?]))?
         };
+        let mut lookup = None;
         loop {
             self.checkpoint()?;
             let Some(row) = self.control.sql(rows.next())? else {
@@ -228,6 +232,27 @@ impl QueryReadPort<'_> {
             };
             let observed = self.usage.rows.saturating_add(1);
             within(ReadDimension::Rows, self.limits.maximum_rows, observed)?;
+            let mut payload_rows = if kinds.is_empty() {
+                None
+            } else {
+                if lookup.is_none() {
+                    lookup =
+                        Some(self.control.sql(
+                            connection.prepare("SELECT record FROM observations WHERE seq=?1"),
+                        )?);
+                }
+                Some(
+                    self.control
+                        .sql(lookup.as_mut().unwrap().query([row.get::<_, i64>(0)?]))?,
+                )
+            };
+            let row = if let Some(payloads) = &mut payload_rows {
+                self.control
+                    .sql(payloads.next())?
+                    .context("selected observation disappeared inside its read snapshot")?
+            } else {
+                row
+            };
             let text = row.get_ref(0)?.as_str()?;
             within(
                 ReadDimension::RecordBytes,
@@ -350,5 +375,48 @@ mod tests {
         let result=connection.query_row("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<10000) SELECT SUM(n) FROM numbers",[],|row|row.get::<_,i64>(0));
         let error = control.sql(result).unwrap_err();
         assert!(error.downcast_ref::<Cancelled>().is_some(), "{error:#}");
+    }
+
+    #[test]
+    fn kind_sort_and_row_sentinel_do_not_read_raw_payloads() {
+        use rusqlite::hooks::{AuthAction, Authorization};
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE observations(seq INTEGER PRIMARY KEY,run_id TEXT,kind TEXT,timestamp_us INTEGER,result_set_id TEXT,record TEXT); CREATE INDEX observation_timeline ON observations(run_id,timestamp_us,seq); CREATE INDEX observation_kind ON observations(run_id,kind); CREATE TABLE result_sets(id TEXT PRIMARY KEY,active INTEGER); INSERT INTO result_sets VALUES('active',1)").unwrap();
+        for timestamp in [3, 1, 2] {
+            connection.execute("INSERT INTO observations(run_id,kind,timestamp_us,result_set_id,record) VALUES('recording','metric',?1,'active',?2)",params![timestamp,"invalid JSON".repeat(10000)]).unwrap();
+        }
+        let control = ReadControl::new(&connection, 10000, || Ok(()));
+        // Authorization is checked at preparation, so this is stronger than
+        // measuring memory: the sorted-key cursor cannot even request a raw
+        // payload column before the row sentinel rejects the first row.
+        connection.authorizer(Some(
+            |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                AuthAction::Read {
+                    table_name: "observations",
+                    column_name: "record",
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            },
+        ));
+        let mut port = QueryReadPort {
+            connection: &connection,
+            run_id: "recording",
+            control,
+            limits: ReadLimits {
+                maximum_rows: 0,
+                ..Default::default()
+            },
+            usage: ReadUsage::default(),
+        };
+        let error = port
+            .visit(&["metric"], |_| {
+                panic!("the row sentinel must precede payload decoding")
+            })
+            .unwrap_err();
+        let budget = error
+            .downcast_ref::<ReadBudgetExceeded>()
+            .expect("kind sort requested raw payloads before the row sentinel");
+        assert_eq!(budget.dimension, ReadDimension::Rows);
+        assert_eq!(budget.observed, 1);
     }
 }
