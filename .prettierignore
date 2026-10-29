@@ -19,6 +19,7 @@
 !/sdk/javascript/*.ts
 !/sdk/javascript/*.json
 !/sdk/javascript/src/
+!/sdk/javascript/src/**/
 !/sdk/javascript/src/**/*.mts
 !/sdk/conformance/
 !/sdk/conformance/*.mjs
@@ -28,6 +29,7 @@
 !/collectors/javascript/
 !/collectors/javascript/*.mjs
 !/collectors/javascript/src/
+!/collectors/javascript/src/**/
 !/collectors/javascript/src/**/*.mts
 !/protocol/
 !/protocol/**/*.json
@@ -36,7 +38,7 @@
 /ui/dist/**
 /ui/.tools/**
 /ui/src/*.generated.ts
-/collectors/javascript/*.mjs
+/collectors/javascript/**/*.mjs
 /sdk/javascript/*.mjs
 /sdk/javascript/*.d.mts
 /sdk/javascript/test/**

@@ -2,7 +2,7 @@
 /node_modules/
 /quality/.venv/
 /.ruff_cache/
-/collectors/javascript/*.mjs
+/collectors/javascript/**/*.mjs
 /sdk/javascript/*.mjs
 /sdk/javascript/*.d.mts
 /sdk/javascript/test/

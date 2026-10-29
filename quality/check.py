@@ -115,6 +115,9 @@ def check(group):
         results = [formatted.returncode or bool(formatted.stdout.strip())]
         for module in ("sdk/go", "collectors/go/fixtures"):
             results.append(run(["go", "vet", "./..."], ROOT / module).returncode)
+        results.append(
+            run(["go", "vet", "../conformance/go.go"], ROOT / "sdk/go").returncode
+        )
         return results
     version = run(["clang-format", "--version"], capture=True)
     if version.returncode or "version 21.1.8" not in version.stdout:
