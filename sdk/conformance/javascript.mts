@@ -10,7 +10,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function transferredContext(text: string): h.Context | undefined {
   const token: unknown = JSON.parse(text);
   if (token === null) return undefined;
-  assert.ok(isObject(token) && typeof token.run_id === 'string');
+  assert.ok(isObject(token));
+  // Disabled producers historically transfer captureContext() ?? {}.
+  if (Object.keys(token).length === 0) return undefined;
+  assert.ok(typeof token.run_id === 'string');
   const result: h.Context = { run_id: token.run_id };
   for (const key of ['context_id', 'parent_id'] as const) {
     if (key in token) {
