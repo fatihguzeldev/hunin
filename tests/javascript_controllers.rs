@@ -84,6 +84,14 @@ fn selected_node_controls_capture_without_global_node_and_preserves_target_optio
         assert_eq!(output.status.success(), exit == 0, "{run}");
         assert_eq!(run["source"]["collection_status"], "completed", "{run}");
         assert_eq!(
+            run["source"]["collector_identity"]["measurement_contract"],
+            "node-cpu-prof-v1"
+        );
+        assert_eq!(
+            run["source"]["collector_identity"]["completion_scope"],
+            run["source"]["collection_completion"]["scope"]
+        );
+        assert_eq!(
             run["source"]["launch_executable"],
             executable.to_string_lossy().as_ref()
         );
@@ -174,6 +182,14 @@ fn selected_deno_controls_capture_without_node_and_keeps_target_permissions() {
     );
     assert!(output.status.success(), "{run}");
     assert_eq!(run["source"]["collection_status"], "completed");
+    assert_eq!(
+        run["source"]["collector_identity"]["measurement_contract"],
+        "deno-workers-v1"
+    );
+    assert_eq!(
+        run["source"]["collector_identity"]["completion_scope"],
+        run["source"]["collection_completion"]["scope"]
+    );
     let command = run["source"]["collector_settings"]["command"]
         .as_array()
         .unwrap();

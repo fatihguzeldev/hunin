@@ -124,9 +124,11 @@ export function plan(request: CaptureRequest) {
   };
   const session_identity: Record<string, string> = {};
   let output: CaptureOutput = { kind: 'profiles', format: 'v8-cpuprofile' };
-  let collector_identity:
-    | { kind: string; measurement_contract: string }
-    | undefined;
+  let collector_identity: {
+    kind: string;
+    measurement_contract: string;
+    completion_scope?: string;
+  };
   const diagnostics = [];
   diagnostics.push(
     'JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.',
@@ -183,6 +185,13 @@ export function plan(request: CaptureRequest) {
       'Bun workers are sampled through Inspector preloads; worker termination waits up to 100ms for a profiling flush. Forced process termination can leave the current segment incomplete.',
     );
   } else if (runtime === 'node') {
+    // The contract covers profiler flags, source/clock instrumentation and
+    // artifact delivery. It does not establish a process/worker inventory.
+    collector_identity = {
+      kind: 'node-cpu-prof',
+      measurement_contract: 'node-cpu-prof-v1',
+      completion_scope: 'declared_profile_artifacts',
+    };
     const preload = toolPath(
       fileURLToPath(new URL('../clock-preload.mjs', import.meta.url)),
     );
@@ -190,6 +199,12 @@ export function plan(request: CaptureRequest) {
       `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(pathToFileURL(preload).href)}`.trim();
     launched = [executable, ...command.slice(1)];
   } else {
+    // Only main-isolate Web Workers registered by this adapter are enumerated.
+    collector_identity = {
+      kind: 'deno-cpu-prof',
+      measurement_contract: 'deno-workers-v1',
+      completion_scope: 'declared_profiles_and_registered_deno_workers',
+    };
     const preload = toolPath(
       fileURLToPath(new URL('../clock-preload.mjs', import.meta.url)),
     );
