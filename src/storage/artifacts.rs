@@ -187,6 +187,10 @@ impl Store {
             )
             .context("artifact not found")?;
         let artifact: Artifact = serde_json::from_str(&metadata)?;
+        anyhow::ensure!(
+            super::maintenance::is_artifact_digest(&artifact.sha256),
+            "retained artifact digest is not a canonical SHA-256"
+        );
         Ok(self.root.join("artifacts").join(artifact.sha256))
     }
 }
@@ -234,3 +238,6 @@ fn same_artifact_contents(first: &Path, second: &Path) -> Result<bool> {
     }
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests;

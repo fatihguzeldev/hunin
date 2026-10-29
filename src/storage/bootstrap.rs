@@ -60,7 +60,7 @@ fn migrate(c: rusqlite::Transaction<'_>) -> Result<()> {
     if !columns.iter().any(|name| name == "owner_run_id") {
         c.execute_batch("ALTER TABLE documents ADD COLUMN owner_run_id TEXT REFERENCES runs(id) ON DELETE CASCADE;")?;
     }
-    c.execute_batch("UPDATE documents SET owner_run_id=json_extract(payload,'$.run_id') WHERE namespace IN('analysis-results','cancellations') AND owner_run_id IS NULL AND json_extract(payload,'$.run_id') IN(SELECT id FROM runs);")?;
+    c.execute_batch("UPDATE documents SET owner_run_id=json_extract(payload,'$.run_id') WHERE namespace IN('analysis-results','cancellations','profile-inputs') AND owner_run_id IS NULL AND json_extract(payload,'$.run_id') IN(SELECT id FROM runs);")?;
     c.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     c.commit()?;
     Ok(())
