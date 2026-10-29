@@ -298,6 +298,20 @@ if (process.env.HUNIN_TEST_DENO) {
 }
 
 if (process.env.HUNIN_TEST_BUN) {
+  test('Bun plans declare distinct generated preload identities without replacing user options', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hunin-bun-session-'));
+    try {
+      const request = { command: [process.env.HUNIN_TEST_BUN, '-e', 'console.log(1)'], cwd: directory, run_id: 'bun-session', runtime: 'bun', env: { BUN_OPTIONS: '--smol' } };
+      const first = plan({ ...request, artifact_dir: join(directory, 'first') });
+      const second = plan({ ...request, artifact_dir: join(directory, 'second') });
+      assert.notEqual(first.session_identity['bun-preload'], second.session_identity['bun-preload']);
+      for (const capture of [first, second]) {
+        assert.equal(capture.env.BUN_OPTIONS, `--smol --preload=${capture.session_identity['bun-preload']}`);
+        assert.match(capture.session_identity['bun-preload'], /^hunin-bun-preload-[\w-]+\.mjs$/);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   test('Bun inherited preload executes through a capture directory with spaces', () => {
     const directory = mkdtempSync(join(tmpdir(), 'hunin bun inherited preload '));
     try {

@@ -35,6 +35,7 @@ export function plan(request) {
   if (runtime === 'bun' && (major < 1 || major === 1 && minor < 4)) throw Error('Bun 1.4 or newer is required for per-worker profiling');
   if (runtime === 'deno' && (major < 2 || major === 2 && minor < 8)) throw Error('Deno 2.8 or newer is required for built-in CPU profiling');
   const env = { ...targetEnv, HUNIN_RUN_ID: run_id, HUNIN_JS_PROFILE_DIR: directory, HUNIN_PROJECT_ROOT: project };
+  const session_identity = {};
   const diagnostics = [];
   diagnostics.push('JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.');
   let launched;
@@ -44,6 +45,7 @@ export function plan(request) {
     // whitespace-free unique shim through NODE_PATH, whose path list supports
     // spaces, then let ESM resolve the real file URL on every host.
     const shim = `hunin-bun-preload-${randomUUID()}.mjs`;
+    session_identity['bun-preload'] = shim;
     writeFileSync(join(directory, shim), `import ${JSON.stringify(pathToFileURL(preload).href)};\n`, { mode: 0o600 });
     env.NODE_PATH = [directory, effectiveEnv.NODE_PATH].filter(Boolean).join(delimiter);
     env.BUN_OPTIONS = `${effectiveEnv.BUN_OPTIONS ?? ''} --preload=${shim}`.trim();
@@ -58,6 +60,7 @@ export function plan(request) {
     // Keep the target's explicit permissions. Hunin only adds access needed by its preload.
     const inspectorDenied = command.some(value => value === '--deny-sys' || value.startsWith('--deny-sys=') && value.slice('--deny-sys='.length).split(',').includes('inspector'));
     const producer = randomUUID();
+    session_identity['worker-session'] = producer;
     env.HUNIN_DENO_WORKER_SESSION = producer;
     writeFileSync(join(directory, `deno-workers-${producer}.jsonl`), JSON.stringify({
       schema_version: 1, runtime: 'deno', run_id, producer_id: producer, status: 'planned',
@@ -69,7 +72,7 @@ export function plan(request) {
     diagnostics.push('Deno TypeScript CPU profile positions refer to generated JavaScript when the runtime omits source maps. Worker profiles are emitted by Deno itself. Child Deno processes need their own collection plan.');
     diagnostics.push('Deno main-isolate Web Workers have a bounded exit barrier for their exact profile files. Nested workers and node:worker_threads created outside this constructor are not enumerated by this barrier; forced process exit can leave collection incomplete.');
   }
-  return { command: launched, env, profiles: [{ path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' }], diagnostics, runtime_version };
+  return { command: launched, env, session_identity, profiles: [{ path: directory, suffix: '.cpuprofile', format: 'v8-cpuprofile' }], diagnostics, runtime_version };
 }
 function isEntrypoint() {
   try { return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
