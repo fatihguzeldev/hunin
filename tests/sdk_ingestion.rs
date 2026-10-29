@@ -107,7 +107,7 @@ async fn sdk_error_formatters_preserve_target_exceptions_and_accept_valid_spools
             )
         } else {
             (vec![if cfg!(windows) { "python" } else { "python3" }.to_owned(), "-c".into(),
-                "import hunin\nclass TargetError(Exception):\n def __str__(self): raise RuntimeError('formatter-error')\noriginal=TargetError()\ntry:\n with hunin.context('request'), hunin.span('work'): raise original\nexcept BaseException as actual:\n assert actual is original\nhunin.flush()\nassert hunin.last_error() is None\nprint('target-ok')".into()], 2)
+                "import hunin,sys\nclass TargetError(Exception):\n def __str__(self): raise RuntimeError('formatter-error')\noriginal=TargetError()\ntry:\n with hunin.context('request'), hunin.span('work'): raise original\nexcept BaseException as actual:\n assert actual is original\nhunin.flush()\nassert hunin.last_error() is None\nsys.stdout.buffer.write(b'target-ok\\n')".into()], 2)
         };
         let run = engine
             .start(
@@ -140,7 +140,7 @@ async fn python_boolean_counters_leave_a_valid_numeric_sdk_spool() {
     let engine = Engine::new(store.clone());
     let python = if cfg!(windows) { "python" } else { "python3" };
     let run = engine.start(serde_json::from_value(json!({
-        "command":[python,"-c","import hunin\nfor value in (False, True):\n assert hunin.counter('boolean', value) is None\nfor value in (0, -2, 3, 2.5):\n assert hunin.counter('numeric', value) is not None\nhunin.flush()\nassert hunin.last_error() is None\nprint('target-ok')"],
+        "command":[python,"-c","import hunin,sys\nfor value in (False, True):\n assert hunin.counter('boolean', value) is None\nfor value in (0, -2, 3, 2.5):\n assert hunin.counter('numeric', value) is not None\nhunin.flush()\nassert hunin.last_error() is None\nsys.stdout.buffer.write(b'target-ok\\n')"],
         "cwd":project.path(),"runtime":"none",
         "env":{"PYTHONPATH":std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sdk/python")},
         "expected_stdout":"target-ok\n",
