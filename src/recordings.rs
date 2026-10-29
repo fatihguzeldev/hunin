@@ -26,6 +26,7 @@ pub(crate) struct Publication {
     pub diagnostics: Vec<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn publish(
     store: &Store,
     run_id: &str,

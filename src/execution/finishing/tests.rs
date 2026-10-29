@@ -94,3 +94,137 @@ fn incomplete_raw_retention_preserves_target_correctness_and_rejects_all_normali
 }
 
 use sha2::Digest;
+
+#[test]
+fn expired_finishing_preserves_observed_exit_and_unknown_exact_output_without_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let store = crate::storage::Store::open(root.path()).unwrap();
+    let engine = Engine::new(store.clone());
+    let directory = root.path().join("captures/expired");
+    fs::create_dir_all(directory.join("sdk")).unwrap();
+    fs::write(directory.join("stdout.txt"), b"exact\n").unwrap();
+    fs::write(directory.join("stderr.txt"), b"").unwrap();
+    let row = json!({"schema_version":1,"kind":"event","id":"not-published","run_id":"expired","producer_id":"fixture","pid":1,"tid":"main","timestamp_us":1,"name":"retained","basis":"observed"});
+    fs::write(directory.join("sdk/events.jsonl"), format!("{row}\n")).unwrap();
+    let run:Run=serde_json::from_value(json!({"id":"expired","name":"expired worker","status":"running","command":["node"],"cwd":directory,"runtime":"node","started_at_us":1,"finished_at_us":null,"exit_code":null,"diagnostics":[],"source":{"resource_observation":{},"correctness_recipe":{"expected_exit_code":0,"expected_stdout_sha256":format!("{:x}",sha2::Sha256::digest(b"exact\n"))}},"correctness":{}})).unwrap();
+    store.save_run(&run).unwrap();
+    let request = CaptureRequest {
+        command: vec!["node".into()],
+        cwd: directory.clone(),
+        artifact_dir: directory.clone(),
+        run_id: run.id.clone(),
+        runtime: "node".into(),
+        env: BTreeMap::new(),
+    };
+    let plan = serde_json::from_value(
+        json!({"command":["node"],"output":{"kind":"profiles","format":"v8-cpuprofile"}}),
+    )
+    .unwrap();
+    engine
+        .finish_with_policy(
+            run,
+            Target {
+                exit_code: Some(0),
+                outcome: None,
+                canceled: false,
+                timed_out: false,
+            },
+            Capture {
+                request,
+                plan,
+                start_failure: None,
+            },
+            resources::Retention::default(),
+            Policy {
+                checkpoint_duration: Duration::ZERO,
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+    let run = store.run("expired").unwrap();
+    assert_eq!(run.exit_code, Some(0));
+    assert!(run.correctness["passed"].is_null());
+    assert_eq!(run.correctness["checks"][0]["passed"], true);
+    assert!(run.correctness["checks"][1]["passed"].is_null());
+    assert_eq!(run.source["target_outcome"]["exit_code"], 0);
+    assert_eq!(run.source["target_outcome"]["status"], "validation_unknown");
+    assert_eq!(run.source["finishing"]["status"], "incomplete");
+    assert_eq!(run.source["raw_retention"]["complete"], false);
+    assert_eq!(run.source["sdk_ingestion"]["status"], "skipped");
+    assert!(store.records("expired").unwrap().is_empty());
+    assert!(store.artifacts("expired").unwrap().is_empty());
+    assert_eq!(fs::read(directory.join("stdout.txt")).unwrap(), b"exact\n");
+    assert!(directory.join("sdk/events.jsonl").is_file());
+}
+
+#[test]
+fn stdout_io_failure_settles_finishing_and_preserves_cancellation_and_known_exit() {
+    for (nonregular, canceled) in [(false, false), (true, true)] {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::storage::Store::open(root.path()).unwrap();
+        let engine = Engine::new(store.clone());
+        let directory = root.path().join("captures/io-failure");
+        fs::create_dir_all(directory.join("sdk")).unwrap();
+        if nonregular {
+            fs::create_dir(directory.join("stdout.txt")).unwrap();
+        }
+        fs::write(directory.join("stderr.txt"), b"retained error evidence").unwrap();
+        let run:Run=serde_json::from_value(json!({"id":"io-failure","name":"oracle IO failure","status":"running","command":["target"],"cwd":directory,"runtime":"none","started_at_us":1,"finished_at_us":null,"exit_code":null,"diagnostics":[],"source":{"resource_observation":{},"correctness_recipe":{"expected_exit_code":0,"expected_stdout_sha256":"known-but-unavailable"}},"correctness":{}})).unwrap();
+        store.save_run(&run).unwrap();
+        let request = CaptureRequest {
+            command: vec!["target".into()],
+            cwd: directory.clone(),
+            artifact_dir: directory.clone(),
+            run_id: run.id.clone(),
+            runtime: "none".into(),
+            env: BTreeMap::new(),
+        };
+        let plan = serde_json::from_value(
+            json!({"command":["target"],"output":{"kind":"profiles","format":"v8-cpuprofile"}}),
+        )
+        .unwrap();
+        engine
+            .finish(
+                run,
+                Target {
+                    exit_code: Some(0),
+                    outcome: None,
+                    canceled,
+                    timed_out: false,
+                },
+                Capture {
+                    request,
+                    plan,
+                    start_failure: None,
+                },
+                resources::Retention::default(),
+            )
+            .unwrap();
+        let run = store.run("io-failure").unwrap();
+        assert_eq!(
+            run.status,
+            if canceled {
+                RunStatus::Canceled
+            } else {
+                RunStatus::Failed
+            }
+        );
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.correctness["actual_exit_code"], 0);
+        assert_eq!(run.correctness["canceled"], canceled);
+        assert!(run.correctness["checks"][1]["passed"].is_null());
+        assert_eq!(run.source["finishing"]["status"], "incomplete");
+        assert!(
+            run.diagnostics
+                .iter()
+                .any(|value| value.contains("I/O failure"))
+        );
+        assert!(
+            store
+                .artifacts("io-failure")
+                .unwrap()
+                .iter()
+                .any(|artifact| artifact.name == "stderr.txt")
+        );
+    }
+}
