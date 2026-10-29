@@ -48,7 +48,11 @@ async fn unsupported_runtime_remains_a_recorded_planning_failure() {
     assert_eq!(run.runtime, "unsupported-runtime");
     let run = engine.wait(&run.id).await.unwrap();
     assert_eq!(run.status, "failed");
-    assert!(run.diagnostics.iter().any(|value| value.contains("unsupported runtime")));
+    assert!(
+        run.diagnostics
+            .iter()
+            .any(|value| value.contains("unsupported runtime"))
+    );
     assert!(run.exit_code.is_none());
 }
 

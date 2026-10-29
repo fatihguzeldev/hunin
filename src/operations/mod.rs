@@ -32,7 +32,9 @@ pub fn catalog() -> &'static Vec<Value> {
         let responses: Value =
             serde_json::from_str(include_str!("../../protocol/response.schema.json"))
                 .expect("embedded response definitions");
-        let definitions = responses["$defs"].as_object().expect("response definitions");
+        let definitions = responses["$defs"]
+            .as_object()
+            .expect("response definitions");
         for operation in &mut operations {
             if let Some(schema) = operation.get_mut("outputSchema") {
                 *schema = contracts::bundle(schema, definitions).expect("embedded output schema");

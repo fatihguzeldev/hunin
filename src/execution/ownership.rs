@@ -36,7 +36,10 @@ pub fn recover_abandoned(store: &Store) -> Result<()> {
     loop {
         let runs = store.runs(250, offset)?;
         let count = runs.len();
-        running.extend(runs.into_iter().filter(|run| run.status == RunStatus::Running));
+        running.extend(
+            runs.into_iter()
+                .filter(|run| run.status == RunStatus::Running),
+        );
         if count < 250 {
             break;
         }

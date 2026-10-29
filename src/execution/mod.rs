@@ -482,9 +482,13 @@ impl Engine {
                 bundle.completion.ensure_complete()?;
                 // Preserve the previous all-decode-before-publication behavior.
                 // Raw retention above also survives incomplete or invalid profiles.
-                bundle.profiles.iter().map(|profile| {
-                    crate::importers::import(&profile.path, &profile.format, &run.id)
-                }).collect::<Result<Vec<_>>>()
+                bundle
+                    .profiles
+                    .iter()
+                    .map(|profile| {
+                        crate::importers::import(&profile.path, &profile.format, &run.id)
+                    })
+                    .collect::<Result<Vec<_>>>()
             });
             match profiles {
                 Ok(profiles) => {

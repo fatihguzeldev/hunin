@@ -4,9 +4,12 @@ pub(crate) mod native_tool;
 pub(crate) mod probe;
 mod selection;
 mod settings;
-pub use selection::{CaptureAdapter, RuntimeRegistration, registered_runtimes, select_runtime};
-pub use finalization::{CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState, RawCaptureBundle, RawProfile, capture_artifacts};
 use anyhow::{Context, Result, bail};
+pub use finalization::{
+    CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
+    RawCaptureBundle, RawProfile, capture_artifacts,
+};
+pub use selection::{CaptureAdapter, RuntimeRegistration, registered_runtimes, select_runtime};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,

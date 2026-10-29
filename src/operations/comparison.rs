@@ -1,4 +1,8 @@
-use crate::{model::runs::{Run, RunStatus}, query, storage::Store};
+use crate::{
+    model::runs::{Run, RunStatus},
+    query,
+    storage::Store,
+};
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
