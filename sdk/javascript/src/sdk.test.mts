@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 function run(
-  workload: 'disabled' | 'concurrent' | 'write-error',
+  workload: 'disabled' | 'concurrent' | 'write-error' | 'callback-error',
   env: NodeJS.ProcessEnv = {},
 ) {
   const path = fileURLToPath(
@@ -41,6 +41,32 @@ test('disabled instrumentation preserves values and exceptions', () => {
   const result = run('disabled');
   // Assertions also run inside the target, independently of the SDK internals.
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('throwing error formatters preserve original sync and async target exceptions', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-sdk-callback-error-'));
+  try {
+    const result = run('callback-error', {
+      HUNIN_RUN_ID: 'test-run',
+      HUNIN_RECORD_DIR: directory,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'target-ok\n');
+    const rows = readdirSync(directory).flatMap((path) =>
+      readFileSync(join(directory, path), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line): unknown => JSON.parse(line)),
+    );
+    const spans = rows.filter((row) => isRow(row) && row.kind === 'span');
+    assert.equal(spans.length, 4);
+    for (const span of spans) {
+      assert.ok(isRow(span) && isRow(span.attributes));
+      assert.equal(span.attributes.error, 'Error message unavailable');
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('write failure disables new propagation tokens without changing target behavior', () => {

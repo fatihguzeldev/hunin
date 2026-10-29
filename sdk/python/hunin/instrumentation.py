@@ -93,6 +93,14 @@ def flush():
         _failure = error
 
 
+def _error_message(error):
+    try:
+        return str(error)
+    except BaseException:
+        # Diagnostic formatting must not replace the active target exception.
+        return "Error message unavailable"
+
+
 class Span:
     def __init__(self, name, attributes=None):
         self.name, self.attributes = name, attributes or {}
@@ -111,7 +119,16 @@ class Span:
     def __exit__(self, exc_type, exc, traceback):
         if self._token is not None:
             _ambient.reset(self._token)
-        self.end({"status": "error", "error": str(exc)} if exc is not None else None)
+        attributes = None
+        if (
+            exc is not None
+            and self.id is not None
+            and not self.ended
+            and self.owner_pid == os.getpid()
+            and enabled()
+        ):
+            attributes = {"status": "error", "error": _error_message(exc)}
+        self.end(attributes)
         return False
 
     async def __aenter__(self):

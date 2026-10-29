@@ -80,6 +80,14 @@ function fail(error: unknown): void {
         });
 }
 
+function errorMessage(error: unknown): string {
+  try {
+    return String(error);
+  } catch {
+    return 'Error message unavailable';
+  }
+}
+
 function append<K extends keyof Fields>(
   kind: K,
   fields: Fields[K],
@@ -239,7 +247,7 @@ export function withSpan(
             return value;
           },
           (error: unknown) => {
-            span.end({ status: 'error', error: String(error) });
+            span.end({ status: 'error', error: errorMessage(error) });
             throw error;
           },
         );
@@ -247,7 +255,7 @@ export function withSpan(
       span.end();
       return result;
     } catch (error) {
-      span.end({ status: 'error', error: String(error) });
+      span.end({ status: 'error', error: errorMessage(error) });
       throw error;
     }
   });

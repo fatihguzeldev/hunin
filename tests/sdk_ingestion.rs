@@ -86,3 +86,48 @@ async fn actual_sdk_write_failure_preserves_target_behavior_and_rejects_unreadab
         b"blocked-sdk-output",
     );
 }
+
+#[tokio::test]
+async fn sdk_error_formatters_preserve_target_exceptions_and_accept_valid_spools() {
+    for runtime in ["node", "python"] {
+        let project = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        let engine = Engine::new(store.clone());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (command, expected) = if runtime == "node" {
+            (
+                vec![
+                    "node".to_owned(),
+                    root.join("sdk/javascript/test/callback-error.mjs")
+                        .display()
+                        .to_string(),
+                ],
+                5,
+            )
+        } else {
+            (vec![if cfg!(windows) { "python" } else { "python3" }.to_owned(), "-c".into(),
+                "import hunin\nclass TargetError(Exception):\n def __str__(self): raise RuntimeError('formatter-error')\noriginal=TargetError()\ntry:\n with hunin.context('request'), hunin.span('work'): raise original\nexcept BaseException as actual:\n assert actual is original\nhunin.flush()\nassert hunin.last_error() is None\nprint('target-ok')".into()], 2)
+        };
+        let run = engine
+            .start(
+                serde_json::from_value(json!({
+                    "command":command,"cwd":project.path(),"runtime":"none",
+                    "env":{"PYTHONPATH":root.join("sdk/python")},"expected_stdout":"target-ok\n",
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let run = engine.wait(&run.id).await.unwrap();
+        assert_eq!(run.status, "completed", "{runtime}: {:?}", run.diagnostics);
+        assert_eq!(run.exit_code, Some(0));
+        assert_eq!(run.correctness["passed"], true);
+        assert_eq!(run.source["sdk_ingestion"]["status"], "accepted");
+        assert_eq!(run.source["sdk_ingestion"]["record_count"], expected);
+        let records = store.records(&run.id).unwrap();
+        for span in records.iter().filter(|record| record["kind"] == "span") {
+            assert_eq!(span["attributes"]["error"], "Error message unavailable");
+        }
+    }
+}
