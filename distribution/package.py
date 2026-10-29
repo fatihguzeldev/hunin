@@ -14,6 +14,11 @@ import tarfile
 import tomllib
 import zipfile
 
+if __package__:
+    from .bundle import inventory
+else:
+    from bundle import inventory
+
 PLATFORMS = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64")
 RUST_TARGETS = {
     "linux-x64": "x86_64-unknown-linux-gnu",
@@ -21,15 +26,6 @@ RUST_TARGETS = {
     "macos-x64": "x86_64-apple-darwin",
     "macos-arm64": "aarch64-apple-darwin",
     "windows-x64": "x86_64-pc-windows-msvc",
-}
-SKIP = {
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".venv",
-    ".git",
-    ".DS_Store",
-    ".pytest_cache",
 }
 
 
@@ -147,32 +143,8 @@ def verify_native_collector(files, target):
 
 def contents(root, binary, target):
     files = {"hunin.exe" if binary.suffix == ".exe" else "hunin": binary.read_bytes()}
-    for source, destination in (
-        (root / "ui/dist", "ui"),
-        (root / "sdk", "sdk"),
-        (root / "collectors", "collectors"),
-        (root / "protocol", "protocol"),
-    ):
-        if not source.is_dir():
-            raise ValueError(f"Required bundle component missing: {source}")
-        for path in sorted(source.rglob("*")):
-            if SKIP.intersection(path.relative_to(source).parts):
-                continue
-            if path.is_symlink():
-                raise ValueError(f"Bundle source must not contain symlinks: {path}")
-            if path.is_file():
-                files[f"{destination}/{path.relative_to(source).as_posix()}"] = (
-                    path.read_bytes()
-                )
-    if "ui/index.html" not in files:
-        raise ValueError(
-            "Build the UI before packaging (cd ui && npm ci && npm run build)"
-        )
+    files.update(inventory.contents(root, target))
     verify_native_collector(files, target)
-    files["install.py"] = (root / "distribution/install.py").read_bytes()
-    files["fetch_samply.py"] = (root / "distribution/fetch_samply.py").read_bytes()
-    for name in ("fetch_runtime.py", "runtime-assets.json"):
-        files[name] = (root / "distribution" / name).read_bytes()
     return files
 
 

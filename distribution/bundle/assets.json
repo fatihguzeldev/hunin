@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "components": [
+    {
+      "name": "javascript-collector",
+      "source_root": "collectors/javascript",
+      "destination_root": "collectors/javascript",
+      "build": "npm ci && npm run build:runtime",
+      "files": {
+        "plan.mjs": "plan.mjs",
+        "clock-preload.mjs": "clock-preload.mjs",
+        "bun-preload.mjs": "bun-preload.mjs",
+        "deno-workers.mjs": "deno-workers.mjs",
+        "sources-preload.mjs": "sources-preload.mjs",
+        "host/plan.mjs": "host/plan.mjs",
+        "agents/clock.mjs": "agents/clock.mjs",
+        "agents/bun.mjs": "agents/bun.mjs",
+        "agents/deno-workers.mjs": "agents/deno-workers.mjs",
+        "source/snapshots.mjs": "source/snapshots.mjs"
+      }
+    },
+    {
+      "name": "python-collector",
+      "source_root": "collectors/python",
+      "destination_root": "collectors/python",
+      "files": {
+        "capture.py": "capture.py",
+        "cpu.py": "cpu.py",
+        "cpu_clock.py": "cpu_clock.py",
+        "decode.py": "decode.py",
+        "entry.py": "entry.py",
+        "graal.py": "graal.py"
+      }
+    },
+    {
+      "name": "native-collector",
+      "source_root": "collectors/native",
+      "destination_root": "collectors/native",
+      "build": "python collectors/native/build.py --output collectors/native/bin/samply[.exe] --cache /your/build-cache",
+      "files": {
+        "manifest.json": "manifest.json",
+        "bin/{native_executable}": "bin/{native_executable}",
+        "bin/{native_executable}.provenance.json": "bin/{native_executable}.provenance.json",
+        "bin/LICENSE-MIT": "bin/LICENSE-MIT",
+        "bin/LICENSE-APACHE": "bin/LICENSE-APACHE",
+        "patches/0001-native-lifetime-export.patch": "patches/0001-native-lifetime-export.patch",
+        "patches/0002-platform-mapping-observations.patch": "patches/0002-platform-mapping-observations.patch",
+        "patches/0003-root-target-outcome.patch": "patches/0003-root-target-outcome.patch",
+        "patches/0004-windows-session-ownership.patch": "patches/0004-windows-session-ownership.patch",
+        "patches/0005-windows-image-unload-dispatch.patch": "patches/0005-windows-image-unload-dispatch.patch",
+        "patches/0006-pe-embedded-dwarf.patch": "patches/0006-pe-embedded-dwarf.patch",
+        "patches/0007-windows-helper-lifetime-cleanup.patch": "patches/0007-windows-helper-lifetime-cleanup.patch",
+        "patches/0008-windows-sampled-instruction-pointer.patch": "patches/0008-windows-sampled-instruction-pointer.patch",
+        "patches/0009-macos-consistent-dyld-snapshot.patch": "patches/0009-macos-consistent-dyld-snapshot.patch"
+      }
+    },
+    {
+      "name": "javascript-sdk",
+      "source_root": "sdk/javascript",
+      "destination_root": "sdk/javascript",
+      "build": "npm ci && npm run build:sdk",
+      "files": {
+        "index.mjs": "index.mjs",
+        "index.d.mts": "index.d.mts",
+        "package.json": "package.json"
+      }
+    },
+    {
+      "name": "python-sdk",
+      "source_root": "sdk/python",
+      "destination_root": "sdk/python",
+      "files": {
+        "pyproject.toml": "pyproject.toml",
+        "hunin/__init__.py": "hunin/__init__.py",
+        "hunin/instrumentation.py": "hunin/instrumentation.py"
+      }
+    },
+    {
+      "name": "rust-sdk",
+      "source_root": "sdk/rust",
+      "destination_root": "sdk/rust",
+      "files": {
+        "Cargo.toml": "Cargo.toml",
+        "src/lib.rs": "src/lib.rs",
+        "src/recording.rs": "src/recording.rs"
+      }
+    },
+    {
+      "name": "go-sdk",
+      "source_root": "sdk/go",
+      "destination_root": "sdk/go",
+      "files": { "go.mod": "go.mod", "hunin.go": "hunin.go" }
+    },
+    {
+      "name": "c-sdk",
+      "source_root": "sdk/c",
+      "destination_root": "sdk/c",
+      "files": {
+        "CMakeLists.txt": "CMakeLists.txt",
+        "include/hunin.h": "include/hunin.h",
+        "src/hunin.c": "src/hunin.c"
+      }
+    },
+    {
+      "name": "cpp-sdk",
+      "source_root": "sdk/cpp",
+      "destination_root": "sdk/cpp",
+      "files": { "include/hunin.hpp": "include/hunin.hpp" }
+    },
+    {
+      "name": "protocol",
+      "source_root": "protocol",
+      "destination_root": "protocol",
+      "files": {
+        "record.schema.json": "record.schema.json",
+        "operations.json": "operations.json",
+        "response.schema.json": "response.schema.json"
+      }
+    },
+    {
+      "name": "installation",
+      "source_root": "distribution",
+      "destination_root": ".",
+      "files": { "install.py": "install.py" }
+    },
+    {
+      "name": "runtime-provisioning",
+      "source_root": "distribution",
+      "destination_root": ".",
+      "files": {
+        "fetch_runtime.py": "fetch_runtime.py",
+        "runtime-assets.json": "runtime-assets.json"
+      }
+    },
+    {
+      "name": "ui",
+      "source_root": "ui/dist",
+      "destination_root": "ui",
+      "build": "npm --prefix ui ci && npm --prefix ui run build",
+      "files": { "index.html": "index.html", "hunin.svg": "hunin.svg" },
+      "vite_manifest": ".vite/manifest.json",
+      "entry": "index.html"
+    }
+  ]
+}

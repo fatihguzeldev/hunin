@@ -33,6 +33,9 @@
 !/collectors/javascript/src/**/*.mts
 !/protocol/
 !/protocol/**/*.json
+!/distribution/
+!/distribution/**/
+!/distribution/**/*.json
 
 **/node_modules/**
 /ui/dist/**
@@ -43,4 +46,5 @@
 /sdk/javascript/*.d.mts
 /sdk/javascript/test/**
 /sdk/conformance/javascript.mjs
+/distribution/**/fixtures/**
 **/package-lock.json
