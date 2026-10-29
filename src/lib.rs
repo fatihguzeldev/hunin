@@ -6,6 +6,7 @@ pub mod ingestion;
 pub mod interfaces;
 pub mod model;
 pub mod operations;
+mod publication;
 pub mod query;
 mod recordings;
 mod source;

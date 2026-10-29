@@ -1,6 +1,10 @@
 use crate::{
     ingestion,
-    model::runs::{Artifact, Run, RunStatus},
+    model::{
+        relations::{Ownership, OwnershipKind, SelectedObservation},
+        runs::{Artifact, Run, RunStatus},
+    },
+    publication,
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -269,40 +273,26 @@ impl Store {
             return Ok(false);
         }
         deactivate_source(&tx, run_id, source_key)?;
-        let existing: HashSet<String> = tx
-            .prepare("SELECT o.id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
-            .query_map([run_id], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        ingestion::validate(run_id, records, &existing)?;
-        let existing_rows: HashMap<String, Value> = tx
-            .prepare("SELECT o.id,o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
-            .query_map([run_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        // The write transaction owns this selected snapshot through insertion.
+        // Acceptance only needs relationship projections, never whole stack/source payloads.
+        let selected: HashMap<String, SelectedObservation> = tx
+            .prepare("SELECT o.id,o.kind,json_extract(o.record,'$.parent_id'),json_extract(o.record,'$.context_id'),o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
+            .query_map([run_id], |row| {
+                let kind: String = row.get(1)?;
+                Ok((row.get(0)?, SelectedObservation {
+                    ownership: Ownership {
+                        kind: OwnershipKind::from_wire(&kind),
+                        parent_id: row.get(2)?,
+                        context_id: row.get(3)?,
+                    },
+                    result_set_id: row.get(4)?,
+                }))
             })?
-            .map(|row| {
-                let (id, text) = row?;
-                Ok((id, serde_json::from_str(&text)?))
-            })
-            .collect::<Result<_>>()?;
-        ingestion::validate_ownership(records, &existing_rows)?;
-        let mut dependencies = HashSet::new();
-        let own_ids: HashSet<&str> = records.iter().filter_map(|r| r["id"].as_str()).collect();
-        for record in records {
-            let references = ["parent_id", "context_id", "from", "to"]
-                .into_iter()
-                .filter_map(|key| record[key].as_str())
-                .chain(
-                    record["evidence"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str),
-                );
-            for reference in references.filter(|id| !own_ids.contains(id)) {
-                let id: String = tx.query_row("SELECT o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND o.id=?2 AND r.active=1",params![run_id,reference],|r|r.get(0))?;
-                dependencies.insert(id);
-            }
-        }
+            .collect::<rusqlite::Result<_>>()?;
+        let existing = selected.keys().cloned().collect();
+        ingestion::validate(run_id, records, &existing)?;
+        let mut dependencies =
+            publication::validate_relations(&ingestion::links(records), &selected)?;
         if let Some((_, _, value)) = document
             && let Some(inputs) = value.get("input_result_sets")
         {

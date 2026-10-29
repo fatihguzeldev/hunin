@@ -297,6 +297,48 @@ fn references_preserve_kind_and_acyclic_parent_context_ownership() {
 }
 
 #[test]
+fn replacing_inputs_invalidates_results_linked_by_observation_references() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let mut span = event("span");
+    span["kind"] = json!("span");
+    span["duration_us"] = json!(1);
+    let mut context = event("context");
+    context["kind"] = json!("context");
+    store
+        .accept_import("run-1", "raw", "first", &[span, context, event("evidence")])
+        .unwrap();
+    let mut derived = event("derived");
+    derived["parent_id"] = json!("span");
+    derived["context_id"] = json!("context");
+    derived["evidence"] = json!(["evidence"]);
+    store.accept("run-1", "dependent", &[derived]).unwrap();
+    store
+        .accept("run-1", "independent", &[event("independent")])
+        .unwrap();
+    store
+        .accept_import("run-1", "raw", "second", &[event("replacement")])
+        .unwrap();
+    let ids: Vec<_> = store
+        .records("run-1")
+        .unwrap()
+        .into_iter()
+        .map(|row| row["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&"replacement".to_owned()));
+    assert!(ids.contains(&"independent".to_owned()));
+    assert!(
+        store
+            .selected_result_id("run-1", "dependent")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.records_history("run-1").unwrap().len(), 6);
+}
+
+#[test]
 fn reanalysis_selects_one_normalization_and_preserves_history() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

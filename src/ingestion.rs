@@ -1,3 +1,4 @@
+use crate::model::relations::{ObservationLinks, Ownership, OwnershipKind, SelectedObservation};
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -47,30 +48,49 @@ pub fn validate(run_id: &str, records: &[Value], existing: &HashSet<String>) -> 
 }
 
 pub fn validate_ownership(records: &[Value], existing: &HashMap<String, Value>) -> Result<()> {
-    let mut all = existing.clone();
-    all.extend(
-        records
-            .iter()
-            .map(|r| (r["id"].as_str().unwrap().to_owned(), r.clone())),
-    );
-    for record in records {
-        for (field, kind) in [("parent_id", "span"), ("context_id", "context")] {
-            if let Some(id) = record[field].as_str()
-                && all.get(id).is_none_or(|r| r["kind"] != kind)
-            {
-                bail!("{field} must reference a {kind}: {id}");
-            }
-        }
-        for field in ["parent_id", "context_id"] {
-            let mut seen = HashSet::new();
-            let mut current = Some(record);
-            while let Some(row) = current {
-                if !seen.insert(row["id"].as_str().unwrap()) {
-                    bail!("cyclic {field} ownership");
-                }
-                current = row[field].as_str().and_then(|id| all.get(id));
-            }
-        }
+    let selected = existing
+        .iter()
+        .map(|(id, row)| {
+            (
+                id.clone(),
+                SelectedObservation {
+                    ownership: ownership(row),
+                    result_set_id: String::new(),
+                },
+            )
+        })
+        .collect();
+    crate::publication::validate_ownership(&links(records), &selected)
+}
+
+fn ownership(record: &Value) -> Ownership {
+    Ownership {
+        kind: OwnershipKind::from_wire(record["kind"].as_str().unwrap_or("")),
+        parent_id: record["parent_id"].as_str().map(str::to_owned),
+        context_id: record["context_id"].as_str().map(str::to_owned),
     }
-    Ok(())
+}
+
+/// Called after schema validation. This adapter owns JSON field interpretation;
+/// publication reasons only about typed links and selected result identities.
+pub(crate) fn links(records: &[Value]) -> Vec<ObservationLinks> {
+    records
+        .iter()
+        .map(|record| ObservationLinks {
+            id: record["id"].as_str().unwrap().to_owned(),
+            ownership: ownership(record),
+            references: ["parent_id", "context_id", "from", "to"]
+                .into_iter()
+                .filter_map(|field| record[field].as_str())
+                .chain(
+                    record["evidence"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .map(str::to_owned)
+                .collect(),
+        })
+        .collect()
 }
