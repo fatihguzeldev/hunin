@@ -29,10 +29,11 @@ static void marker(const char *kind,int phase,void *address=nullptr) {
 int main(int argc,char **argv) {
   if(argc!=4)return 10;
   for(int phase=0;phase<3;phase++) {
+    marker("before_load",phase);
     Library library=load(argv[phase==1?2:1]);if(!library)return 11;
     Hot hot=reinterpret_cast<Hot>(symbol(library));if(!hot)return 12;
     marker("loaded",phase,reinterpret_cast<void *>(hot));hot(220);
-    close(library);marker("unloaded",phase);busy(100);
+    marker("before_unload",phase);close(library);marker("unloaded",phase);busy(100);
   }
   Library first=load(argv[1]),alias=load(argv[3]);if(!first||!alias)return 13;
   Hot a=reinterpret_cast<Hot>(symbol(first)),b=reinterpret_cast<Hot>(symbol(alias));if(!a||!b)return 14;
