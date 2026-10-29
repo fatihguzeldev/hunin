@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+import py_compile
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+import zipfile
 
 
 HERE = Path(__file__).resolve().parent
@@ -97,6 +99,73 @@ class TargetEntryTest(unittest.TestCase):
             self.assertEqual(captured.returncode, direct.returncode)
             self.assertEqual(captured.stdout, direct.stdout)
             self.assertEqual(captured.stderr, direct.stderr)
+
+    def test_script_and_module_keep_native_main_globals_through_exit(self):
+        source = textwrap.dedent("""\
+            import atexit, json, os, sys
+            marker = 'target still available'
+            def observe(stage):
+                import __main__
+                exec('nested_result = 42', globals())
+                loader = globals().get('__loader__')
+                print(json.dumps({
+                    'stage': stage,
+                    'same_globals': globals() is vars(__main__),
+                    'marker': getattr(__main__, 'marker', None),
+                    'nested_result': getattr(__main__, 'nested_result', None),
+                    'argv': sys.argv,
+                    'cwd': os.getcwd(),
+                    'path0': sys.path[0],
+                    'package': globals().get('__package__'),
+                    'file': globals().get('__file__'),
+                    'cached': globals().get('__cached__'),
+                    'spec': __spec__.name if __spec__ else None,
+                    'loader': getattr(loader, '__name__', type(loader).__name__),
+                    'loader_path': getattr(loader, 'path', None),
+                    'builtins_type': type(__builtins__).__name__,
+                }, sort_keys=True))
+            atexit.register(observe, 'atexit')
+            observe('target')
+            raise SystemExit(7)
+            """)
+        with tempfile.TemporaryDirectory(prefix="hunin-python-main-exit-") as directory:
+            work = Path(directory)
+            (work / "main.py").write_text(source)
+            package = work / "target_package"
+            package.mkdir()
+            (package / "__init__.py").write_text("")
+            (package / "main.py").write_text(source)
+            (package / "__main__.py").write_text(source)
+            bundle = work / "bundle"
+            bundle.mkdir()
+            (bundle / "__main__.py").write_text(source)
+            with zipfile.ZipFile(work / "bundle.pyz", "w") as archive:
+                archive.writestr("__main__.py", source)
+            targets = [
+                ("script", ["main.py"]),
+                ("module", ["-m", "target_package.main"]),
+                ("package", ["-m", "target_package"]),
+                ("command", ["-c", source]),
+                ("directory", ["bundle"]),
+                ("zip", ["bundle.pyz"]),
+            ]
+            # GraalPy's launcher does not execute standalone pyc files. Its
+            # product route uses that native launcher, not this wrapper.
+            if sys.implementation.name != "graalpy":
+                py_compile.compile(str(work / "main.py"), str(work / "entry.pyc"))
+                targets.append(("bytecode", ["entry.pyc"]))
+            for label, target in targets:
+                with self.subTest(target=label):
+                    arguments = [*target, "argument with spaces"]
+                    direct = self.invoke(arguments, work, capture=False)
+                    captured = self.invoke(arguments, work, capture=True)
+                    self.assertEqual(direct.returncode, 7, direct.stderr)
+                    self.assertEqual(captured.returncode, 7, captured.stderr)
+                    self.assertEqual(
+                        [json.loads(line) for line in captured.stdout.splitlines()],
+                        [json.loads(line) for line in direct.stdout.splitlines()],
+                    )
+                    self.assertEqual(captured.stderr, direct.stderr)
 
 
 if __name__ == "__main__":

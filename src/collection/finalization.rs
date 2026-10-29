@@ -1,4 +1,4 @@
-use super::{CapturePlan, CaptureRequest, javascript, profile_format};
+use super::{CapturePlan, CaptureRequest, javascript, profile_format, python};
 use crate::host::walk_files;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ pub enum CaptureOutput {
     Profiles {
         format: String,
     },
+    GraalCpuSampler,
     DenoWorkers {
         producer_id: String,
     },
@@ -84,6 +85,16 @@ pub struct RawCaptureBundle {
 }
 
 impl CapturePlan {
+    /// Let an owned adapter retain facts observed at process spawn.
+    pub fn on_started(&self, request: &CaptureRequest, pid: u32) -> Result<()> {
+        match self.output {
+            CaptureOutput::GraalCpuSampler => {
+                python::graal_started(request, pid, self.runtime_version.as_deref())
+            }
+            _ => Ok(()),
+        }
+    }
+
     pub fn finalize(&self, request: &CaptureRequest) -> Result<RawCaptureBundle> {
         let artifacts = capture_artifacts(&request.artifact_dir)?;
         let files = artifacts
@@ -102,6 +113,16 @@ impl CapturePlan {
                 "declared_profile_artifacts",
                 vec!["Profile artifact presence does not establish an inventory of every target process, thread or worker".into()],
             ),
+            CaptureOutput::GraalCpuSampler => {
+                if let Err(error) = python::validate_graal_output(request, &files) {
+                    diagnostics.push(format!("{error:#}"));
+                }
+                (Some("graal-cpusampler"), python::GRAAL_COMPLETION_SCOPE, vec![
+                    "Only declared CPUSampler output and the owned runtime process identity are checked; this does not establish an inventory of child processes or sampling coverage of every thread".into(),
+                    "Graal thread labels remain guest-thread labels rather than OS thread IDs; profiling and runtime startup contribute overhead".into(),
+                    "Graal CPUSampler writes its output-file diagnostic to target stdout; no byte-exact stdout non-interference is claimed".into(),
+                ])
+            }
             CaptureOutput::DenoWorkers { producer_id } => {
                 match javascript::finalize_deno(&files, request, producer_id) {
                     Ok(value) => coverage = Some(value),

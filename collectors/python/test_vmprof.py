@@ -10,6 +10,54 @@ HERE = pathlib.Path(__file__).parent
 
 
 class VmprofCaptureTest(unittest.TestCase):
+    def test_script_and_module_keep_native_exit_namespace_and_flush_raw_profile(self):
+        source = (
+            "import atexit, json, sys\n"
+            "marker = 'target main survives capture'\n"
+            "def on_exit():\n"
+            "    import __main__\n"
+            "    print(json.dumps({'marker': __main__.marker, 'same_globals': vars(__main__) is globals(), 'package': __package__, 'argv': sys.argv}))\n"
+            "atexit.register(on_exit)\n"
+            "raise SystemExit(7)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "target.py").write_text(source)
+            (root / "entry_package").mkdir()
+            (root / "entry_package/__init__.py").write_text("")
+            (root / "entry_package/main.py").write_text(source)
+            for label, target in [
+                ("script", ["target.py"]),
+                ("module", ["-m", "entry_package.main"]),
+            ]:
+                with self.subTest(target=label):
+                    profile = root / (label + ".vmprof")
+                    arguments = [*target, "argument with spaces"]
+                    native = subprocess.run(
+                        [sys.executable, *arguments],
+                        cwd=root,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    captured = subprocess.run(
+                        [
+                            sys.executable,
+                            str(HERE.resolve() / "capture.py"),
+                            str(profile),
+                            "--",
+                            *arguments,
+                        ],
+                        cwd=root,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(native.returncode, 7, native.stderr)
+                    self.assertEqual(captured.returncode, 7, captured.stderr)
+                    self.assertEqual(captured.stdout, native.stdout)
+                    self.assertEqual(captured.stderr, native.stderr)
+                    self.assertGreater(profile.stat().st_size, 0)
+                    self.assertTrue(profile.with_suffix(".vmprof.meta.json").exists())
+
     def test_command_main_survives_exit_callbacks_and_flushes_failed_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             profile = pathlib.Path(directory) / "command.vmprof"

@@ -293,6 +293,17 @@ impl Engine {
         let execution_started_at_us = now_us();
         let (mut child, mut tree) = process::spawn(&mut command).await?;
         let pid = child.id().context("target process has no PID")?;
+        // A collector may retain evidence about the actual supervised process.
+        // Failure to retain that evidence must not stop or replace the target.
+        let collector_start_failure = plan
+            .on_started(&capture, pid)
+            .err()
+            .map(|error| format!("collector start evidence failed: {error:#}"));
+        if let Some(diagnostic) = &collector_start_failure {
+            run.source["collection_start"] =
+                json!({"status":"failed","diagnostic":diagnostic});
+            run.diagnostics.push(diagnostic.clone());
+        }
         #[cfg(windows)]
         let native_wrapper_birth = process_identity::birth(pid);
         let native_collection = native::handles_runtime(&run.runtime);
@@ -468,7 +479,11 @@ impl Engine {
                 .accept(&run.id, "process-resources-v1", &metrics)?;
         }
         if run.runtime != "none" {
-            let profiles = plan.finalize(&capture).and_then(|bundle| {
+            let profiles = plan.finalize(&capture).and_then(|mut bundle| {
+                if let Some(diagnostic) = &collector_start_failure {
+                    bundle.completion.state = collection::CompletionState::Incomplete;
+                    bundle.completion.diagnostics.push(diagnostic.clone());
+                }
                 run.source["collection_completion"] = serde_json::to_value(&bundle.completion)?;
                 bundle.completion.ensure_complete()?;
                 // Preserve the previous all-decode-before-publication behavior.
