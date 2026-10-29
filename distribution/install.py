@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Verify an extracted bundle, then install it into a user-owned directory."""
+
 import argparse
 import hashlib
 import json
@@ -14,16 +15,31 @@ def verify(bundle):
     manifest = json.loads((bundle / "manifest.json").read_text())
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported package manifest")
-    if manifest.get("platform") not in ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64") or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", manifest.get("version", "")):
+    if manifest.get("platform") not in (
+        "linux-x64",
+        "linux-arm64",
+        "macos-x64",
+        "macos-arm64",
+        "windows-x64",
+    ) or not re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", manifest.get("version", "")
+    ):
         raise ValueError("Invalid package platform or version")
     if not isinstance(manifest.get("files"), dict) or not manifest["files"]:
         raise ValueError("Package manifest has no files")
     for name, expected in manifest["files"].items():
         path = bundle / name
-        if "\\" in name or path.is_symlink() or not path.resolve().is_relative_to(bundle.resolve()):
+        if (
+            "\\" in name
+            or path.is_symlink()
+            or not path.resolve().is_relative_to(bundle.resolve())
+        ):
             raise ValueError(f"Unsafe package path: {name}")
         data = path.read_bytes()
-        if len(data) != expected["size"] or hashlib.sha256(data).hexdigest() != expected["sha256"]:
+        if (
+            len(data) != expected["size"]
+            or hashlib.sha256(data).hexdigest() != expected["sha256"]
+        ):
             raise ValueError(f"Package checksum mismatch: {name}")
     executable = "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
     if executable not in manifest["files"] or "ui/index.html" not in manifest["files"]:
@@ -38,7 +54,9 @@ def owned_link(link, prefix):
     try:
         executable = link.resolve(strict=True)
         manifest = verify(executable.parent)
-        expected = prefix.resolve() / f"{manifest['version']}-{manifest['platform']}" / "hunin"
+        expected = (
+            prefix.resolve() / f"{manifest['version']}-{manifest['platform']}" / "hunin"
+        )
         return executable == expected and not manifest["platform"].startswith("windows")
     except (OSError, ValueError, KeyError, TypeError):
         return False
@@ -48,7 +66,9 @@ def install(bundle, prefix, bin_dir=None):
     manifest = verify(bundle)
     destination = prefix / f"{manifest['version']}-{manifest['platform']}"
     if destination.exists():
-        raise ValueError(f"Install directory already exists: {destination}. Choose another --prefix to preserve it.")
+        raise ValueError(
+            f"Install directory already exists: {destination}. Choose another --prefix to preserve it."
+        )
     prefix.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".hunin-install-", dir=prefix) as staging:
         staged = Path(staging) / "bundle"
@@ -58,7 +78,9 @@ def install(bundle, prefix, bin_dir=None):
             target = staged / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-        executable = staged / ("hunin.exe" if manifest["platform"].startswith("windows") else "hunin")
+        executable = staged / (
+            "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
+        )
         if executable.name == "hunin":
             executable.chmod(0o755)
         staged.rename(destination)
@@ -67,7 +89,9 @@ def install(bundle, prefix, bin_dir=None):
         bin_dir.mkdir(parents=True, exist_ok=True)
         link = bin_dir / "hunin"
         if (link.exists() or link.is_symlink()) and not owned_link(link, prefix):
-            raise ValueError(f"Preserving existing executable: {link}. Bundle installed at {executable}.")
+            raise ValueError(
+                f"Preserving existing executable: {link}. Bundle installed at {executable}."
+            )
         replacement = bin_dir / ".hunin-link"
         if replacement.exists() or replacement.is_symlink():
             raise ValueError(f"Preserving existing staging link: {replacement}")
@@ -78,10 +102,27 @@ def install(bundle, prefix, bin_dir=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prefix", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local/share")) / "hunin")
-    parser.add_argument("--bin-dir", type=Path, help="Unix only: directory for a hunin symlink; no PATH modification")
+    parser.add_argument(
+        "--prefix",
+        type=Path,
+        default=Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local/share"))
+        / "hunin",
+    )
+    parser.add_argument(
+        "--bin-dir",
+        type=Path,
+        help="Unix only: directory for a hunin symlink; no PATH modification",
+    )
     args = parser.parse_args()
     if os.name == "nt" and args.bin_dir:
-        parser.error("--bin-dir is Unix-only; add the printed executable directory to your user PATH")
-    executable = install(Path(__file__).resolve().parent, args.prefix.expanduser().resolve(), args.bin_dir.expanduser().resolve() if args.bin_dir else None)
-    print(f"Installed {executable}\nAdd {args.bin_dir or executable.parent} to your PATH, or invoke the executable directly.")
+        parser.error(
+            "--bin-dir is Unix-only; add the printed executable directory to your user PATH"
+        )
+    executable = install(
+        Path(__file__).resolve().parent,
+        args.prefix.expanduser().resolve(),
+        args.bin_dir.expanduser().resolve() if args.bin_dir else None,
+    )
+    print(
+        f"Installed {executable}\nAdd {args.bin_dir or executable.parent} to your PATH, or invoke the executable directly."
+    )

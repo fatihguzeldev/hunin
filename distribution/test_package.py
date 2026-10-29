@@ -8,7 +8,9 @@ import unittest
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).with_name(name + ".py")
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -27,14 +29,31 @@ class PackageTests(unittest.TestCase):
         patches = [{"name": "0001.patch", "sha256": package.sha256(patch)}]
         binary = b"test-profiler"
         return {
-            base + "manifest.json": json.dumps({"upstream": upstream, "version": "test-version", "extension": extension}).encode(),
+            base + "manifest.json": json.dumps(
+                {
+                    "upstream": upstream,
+                    "version": "test-version",
+                    "extension": extension,
+                }
+            ).encode(),
             base + "patches/0001.patch": patch,
             base + "bin/samply": binary,
             base + "bin/LICENSE-MIT": b"MIT test license",
             base + "bin/LICENSE-APACHE": b"Apache test license",
-            base + "bin/samply.provenance.json": json.dumps({"target": "x86_64-unknown-linux-gnu", "binary_sha256": package.sha256(binary),
-                "version": "test-version", "extension": extension, "patch_sha256": package.sha256(json.dumps(patches, sort_keys=True, separators=(",", ":")).encode()),
-                "identity": {"upstream": upstream, "patches": patches}}).encode(),
+            base + "bin/samply.provenance.json": json.dumps(
+                {
+                    "target": "x86_64-unknown-linux-gnu",
+                    "binary_sha256": package.sha256(binary),
+                    "version": "test-version",
+                    "extension": extension,
+                    "patch_sha256": package.sha256(
+                        json.dumps(
+                            patches, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ),
+                    "identity": {"upstream": upstream, "patches": patches},
+                }
+            ).encode(),
         }
 
     def bundle(self, root, version):
@@ -44,17 +63,38 @@ class PackageTests(unittest.TestCase):
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        (root / "manifest.json").write_text(json.dumps({
-            "schema_version": 1, "version": version, "platform": "linux-x64",
-            "files": {name: {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()},
-        }))
+        (root / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "version": version,
+                    "platform": "linux-x64",
+                    "files": {
+                        name: {
+                            "size": len(data),
+                            "sha256": hashlib.sha256(data).hexdigest(),
+                        }
+                        for name, data in files.items()
+                    },
+                }
+            )
+        )
         return root
 
     def test_bundle_retains_assets_and_install_verifies_integrity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "Cargo.toml").write_text('[package]\nversion="0.1.0"\n')
-            for path in ("ui/dist/index.html", "sdk/python/hunin.py", "collectors/python/collect.py", "protocol/record.schema.json", "distribution/install.py", "distribution/fetch_samply.py", "distribution/fetch_runtime.py", "distribution/runtime-assets.json"):
+            for path in (
+                "ui/dist/index.html",
+                "sdk/python/hunin.py",
+                "collectors/python/collect.py",
+                "protocol/record.schema.json",
+                "distribution/install.py",
+                "distribution/fetch_samply.py",
+                "distribution/fetch_runtime.py",
+                "distribution/runtime-assets.json",
+            ):
                 target = root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(path)
@@ -66,6 +106,7 @@ class PackageTests(unittest.TestCase):
             binary.write_bytes(b"test-binary")
             archive = package.assemble(root, binary, root / "output", "linux-x64")
             import tarfile
+
             with tarfile.open(archive) as bundle:
                 bundle.extractall(root / "extracted", filter="data")
             extracted = next((root / "extracted").iterdir())
@@ -75,7 +116,11 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
             if os.name != "nt":
-                self.assertTrue(os.access(installed.parent / "collectors/native/bin/samply", os.X_OK))
+                self.assertTrue(
+                    os.access(
+                        installed.parent / "collectors/native/bin/samply", os.X_OK
+                    )
+                )
             (extracted / "hunin").write_bytes(b"modified")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 installer.verify(extracted)
@@ -103,7 +148,16 @@ class PackageTests(unittest.TestCase):
             root = Path(temporary)
             (root / "bundle").mkdir()
             (root / "outside").write_text("private")
-            (root / "bundle/manifest.json").write_text(json.dumps({"schema_version": 1, "version": "0.1.0", "platform": "linux-x64", "files": {"../outside": {"size": 7, "sha256": "unused"}}}))
+            (root / "bundle/manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "version": "0.1.0",
+                        "platform": "linux-x64",
+                        "files": {"../outside": {"size": 7, "sha256": "unused"}},
+                    }
+                )
+            )
             with self.assertRaisesRegex(ValueError, "Unsafe package path"):
                 installer.verify(root / "bundle")
 
@@ -121,7 +175,9 @@ class PackageTests(unittest.TestCase):
                         target.write_bytes(b"unrelated executable")
                     link = case / "bin/hunin"
                     link.symlink_to(target)
-                    with self.assertRaisesRegex(ValueError, "Preserving existing executable"):
+                    with self.assertRaisesRegex(
+                        ValueError, "Preserving existing executable"
+                    ):
                         installer.install(bundle, case / "installed", case / "bin")
                     self.assertEqual(link.readlink(), target)
                     if kind == "unrelated":
