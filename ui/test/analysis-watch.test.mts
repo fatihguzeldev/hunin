@@ -170,3 +170,17 @@ test('the backend recovery interrupted status is terminal without implying accep
   );
   assert.deepEqual(watch.forRun('recording'), []);
 });
+
+test('confirmed recording removal forgets its read interest without canceling or forgetting other jobs', () => {
+  const storage = session();
+  const watch = new AnalysisWatch(storage);
+  watch.track('removed', 'attempt-a');
+  watch.track('kept', 'attempt-b');
+  watch.forgetRun('removed');
+  assert.deepEqual(watch.forRun('removed'), []);
+  assert.equal(watch.forRun('kept').length, 1);
+  assert.equal(watch.track('removed', 'late-start-response'), false);
+  const restored = new AnalysisWatch(storage);
+  assert.deepEqual(restored.forRun('removed'), []);
+  assert.equal(restored.forRun('kept').length, 1);
+});

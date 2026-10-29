@@ -1,10 +1,12 @@
 import { operation } from './api';
-import { button, el, field } from './dom';
+import { button, el, field, lockFields } from './dom';
 import { parseCommand } from './command';
 import { workloadFields } from './workload-fields';
 import { collectionMode } from './collection-mode';
 
-export function recordDialog(onRecorded: (id: string) => void): void {
+export function recordDialog(
+  onRecorded: (id: string, foreground: boolean) => void,
+): void {
   const dialog = el('dialog', { 'aria-labelledby': 'record-title' });
   const name = el('input', {
     placeholder: 'e.g. renderer baseline',
@@ -32,6 +34,7 @@ export function recordDialog(onRecorded: (id: string) => void): void {
   });
   const workload = workloadFields();
   const error = el('p', { class: 'metric-note', role: 'alert' });
+  const cancel = button('Cancel', () => dialog.close(), 'button subtle');
   const submit = button(
     'Start recording',
     () => {
@@ -65,12 +68,7 @@ export function recordDialog(onRecorded: (id: string) => void): void {
       workload.element,
       error,
     ),
-    el(
-      'div',
-      { class: 'dialog-actions' },
-      button('Cancel', () => dialog.close(), 'button subtle'),
-      submit,
-    ),
+    el('div', { class: 'dialog-actions' }, cancel, submit),
   );
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -86,6 +84,7 @@ export function recordDialog(onRecorded: (id: string) => void): void {
   name.focus();
   async function start(): Promise<void> {
     if (submit.disabled || !form.reportValidity()) return;
+    let unlock: (() => void) | undefined;
     try {
       const args = parseCommand(command.value);
       const seconds = Number(timeout.value);
@@ -94,7 +93,10 @@ export function recordDialog(onRecorded: (id: string) => void): void {
       const options = workload.value();
       const runtime = mode.value();
       submit.disabled = true;
-      error.textContent = 'Starting collector…';
+      unlock = lockFields(form);
+      cancel.textContent = 'Close dialog';
+      error.textContent =
+        'Starting collector… Closing this dialog does not cancel the submitted recording.';
       const result = await operation('runs.start', {
         name: name.value || undefined,
         command: args,
@@ -103,12 +105,15 @@ export function recordDialog(onRecorded: (id: string) => void): void {
         timeout_seconds: seconds,
         ...options,
       });
-      dialog.close();
-      onRecorded(result.run.id);
+      const foreground = dialog.open;
+      if (dialog.open) dialog.close();
+      onRecorded(result.run.id, foreground);
     } catch (failure) {
       error.textContent =
         failure instanceof Error ? failure.message : String(failure);
       submit.disabled = false;
+    } finally {
+      unlock?.();
     }
   }
 }

@@ -440,8 +440,11 @@
 }
 @media (max-width: 760px) {
   .app-header {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
     gap: 12px;
-    padding: 0 12px;
+    padding: 8px 12px;
   }
   .header-caption {
     display: none;

@@ -39,6 +39,21 @@ export function field(label: string, input: HTMLElement): HTMLLabelElement {
   return el('label', { class: 'field' }, el('span', {}, label), input);
 }
 
+export function lockFields(form: HTMLFormElement): () => void {
+  const fields = [
+    ...form.querySelectorAll<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >('input, select, textarea'),
+  ].filter((field) => !field.disabled);
+  fields.forEach((field) => {
+    field.disabled = true;
+  });
+  return () =>
+    fields.forEach((field) => {
+      field.disabled = false;
+    });
+}
+
 export function empty(
   title: string,
   detail: string,

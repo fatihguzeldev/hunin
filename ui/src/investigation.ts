@@ -55,7 +55,8 @@ type SavedInvestigation = {
 };
 
 type Entry = SavedInvestigation & { restored: boolean };
-type SessionStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type SessionStorage = Pick<Storage, 'getItem' | 'setItem'> &
+  Partial<Pick<Storage, 'removeItem'>>;
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -280,6 +281,17 @@ export class Investigations {
         `hunin.investigation.v1:${runId}`,
         JSON.stringify(this.capture(runId)),
       );
+    } catch {
+      this.persistent = false;
+    }
+  }
+
+  forget(runId: string): void {
+    this.entries.set(runId, { version: 1, state: empty(), restored: false });
+    const key = `hunin.investigation.v1:${runId}`;
+    try {
+      if (this.storage?.removeItem) this.storage.removeItem(key);
+      else this.storage?.setItem(key, JSON.stringify(this.capture(runId)));
     } catch {
       this.persistent = false;
     }

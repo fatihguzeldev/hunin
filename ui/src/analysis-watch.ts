@@ -33,6 +33,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 export class AnalysisWatch {
   private entries = new Map<string, WatchedAttempt>();
   private settled = new Set<string>();
+  private removedRuns = new Set<string>();
   persistent: boolean;
 
   constructor(private storage?: SessionStorage) {
@@ -89,7 +90,13 @@ export class AnalysisWatch {
 
   track(runId: string, id: string): boolean {
     const key = this.identity(runId, id);
-    if (!runId || !id || this.entries.has(key) || this.settled.has(key))
+    if (
+      !runId ||
+      !id ||
+      this.removedRuns.has(runId) ||
+      this.entries.has(key) ||
+      this.settled.has(key)
+    )
       return false;
     this.entries.set(key, { runId, id, state: 'pending' });
     this.persist();
@@ -98,6 +105,13 @@ export class AnalysisWatch {
 
   forRun(runId: string): WatchedAttempt[] {
     return [...this.entries.values()].filter((entry) => entry.runId === runId);
+  }
+
+  forgetRun(runId: string): void {
+    this.removedRuns.add(runId);
+    for (const entry of this.forRun(runId))
+      this.entries.delete(this.identity(runId, entry.id));
+    this.persist();
   }
 
   async check(

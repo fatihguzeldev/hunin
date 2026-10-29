@@ -10,6 +10,10 @@ import { operation, type Run, type Summary, type Operations } from './api';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
 import { recordDialog } from './recording';
+import {
+  importRecordingDialog,
+  removeRecordingDialog,
+} from './recording-actions';
 import { capabilities } from './views/capabilities';
 import { overview, runTone } from './views/overview';
 import { scenarios } from './views/scenarios';
@@ -37,6 +41,8 @@ export class Workspace {
   private rail = el('div', { class: 'run-list', 'aria-label': 'Recordings' });
   private content = el('main', { class: 'workspace', id: 'main' });
   private epoch = 0;
+  // User navigation owns foreground intent across automatic status rerenders.
+  private navigationEpoch = 0;
   private reloadEpoch = 0;
   private listController: AbortController | undefined;
   private query = '';
@@ -101,6 +107,7 @@ export class Workspace {
     });
     window.addEventListener('online', () => this.scheduleAttemptCheck(true));
     window.addEventListener('popstate', () => {
+      this.navigationEpoch++;
       const wasSource = Boolean(
         this.selected && this.investigations.forRun(this.selected).source,
       );
@@ -161,14 +168,8 @@ export class Workspace {
             () => this.navigate('', 'scenarios'),
             'button subtle',
           ),
-          button(
-            '+ Record',
-            () =>
-              recordDialog((id) => {
-                void this.reload(id);
-              }),
-            'button primary',
-          ),
+          button('Import', () => this.openImport(), 'button subtle'),
+          button('+ Record', () => this.openRecording(), 'button primary'),
         ),
       ),
       el(
@@ -199,12 +200,65 @@ export class Workspace {
     void this.reload();
   }
 
+  private openRecording(): void {
+    const navigation = this.navigationEpoch;
+    recordDialog((id, foreground) =>
+      this.recordingAccepted(
+        id,
+        foreground && navigation === this.navigationEpoch,
+      ),
+    );
+  }
+
+  private recordingAccepted(id: string, foreground: boolean): void {
+    if (foreground) {
+      this.navigationEpoch++;
+      this.focusSelectedTab = true;
+      void this.reload(id);
+    } else void this.reload(undefined, true);
+  }
+
+  private openImport(): void {
+    const navigation = this.navigationEpoch;
+    importRecordingDialog({
+      imported: (id, foreground) =>
+        this.recordingAccepted(
+          id,
+          foreground && navigation === this.navigationEpoch,
+        ),
+      unconfirmed: () => {
+        void this.reload(undefined, true);
+      },
+    });
+  }
+
+  private removeRecording(run: Run): void {
+    removeRecordingDialog(run, {
+      removed: () => {
+        this.investigations.forget(run.id);
+        this.analysisWatch.forgetRun(run.id);
+        this.messages.delete(run.id);
+        if (this.selected === run.id) {
+          this.renderController?.abort();
+          this.pauseAttemptReads();
+          this.selected = '';
+          this.tab = 'overview';
+          this.writeLocation('replace');
+          void this.reload();
+        } else void this.reload(undefined, true);
+      },
+      unconfirmed: () => {
+        void this.reload(undefined, this.selected !== run.id);
+      },
+    });
+  }
+
   private async reload(select?: string, preserveView = false): Promise<void> {
     this.listController?.abort();
     const controller = new AbortController();
     this.listController = controller;
     const generation = ++this.reloadEpoch;
-    const navigation = this.epoch;
+    const navigation = this.navigationEpoch;
     try {
       const data = await operation(
         'runs.list',
@@ -212,9 +266,18 @@ export class Workspace {
         controller.signal,
       );
       if (generation !== this.reloadEpoch || controller.signal.aborted) return;
+      const current = this.runs.find(
+        (run) =>
+          run.id ===
+          (navigation === this.navigationEpoch
+            ? (select ?? this.selected)
+            : this.selected),
+      );
       this.runs = data.runs;
+      if (current && !this.runs.some((run) => run.id === current.id))
+        this.runs.push(current);
       this.nextCursor = data.next_cursor ?? undefined;
-      if (preserveView || navigation !== this.epoch) {
+      if (preserveView || navigation !== this.navigationEpoch) {
         this.renderRail();
         return;
       }
@@ -230,7 +293,7 @@ export class Workspace {
     } catch (error) {
       if (
         generation === this.reloadEpoch &&
-        navigation === this.epoch &&
+        navigation === this.navigationEpoch &&
         !controller.signal.aborted
       ) {
         const feedback = errorView(error, () => {
@@ -366,6 +429,7 @@ export class Workspace {
     mode: 'push' | 'replace' = 'replace',
     sourceEntry = 0,
   ): void {
+    if (mode === 'push') this.navigationEpoch++;
     const url = new URL(location.href);
     if (this.selected) url.searchParams.set('run', this.selected);
     else url.searchParams.delete('run');
@@ -414,12 +478,7 @@ export class Workspace {
       }
       if (this.tab === 'scenarios') {
         const view = await scenarios((id) => {
-          if (signal.aborted) {
-            void this.reload(undefined, true);
-            return;
-          }
-          this.tab = 'overview';
-          void this.reload(id);
+          this.recordingAccepted(id, !signal.aborted);
         }, signal);
         if (epoch === this.epoch) {
           this.content.replaceChildren(el('div', { class: 'view' }, view));
@@ -435,10 +494,7 @@ export class Workspace {
             'Record a workload, inspect its execution, then compare the same workload after your change.',
             button(
               'Record a workload',
-              () =>
-                recordDialog((id) => {
-                  void this.reload(id);
-                }),
+              () => this.openRecording(),
               'button primary',
             ),
           ),
@@ -526,6 +582,7 @@ export class Workspace {
             const depth = entry?.runId === run.id ? entry.sourceReturn : 0;
             if (depth > 0 && depth < history.length) history.go(-depth);
             else {
+              this.navigationEpoch++;
               investigation.source = undefined;
               this.returningFromSource = true;
               this.writeLocation('replace');
@@ -784,6 +841,15 @@ export class Workspace {
   private header(run: Run): HTMLElement {
     const source = runSource(run);
     const actions = el('div', { class: 'toolbar' });
+    const remove = button(
+      'Remove recording',
+      () => this.removeRecording(run),
+      'button danger small',
+    );
+    remove.disabled = run.status === 'running';
+    if (remove.disabled)
+      remove.title = 'Stop the recording before removing it.';
+    actions.append(remove);
     if (run.status === 'running')
       actions.append(
         button(

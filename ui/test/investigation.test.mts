@@ -198,3 +198,21 @@ test('resource and artifact page positions restore without cached rows and inval
   assert.deepEqual(reload.forRun('run').resources, { previous: [] });
   assert.equal(reload.forRun('run').evidence.artifacts, undefined);
 });
+
+test('confirmed removal forgets only that recording private location and preferences', () => {
+  const storage = session();
+  const state = new Investigations(storage);
+  state.forRun('removed').source = {
+    view: 'profile',
+    path: '/retained/path',
+    line: 7,
+  };
+  state.forRun('kept').profile.query = 'keep this';
+  state.persist('removed');
+  state.persist('kept');
+  state.forget('removed');
+  assert.equal(state.forRun('removed').source, undefined);
+  const reload = new Investigations(storage);
+  assert.equal(reload.forRun('removed').source, undefined);
+  assert.equal(reload.forRun('kept').profile.query, 'keep this');
+});
