@@ -1,5 +1,5 @@
 import type { Observation } from './record.generated';
-import { validateOperationOutput, type OperationInputs, type OperationOutputs } from './operations.generated';
+import { validateOperationOutput, type OperationInputs, type OperationOutputs } from './operations.generated.js';
 
 export type Run = {
   id: string; name: string; status: 'running' | 'completed' | 'failed' | 'canceled';

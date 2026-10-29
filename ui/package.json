@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
-    "generate": "node scripts/generate-record.mjs",
-    "build": "node scripts/generate-record.mjs --check && tsc --noEmit && vite build",
-    "check": "node scripts/generate-record.mjs --check && tsc --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "build:generator": "tsc -p tsconfig.generator.json",
+    "build:tooling": "tsc -p tsconfig.tools.json",
+    "generate": "npm run build:generator && node .tools/scripts/generate-record.mjs",
+    "build": "npm run check && vite build",
+    "check": "npm run build:tooling && node .tools/scripts/generate-record.mjs --check && tsc --noEmit",
+    "test": "npm run build:tooling && node --test .tools/test/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
