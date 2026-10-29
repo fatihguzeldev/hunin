@@ -234,26 +234,32 @@ class CpuProgressTest(unittest.TestCase):
         rows, metadata = self.capture("""
 import json,threading,time
 from pathlib import Path
-ready=threading.Barrier(2)
+ready=threading.Barrier(2, timeout=5)
+observation_window=threading.Barrier(2, timeout=5)
+phase_count=90
+phase_cpu_ns=5_000_000
+common_yield_seconds=0.02
 windows=[]
 def cpu_hot():
     ready.wait()
-    cpu_start=time.thread_time()
+    cpu_start=time.thread_time_ns()
     wall_start=time.perf_counter()
-    end=cpu_start+0.45
-    next_yield=cpu_start+0.005
     scheduling_yields=0
+    phases=[]
     value=1
-    while time.thread_time()<end:
-        for n in range(10000): value=(value+n)%10000007
-        now=time.thread_time()
-        if now>=next_yield:
-            # This positive control supplies bounded observation opportunities.
-            # The separate long-GIL control deliberately supplies none.
-            time.sleep(0.001)
-            scheduling_yields+=1
-            next_yield=now+0.005
-    windows.append({'native_tid':threading.get_native_id(),'thread_cpu_seconds':time.thread_time()-cpu_start,'wall_start_seconds':wall_start,'wall_end_seconds':time.perf_counter(),'scheduling_yields':scheduling_yields,'yield_every_thread_cpu_seconds':0.005})
+    for phase in range(phase_count):
+        phase_start=time.thread_time_ns()
+        while time.thread_time_ns()-phase_start<phase_cpu_ns:
+            for n in range(10000): value=(value+n)%10000007
+        phases.append(time.thread_time_ns()-phase_start)
+        # Independent short yields let the other hot thread keep the GIL.
+        # Give the 10ms sampler a shared CPU-free window instead. The strict
+        # production delay gates and separate long-GIL control are unchanged.
+        observation_window.wait()
+        time.sleep(common_yield_seconds)
+        scheduling_yields+=1
+    cpu_elapsed=time.thread_time_ns()-cpu_start
+    windows.append({'native_tid':threading.get_native_id(),'thread_cpu_seconds':cpu_elapsed/1_000_000_000,'thread_cpu_ns':cpu_elapsed,'wall_start_seconds':wall_start,'wall_end_seconds':time.perf_counter(),'scheduling_yields':scheduling_yields,'phase_cpu_ns':phase_cpu_ns,'phase_cpu_observations_ns':phases,'common_yield_seconds':common_yield_seconds,'barrier_timeout_seconds':5})
 def idle_wait(): time.sleep(0.5)
 hot=threading.Thread(target=cpu_hot)
 idle=threading.Thread(target=idle_wait)
@@ -293,7 +299,20 @@ print('expected')
             all(window["thread_cpu_seconds"] >= 0.45 for window in self.workload)
         )
         self.assertTrue(
-            all(window["scheduling_yields"] > 0 for window in self.workload)
+            all(window["thread_cpu_ns"] >= 450_000_000 for window in self.workload)
+        )
+        self.assertTrue(
+            all(window["scheduling_yields"] == 90 for window in self.workload)
+        )
+        self.assertTrue(
+            all(
+                len(window["phase_cpu_observations_ns"]) == 90
+                and all(
+                    cpu_ns >= window["phase_cpu_ns"]
+                    for cpu_ns in window["phase_cpu_observations_ns"]
+                )
+                for window in self.workload
+            )
         )
         self.assertTrue(
             all(row["thread_ident"] and row["thread_lifetime"] for row in samples)
