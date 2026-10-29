@@ -19,6 +19,8 @@ RUN_TARGET = (
 
 
 class TargetEntryTest(unittest.TestCase):
+    maxDiff = None
+
     def invoke(self, arguments, work, *, capture):
         return subprocess.run(
             [sys.executable, *(["-c", RUN_TARGET] if capture else []), *arguments],

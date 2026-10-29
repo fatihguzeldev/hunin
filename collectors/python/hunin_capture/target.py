@@ -32,7 +32,13 @@ def _run_script(path):
         )
         runpy._run_module_as_main("__main__", alter_argv=False)
         return
-    sys.path[0] = str(Path(path).resolve().parent)
+    # CPython's Windows launcher uses GetFullPathNameW rather than realpath.
+    # Preserve short-name/junction spelling; POSIX script lookup resolves links.
+    sys.path[0] = (
+        os.path.dirname(os.path.abspath(path))
+        if os.name == "nt"
+        else str(Path(path).resolve().parent)
+    )
     filename = path if sys.implementation.name == "graalpy" else os.path.abspath(path)
     # Delegate bytecode recognition/loading to the selected interpreter's
     # stdlib, including its native magic/version checks. Never parse pyc here.
