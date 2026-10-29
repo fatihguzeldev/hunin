@@ -112,6 +112,15 @@ impl Engine {
             .runtime
             .clone()
             .unwrap_or_else(|| detect_runtime(&request.command[0]));
+        // Runtime spelling must not bypass runtime-specific finishing rules.
+        // Unknown runtimes still become retained planning failures in execute.
+        let runtime = if runtime.eq_ignore_ascii_case("none") {
+            "none".to_owned()
+        } else {
+            collection::select_runtime(&runtime)
+                .map(|selected| selected.id.to_owned())
+                .unwrap_or(runtime)
+        };
         let mut run = Run {
             id: uuid::Uuid::new_v4().to_string(),
             name: request

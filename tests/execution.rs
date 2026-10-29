@@ -5,6 +5,54 @@ use hunin::{
 use serde_json::json;
 
 #[tokio::test]
+async fn canonicalizes_supported_runtime_aliases_before_capture() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let engine = Engine::new(Store::open(data.path()).unwrap());
+    let run = engine
+        .start(
+            serde_json::from_value(json!({
+                "command": ["node", "-e", "console.log('canonical-runtime')"],
+                "runtime": "NODEJS",
+                "cwd": project.path(),
+                "expected_stdout": "canonical-runtime\n"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run.runtime, "node");
+    let run = engine.wait(&run.id).await.unwrap();
+    assert_eq!(run.status, "completed", "{:?}", run.diagnostics);
+    assert_eq!(run.correctness["passed"], true);
+    assert_eq!(run.source["collector_settings"]["runtime"], "node");
+    assert_eq!(run.source["collection_status"], "completed");
+}
+
+#[tokio::test]
+async fn unsupported_runtime_remains_a_recorded_planning_failure() {
+    let project = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let engine = Engine::new(Store::open(data.path()).unwrap());
+    let run = engine
+        .start(
+            serde_json::from_value(json!({
+                "command": ["node", "-e", "console.log('must-not-run')"],
+                "runtime": "unsupported-runtime",
+                "cwd": project.path()
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run.runtime, "unsupported-runtime");
+    let run = engine.wait(&run.id).await.unwrap();
+    assert_eq!(run.status, "failed");
+    assert!(run.diagnostics.iter().any(|value| value.contains("unsupported runtime")));
+    assert!(run.exit_code.is_none());
+}
+
+#[tokio::test]
 async fn validates_exact_stdout_and_records_declared_environment_and_inputs() {
     use sha2::{Digest, Sha256};
     let project = tempfile::tempdir().unwrap();
