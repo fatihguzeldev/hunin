@@ -19,40 +19,6 @@ pub(super) struct CancellationMonitor {
     task: Option<JoinHandle<()>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn shutdown_keeps_ownership_until_a_known_preparation_permit_is_released() {
-        let root = tempfile::tempdir().unwrap();
-        let engine =
-            Engine::with_admission_limit(crate::storage::Store::open(root.path()).unwrap(), 1)
-                .unwrap();
-        let permit = engine.slots.clone().try_acquire_owned().unwrap();
-        let closing = engine.clone();
-        let shutdown = tokio::spawn(async move { closing.shutdown().await });
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !engine.closing.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(
-            !shutdown.is_finished(),
-            "shutdown cannot abandon a known owned preparation permit"
-        );
-        drop(permit);
-        tokio::time::timeout(Duration::from_secs(2), shutdown)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!(engine.slots.available_permits(), 1);
-        assert!(engine.closing.load(Ordering::Acquire));
-    }
-}
 impl CancellationMonitor {
     pub async fn finish(mut self) -> Result<(), tokio::task::JoinError> {
         self.stopped.store(true, Ordering::Release);
@@ -161,5 +127,40 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_keeps_ownership_until_a_known_preparation_permit_is_released() {
+        let root = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::with_admission_limit(crate::storage::Store::open(root.path()).unwrap(), 1)
+                .unwrap();
+        let permit = engine.slots.clone().try_acquire_owned().unwrap();
+        let closing = engine.clone();
+        let shutdown = tokio::spawn(async move { closing.shutdown().await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !engine.closing.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !shutdown.is_finished(),
+            "shutdown cannot abandon a known owned preparation permit"
+        );
+        drop(permit);
+        tokio::time::timeout(Duration::from_secs(2), shutdown)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(engine.slots.available_permits(), 1);
+        assert!(engine.closing.load(Ordering::Acquire));
     }
 }
