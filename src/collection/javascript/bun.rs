@@ -1,4 +1,4 @@
-use super::finalization::{CaptureProducer, ProducerCoverage};
+use super::super::finalization::{CaptureProducer, ProducerCoverage};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -247,7 +247,7 @@ pub(super) fn validate(
     }
     for path in files
         .iter()
-        .filter(|path| super::profile_format(path) == Some("v8-cpuprofile"))
+        .filter(|path| super::super::profile_format(path) == Some("v8-cpuprofile"))
     {
         ensure!(
             claimed_profiles.contains(path),

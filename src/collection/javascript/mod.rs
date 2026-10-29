@@ -1,10 +1,50 @@
+mod bun;
+mod deno;
+
+use super::finalization::ProducerCoverage;
 use super::{CapturePlan, CaptureRequest};
 use crate::host::{assets, probe, resolve_launch_executable, tool_path};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
-use std::{collections::BTreeMap, env, fs, path::Path, process::Command, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 const PLANNER_PROTOCOL: u64 = 1;
+
+pub(super) fn finalize_deno(
+    files: &[PathBuf],
+    request: &CaptureRequest,
+    producer_id: &str,
+) -> Result<ProducerCoverage> {
+    let expected = format!("deno-workers-{producer_id}.jsonl");
+    ensure!(
+        files.iter().any(|path| path
+            .file_name()
+            .is_some_and(|name| name == expected.as_str())),
+        "planned Deno worker lifecycle report is missing: {expected}"
+    );
+    deno::validate(files, &request.run_id, true)
+}
+
+pub(super) fn finalize_bun(
+    files: &[PathBuf],
+    request: &CaptureRequest,
+    session_id: &str,
+    root_registration_id: &str,
+) -> Result<ProducerCoverage> {
+    bun::validate(
+        files,
+        &request.run_id,
+        &request.artifact_dir,
+        session_id,
+        root_registration_id,
+    )
+}
 
 /// Run the bundled host adapter with the selected runtime, separately from its target.
 pub(super) fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {

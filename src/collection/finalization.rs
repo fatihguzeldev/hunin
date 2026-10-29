@@ -1,4 +1,4 @@
-use super::{CapturePlan, CaptureRequest, bun_producers, deno_workers, profile_format};
+use super::{CapturePlan, CaptureRequest, javascript, profile_format};
 use crate::host::walk_files;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -103,14 +103,9 @@ impl CapturePlan {
                 vec!["Profile artifact presence does not establish an inventory of every target process, thread or worker".into()],
             ),
             CaptureOutput::DenoWorkers { producer_id } => {
-                let expected = format!("deno-workers-{producer_id}.jsonl");
-                if !files.iter().any(|path| path.file_name().is_some_and(|name| name == expected.as_str())) {
-                    diagnostics.push(format!("planned Deno worker lifecycle report is missing: {expected}"));
-                } else {
-                    match deno_workers::validate(&files, &request.run_id, true) {
-                        Ok(value) => coverage = Some(value),
-                        Err(error) => diagnostics.push(format!("{error:#}")),
-                    }
+                match javascript::finalize_deno(&files, request, producer_id) {
+                    Ok(value) => coverage = Some(value),
+                    Err(error) => diagnostics.push(format!("{error:#}")),
                 }
                 (Some("v8-cpuprofile"), "declared_profiles_and_registered_deno_workers", vec![
                     "Only main-isolate Web Workers registered by the adapter are enumerated; nested workers, unrelated Node workers and child processes are outside this inventory".into(),
@@ -118,7 +113,7 @@ impl CapturePlan {
                 ])
             }
             CaptureOutput::BunProducers { session_id, root_registration_id } => {
-                match bun_producers::validate(&files, &request.run_id, &request.artifact_dir, session_id, root_registration_id) {
+                match javascript::finalize_bun(&files, request, session_id, root_registration_id) {
                     Ok(value) => coverage = Some(value),
                     Err(error) => diagnostics.push(format!("{error:#}")),
                 }

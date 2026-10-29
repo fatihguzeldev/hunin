@@ -1,4 +1,4 @@
-use super::finalization::{CaptureProducer, ProducerCoverage};
+use super::super::finalization::{CaptureProducer, ProducerCoverage};
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
