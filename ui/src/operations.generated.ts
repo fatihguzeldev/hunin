@@ -428,9 +428,54 @@ export type ComparisonHotspotSelection = {
   "after_truncated": boolean;
 };
 
+export type InspectionFinding = {
+  "sha256"?: string;
+  "example_run_id"?: string;
+  "example_artifact_id"?: string;
+  "relative_path"?: string;
+  "reason"?: string;
+  "kind": "missing_referenced_blob" | "unreferenced_at_snapshot" | "pending_ownership_unknown" | "workspace_ownership_unknown" | "unfollowed_path" | "path_unavailable" | "invalid_artifact_reference";
+  "path_kind"?: "file" | "directory" | "symlink" | "other";
+  "metadata_reference"?: "present" | "absent" | "unknown";
+  "size_bytes"?: string | null;
+  "row_ordinal"?: number;
+};
+
+export type InspectionScan = {
+  "area": "artifact_references" | "artifact_files" | "captures" | "analyzer_executions" | "analyzer_packages";
+  "examined": number;
+  "status": "not_scanned" | "exhausted" | "limited" | "unavailable";
+};
+
+export type StorageInspection = {
+  "findings": Array<InspectionFinding>;
+  "scans": Array<InspectionScan>;
+  "limits_hit": Array<"artifact_rows" | "filesystem_entries" | "findings" | "time">;
+  "budgets": {
+  "artifact_row_limit": number;
+  "filesystem_entry_limit": number;
+  "finding_limit": number;
+  "budget_ms": number;
+};
+  "elapsed_ms": number;
+  "database_changed_during_scan": boolean;
+  "content_hashes_checked": 0;
+  "deletion_authorized": false;
+  "reference_view": "sqlite_read_transaction";
+  "filesystem_view": "live_metadata";
+  "path_encoding": "lossy_display_only";
+  "limitations": Array<string>;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
+};
+  "storage.inspect": {
+  "artifact_row_limit"?: number;
+  "filesystem_entry_limit"?: number;
+  "finding_limit"?: number;
+  "budget_ms"?: number;
 };
   "runs.list": {
   "limit"?: number;
@@ -583,6 +628,7 @@ export type OperationInputs = {
 
 export type OperationOutputs = {
   "capabilities": Capabilities;
+  "storage.inspect": StorageInspection;
   "runs.list": RunPage;
   "runs.get": RunDetails;
   "runs.start": RunResult;
@@ -814,11 +860,26 @@ export function isComparisonHotspotSelection(value: unknown): value is Compariso
   return (isOutputObject(value) && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "limit_per_recording") && Object.hasOwn(value, "before_available") && Object.hasOwn(value, "after_available") && Object.hasOwn(value, "before_total_functions") && Object.hasOwn(value, "after_total_functions") && Object.hasOwn(value, "before_truncated") && Object.hasOwn(value, "after_truncated") && (typeof value["weight_unit"] === "string") && (typeof value["limit_per_recording"] === "number" && Number.isInteger(value["limit_per_recording"]) && value["limit_per_recording"] >= 1) && (typeof value["before_available"] === "boolean") && (typeof value["after_available"] === "boolean") && (typeof value["before_total_functions"] === "number" && Number.isInteger(value["before_total_functions"]) && value["before_total_functions"] >= 0) && (typeof value["after_total_functions"] === "number" && Number.isInteger(value["after_total_functions"]) && value["after_total_functions"] >= 0) && (typeof value["before_truncated"] === "boolean") && (typeof value["after_truncated"] === "boolean") && Object.keys(value).every(key => ["weight_unit","limit_per_recording","before_available","after_available","before_total_functions","after_total_functions","before_truncated","after_truncated"].includes(key)));
 }
 
+export function isInspectionFinding(value: unknown): value is InspectionFinding {
+  return (((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "missing_referenced_blob"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "sha256") && Object.hasOwn(value, "example_run_id") && Object.hasOwn(value, "example_artifact_id")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "unreferenced_at_snapshot"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "sha256") && Object.hasOwn(value, "size_bytes")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "pending_ownership_unknown"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "relative_path") && Object.hasOwn(value, "path_kind") && Object.hasOwn(value, "size_bytes")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "workspace_ownership_unknown"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "relative_path") && Object.hasOwn(value, "path_kind") && Object.hasOwn(value, "metadata_reference")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "unfollowed_path"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "relative_path") && Object.hasOwn(value, "path_kind")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "path_unavailable"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "relative_path") && Object.hasOwn(value, "reason")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "invalid_artifact_reference"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "row_ordinal") && Object.hasOwn(value, "reason")))) : true)) && isOutputObject(value) && Object.hasOwn(value, "kind") && (!Object.hasOwn(value, "sha256") || (typeof value["sha256"] === "string")) && (!Object.hasOwn(value, "example_run_id") || (typeof value["example_run_id"] === "string")) && (!Object.hasOwn(value, "example_artifact_id") || (typeof value["example_artifact_id"] === "string")) && (!Object.hasOwn(value, "relative_path") || (typeof value["relative_path"] === "string")) && (!Object.hasOwn(value, "reason") || (typeof value["reason"] === "string")) && ((value["kind"] === "missing_referenced_blob" || value["kind"] === "unreferenced_at_snapshot" || value["kind"] === "pending_ownership_unknown" || value["kind"] === "workspace_ownership_unknown" || value["kind"] === "unfollowed_path" || value["kind"] === "path_unavailable" || value["kind"] === "invalid_artifact_reference") && typeof value["kind"] === "string") && (!Object.hasOwn(value, "path_kind") || ((value["path_kind"] === "file" || value["path_kind"] === "directory" || value["path_kind"] === "symlink" || value["path_kind"] === "other") && typeof value["path_kind"] === "string")) && (!Object.hasOwn(value, "metadata_reference") || ((value["metadata_reference"] === "present" || value["metadata_reference"] === "absent" || value["metadata_reference"] === "unknown") && typeof value["metadata_reference"] === "string")) && (!Object.hasOwn(value, "size_bytes") || ((typeof value["size_bytes"] === "string") || (value["size_bytes"] === null))) && (!Object.hasOwn(value, "row_ordinal") || (typeof value["row_ordinal"] === "number" && Number.isInteger(value["row_ordinal"]) && value["row_ordinal"] >= 1)) && Object.keys(value).every(key => ["sha256","example_run_id","example_artifact_id","relative_path","reason","kind","path_kind","metadata_reference","size_bytes","row_ordinal"].includes(key)));
+}
+
+export function isInspectionScan(value: unknown): value is InspectionScan {
+  return (isOutputObject(value) && Object.hasOwn(value, "area") && Object.hasOwn(value, "examined") && Object.hasOwn(value, "status") && ((value["area"] === "artifact_references" || value["area"] === "artifact_files" || value["area"] === "captures" || value["area"] === "analyzer_executions" || value["area"] === "analyzer_packages") && typeof value["area"] === "string") && (typeof value["examined"] === "number" && Number.isInteger(value["examined"]) && value["examined"] >= 0) && ((value["status"] === "not_scanned" || value["status"] === "exhausted" || value["status"] === "limited" || value["status"] === "unavailable") && typeof value["status"] === "string") && Object.keys(value).every(key => ["area","examined","status"].includes(key)));
+}
+
+export function isStorageInspection(value: unknown): value is StorageInspection {
+  return (isOutputObject(value) && Object.hasOwn(value, "findings") && Object.hasOwn(value, "scans") && Object.hasOwn(value, "limits_hit") && Object.hasOwn(value, "budgets") && Object.hasOwn(value, "elapsed_ms") && Object.hasOwn(value, "database_changed_during_scan") && Object.hasOwn(value, "content_hashes_checked") && Object.hasOwn(value, "deletion_authorized") && Object.hasOwn(value, "reference_view") && Object.hasOwn(value, "filesystem_view") && Object.hasOwn(value, "path_encoding") && Object.hasOwn(value, "limitations") && (Array.isArray(value["findings"]) && value["findings"].length <= 2000 && value["findings"].every(item => isInspectionFinding(item))) && (Array.isArray(value["scans"]) && value["scans"].length >= 5 && value["scans"].length <= 5 && value["scans"].every(item => isInspectionScan(item))) && (Array.isArray(value["limits_hit"]) && new Set(value["limits_hit"]).size === value["limits_hit"].length && value["limits_hit"].every(item => ((item === "artifact_rows" || item === "filesystem_entries" || item === "findings" || item === "time") && typeof item === "string"))) && (isOutputObject(value["budgets"]) && Object.hasOwn(value["budgets"], "artifact_row_limit") && Object.hasOwn(value["budgets"], "filesystem_entry_limit") && Object.hasOwn(value["budgets"], "finding_limit") && Object.hasOwn(value["budgets"], "budget_ms") && (typeof value["budgets"]["artifact_row_limit"] === "number" && Number.isInteger(value["budgets"]["artifact_row_limit"]) && value["budgets"]["artifact_row_limit"] >= 1 && value["budgets"]["artifact_row_limit"] <= 10000) && (typeof value["budgets"]["filesystem_entry_limit"] === "number" && Number.isInteger(value["budgets"]["filesystem_entry_limit"]) && value["budgets"]["filesystem_entry_limit"] >= 1 && value["budgets"]["filesystem_entry_limit"] <= 10000) && (typeof value["budgets"]["finding_limit"] === "number" && Number.isInteger(value["budgets"]["finding_limit"]) && value["budgets"]["finding_limit"] >= 1 && value["budgets"]["finding_limit"] <= 2000) && (typeof value["budgets"]["budget_ms"] === "number" && Number.isInteger(value["budgets"]["budget_ms"]) && value["budgets"]["budget_ms"] >= 1 && value["budgets"]["budget_ms"] <= 5000) && Object.keys(value["budgets"]).every(key => ["artifact_row_limit","filesystem_entry_limit","finding_limit","budget_ms"].includes(key))) && (typeof value["elapsed_ms"] === "number" && Number.isFinite(value["elapsed_ms"]) && value["elapsed_ms"] >= 0) && (typeof value["database_changed_during_scan"] === "boolean") && (value["content_hashes_checked"] === 0) && (value["deletion_authorized"] === false) && (value["reference_view"] === "sqlite_read_transaction") && (value["filesystem_view"] === "live_metadata") && (value["path_encoding"] === "lossy_display_only") && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && Object.keys(value).every(key => ["findings","scans","limits_hit","budgets","elapsed_ms","database_changed_during_scan","content_hashes_checked","deletion_authorized","reference_view","filesystem_view","path_encoding","limitations"].includes(key)));
+}
+
 // Every operation result is checked against its declared wire contract.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
     case "capabilities":
       if (!isCapabilities(value)) throw new Error("Hunin returned an invalid capabilities result.");
+      break;
+    case "storage.inspect":
+      if (!isStorageInspection(value)) throw new Error("Hunin returned an invalid storage.inspect result.");
       break;
     case "runs.list":
       if (!isRunPage(value)) throw new Error("Hunin returned an invalid runs.list result.");

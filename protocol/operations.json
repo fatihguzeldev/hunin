@@ -27,6 +27,55 @@
     }
   },
   {
+    "name": "storage.inspect",
+    "description": "Inspect bounded storage references and live filesystem metadata without repair; unknown ownership remains explicit",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "artifact_row_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "filesystem_entry_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "finding_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000
+        },
+        "budget_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/StorageInspection"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1,
+        "snapshot": "SQL references use one read transaction; filesystem metadata remains live. Findings never authorize repair or deletion."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
+    }
+  },
+  {
     "name": "runs.list",
     "description": "List persisted recordings",
     "inputSchema": {

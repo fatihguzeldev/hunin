@@ -3,6 +3,7 @@ mod comparison;
 mod contracts;
 mod errors;
 mod inputs;
+mod inspection;
 pub(crate) use errors::operation_failure;
 
 use crate::{
@@ -83,6 +84,12 @@ impl Operations {
             .map_err(errors::Failure::invalid_parameters)?
             .unwrap_or(0);
         match name {
+            "storage.inspect" => {
+                let store = store.clone();
+                tokio::task::spawn_blocking(move || inspection::inspect(&store, &params))
+                    .await
+                    .context("storage inspection task failed")?
+            }
             "capabilities" => tokio::task::spawn_blocking(capabilities::discover)
                 .await
                 .context("capability discovery task failed"),

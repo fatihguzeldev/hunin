@@ -1528,6 +1528,270 @@
         "after_truncated"
       ],
       "additionalProperties": false
+    },
+    "InspectionFinding": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "example_run_id": {
+          "type": "string"
+        },
+        "example_artifact_id": {
+          "type": "string"
+        },
+        "relative_path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "missing_referenced_blob",
+            "unreferenced_at_snapshot",
+            "pending_ownership_unknown",
+            "workspace_ownership_unknown",
+            "unfollowed_path",
+            "path_unavailable",
+            "invalid_artifact_reference"
+          ]
+        },
+        "path_kind": {
+          "type": "string",
+          "enum": ["file", "directory", "symlink", "other"]
+        },
+        "metadata_reference": {
+          "type": "string",
+          "enum": ["present", "absent", "unknown"]
+        },
+        "size_bytes": {
+          "type": ["string", "null"],
+          "description": "Exact decimal bytes when known; no floating point conversion."
+        },
+        "row_ordinal": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": ["kind"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "missing_referenced_blob"
+              }
+            }
+          },
+          "then": {
+            "required": ["sha256", "example_run_id", "example_artifact_id"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "unreferenced_at_snapshot"
+              }
+            }
+          },
+          "then": {
+            "required": ["sha256", "size_bytes"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "pending_ownership_unknown"
+              }
+            }
+          },
+          "then": {
+            "required": ["relative_path", "path_kind", "size_bytes"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "workspace_ownership_unknown"
+              }
+            }
+          },
+          "then": {
+            "required": ["relative_path", "path_kind", "metadata_reference"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "unfollowed_path"
+              }
+            }
+          },
+          "then": {
+            "required": ["relative_path", "path_kind"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "path_unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": ["relative_path", "reason"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "invalid_artifact_reference"
+              }
+            }
+          },
+          "then": {
+            "required": ["row_ordinal", "reason"]
+          }
+        }
+      ]
+    },
+    "InspectionScan": {
+      "type": "object",
+      "properties": {
+        "area": {
+          "type": "string",
+          "enum": [
+            "artifact_references",
+            "artifact_files",
+            "captures",
+            "analyzer_executions",
+            "analyzer_packages"
+          ]
+        },
+        "examined": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "type": "string",
+          "enum": ["not_scanned", "exhausted", "limited", "unavailable"]
+        }
+      },
+      "required": ["area", "examined", "status"],
+      "additionalProperties": false
+    },
+    "StorageInspection": {
+      "type": "object",
+      "properties": {
+        "findings": {
+          "type": "array",
+          "maxItems": 2000,
+          "items": {
+            "$ref": "#/$defs/InspectionFinding"
+          }
+        },
+        "scans": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/InspectionScan"
+          }
+        },
+        "limits_hit": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["artifact_rows", "filesystem_entries", "findings", "time"]
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "properties": {
+            "artifact_row_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "filesystem_entry_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "finding_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000
+            },
+            "budget_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            }
+          },
+          "required": [
+            "artifact_row_limit",
+            "filesystem_entry_limit",
+            "finding_limit",
+            "budget_ms"
+          ],
+          "additionalProperties": false
+        },
+        "elapsed_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "database_changed_during_scan": {
+          "type": "boolean"
+        },
+        "content_hashes_checked": {
+          "const": 0
+        },
+        "deletion_authorized": {
+          "const": false
+        },
+        "reference_view": {
+          "const": "sqlite_read_transaction"
+        },
+        "filesystem_view": {
+          "const": "live_metadata"
+        },
+        "path_encoding": {
+          "const": "lossy_display_only"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "findings",
+        "scans",
+        "limits_hit",
+        "budgets",
+        "elapsed_ms",
+        "database_changed_during_scan",
+        "content_hashes_checked",
+        "deletion_authorized",
+        "reference_view",
+        "filesystem_view",
+        "path_encoding",
+        "limitations"
+      ],
+      "additionalProperties": false
     }
   }
 }
