@@ -144,12 +144,6 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             {
                 availability = "runtime_version_unsupported";
             }
-            if version.is_some() && tool("node").is_none() {
-                availability = "control_adapter_missing";
-                diagnostics.push(
-                    "Node.js is required for the JavaScript collection control adapter".into(),
-                );
-            }
             if runtime == "node"
                 && let Some(executable) = found.as_ref().filter(|_| version.is_some())
             {
@@ -159,7 +153,7 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                         Err(error)=>{availability="runtime_flag_probe_failed";diagnostics.push(format!("{error:#}"));}
                     }
             }
-            diagnostics.push("Version/flag prerequisites are checked; discovery does not record the target or its workers. Explicit Deno permission denial can leave CPU samples unaligned.".into());
+            diagnostics.push("The selected runtime executes its bundled host planner. Version/flag prerequisites are checked; discovery does not run that planner or record the target or its workers. Explicit Deno permission denial can leave CPU samples unaligned.".into());
         }
         "graalpy" => {
             mechanism = "truffle-cpusampler";

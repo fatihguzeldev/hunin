@@ -236,6 +236,36 @@ test('target environment composes with profiling and selects the requested runti
   }
 });
 
+test('host planner preserves inherited runtime options and explicit target precedence', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-inherited-options-'));
+  try {
+    const request = {
+      command: [process.execPath, '-e', 'console.log(1)'],
+      cwd: directory,
+      artifact_dir: directory,
+      run_id: 'inherited-options',
+      runtime: 'node',
+      inherited_runtime_options: { NODE_OPTIONS: '--stack-trace-limit=37' },
+    };
+    const inherited = plan(request);
+    assert.equal(inherited.planner_protocol, 1);
+    assert.ok(inherited.env.NODE_OPTIONS.startsWith('--stack-trace-limit=37 '));
+    const overridden = plan({
+      ...request,
+      env: { NODE_OPTIONS: '--stack-trace-limit=42' },
+    });
+    assert.ok(
+      overridden.env.NODE_OPTIONS.startsWith('--stack-trace-limit=42 '),
+    );
+    assert.equal(
+      overridden.env.NODE_OPTIONS.includes('--stack-trace-limit=37'),
+      false,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 for (const [runtime, executable] of [
   ['node', process.execPath],
   ['bun', bunExecutable],

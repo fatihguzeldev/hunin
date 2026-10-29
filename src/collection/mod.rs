@@ -1,6 +1,7 @@
 mod bun_producers;
 mod deno_workers;
 mod finalization;
+mod javascript;
 pub(crate) mod native_tool;
 pub(crate) mod probe;
 mod python;
@@ -60,7 +61,7 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
     canonical.runtime = selected.id.into();
     fs::create_dir_all(&canonical.artifact_dir)?;
     match selected.adapter {
-        CaptureAdapter::JavaScript => javascript(&canonical),
+        CaptureAdapter::JavaScript => javascript::prepare(&canonical),
         CaptureAdapter::PythonVmprof => python::vmprof(&canonical),
         CaptureAdapter::PythonCpuProgress => python::cpu_progress(&canonical),
         CaptureAdapter::GraalCpuSampler => python::graal(&canonical),
@@ -234,24 +235,6 @@ fn native_runtime_version(request: &CaptureRequest) -> Option<String> {
 fn go_build_version(output: &str) -> Option<String> {
     let (_, version) = output.lines().next()?.rsplit_once(": ")?;
     (version.starts_with("go") || version.starts_with("devel ")).then(|| version.trim().to_owned())
-}
-
-fn javascript(request: &CaptureRequest) -> Result<CapturePlan> {
-    let node = tool("node")
-        .context("Node.js is required to run the JavaScript collection control adapter")?;
-    let output = probe::output(
-        Command::new(node).arg(assets().join("collectors/javascript/plan.mjs")),
-        Some(serde_json::to_vec(request)?),
-        std::time::Duration::from_secs(15),
-        128 * 1024,
-    )?;
-    if !output.status.success() {
-        bail!(
-            "JavaScript capture planning failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    serde_json::from_slice(&output.stdout).context("invalid JavaScript capture plan")
 }
 
 pub(crate) fn assets() -> PathBuf {

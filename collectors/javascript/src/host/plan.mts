@@ -22,6 +22,7 @@ export interface CaptureRequest {
   run_id: string;
   runtime?: string;
   env?: Record<string, string>;
+  inherited_runtime_options?: { NODE_OPTIONS?: string; BUN_OPTIONS?: string };
 }
 
 export type CaptureOutput =
@@ -51,7 +52,27 @@ export function plan(request: CaptureRequest) {
     )
   )
     throw Error('env must be an object of valid string environment overrides');
-  const effectiveEnv = { ...process.env, ...targetEnv };
+  const inheritedOptions = request.inherited_runtime_options ?? {};
+  if (
+    !inheritedOptions ||
+    typeof inheritedOptions !== 'object' ||
+    Array.isArray(inheritedOptions) ||
+    Object.entries(inheritedOptions).some(
+      ([key, value]) =>
+        !['NODE_OPTIONS', 'BUN_OPTIONS'].includes(key) ||
+        typeof value !== 'string' ||
+        value.includes('\0'),
+    )
+  ) {
+    throw Error(
+      'inherited runtime options must contain valid NODE_OPTIONS/BUN_OPTIONS strings',
+    );
+  }
+  const effectiveEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...inheritedOptions,
+    ...targetEnv,
+  };
   const requestedRuntime = (
     request.runtime ?? basename(command[0]).replace(/\.exe$/i, '')
   ).toLowerCase();
@@ -211,6 +232,7 @@ export function plan(request: CaptureRequest) {
     );
   }
   return {
+    planner_protocol: 1,
     command: launched,
     env,
     session_identity,
