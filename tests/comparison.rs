@@ -278,6 +278,12 @@ async fn imported_ingestion_timestamps_are_not_recorded_execution_durations() {
     assert_eq!(elapsed["after"], Value::Null);
     assert_eq!(elapsed["delta"], Value::Null);
     assert_eq!(elapsed["comparable"], false);
+    assert!(
+        elapsed["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("ingestion")
+    );
 }
 
 #[tokio::test]

@@ -213,9 +213,13 @@ pub fn compare(
     )];
     if metrics[0]["comparable"] == false {
         metrics[0]["measurement_quality"] = json!("unavailable");
-        metrics[0]["diagnostic"] = json!(
+        metrics[0]["diagnostic"] = json!(if before.runtime == "imported"
+            || after.runtime == "imported"
+        {
+            "Imported profile timestamps describe ingestion, not a measured execution duration."
+        } else {
             "Recording completion timestamps are unavailable or inconsistent; an absent duration is not a measured zero."
-        );
+        });
     }
     if supervised_before.is_some() || supervised_after.is_some() {
         let mut row = metric(
