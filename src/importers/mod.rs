@@ -154,7 +154,13 @@ fn import_inner(
     let vmprof = (format == "vmprof")
         .then(|| vmprof::read(path))
         .transpose()?;
-    let decoder_provenance = vmprof.as_ref().map(|decoded| decoded.provenance.clone());
+    let go_trace = (format == "go-trace")
+        .then(|| go_trace::read(path))
+        .transpose()?;
+    let decoder_provenance = vmprof
+        .as_ref()
+        .map(|decoded| decoded.provenance.clone())
+        .or_else(|| go_trace.as_ref().map(|decoded| decoded.provenance.clone()));
     if let Some(provenance) = &decoder_provenance {
         digest.update(b"external-decoder-identity-v1\0");
         digest.update(serde_json::to_vec(&provenance["identity"])?);
@@ -186,7 +192,7 @@ fn import_inner(
         }
         "pprof" | "go-pprof" => pprof::decode(&raw, run_id, &key)?,
         "python-cpu-progress" => python_cpu::decode(path, run_id, &key)?,
-        "go-trace" => go_trace::decode(path, run_id, &key)?,
+        "go-trace" => go_trace::decode(go_trace.as_ref().unwrap(), run_id, &key)?,
         "vmprof" => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
         "hunin-jsonl" | "jsonl" => {
             let mut records = Vec::new();

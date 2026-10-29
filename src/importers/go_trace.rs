@@ -1,57 +1,19 @@
+mod tool;
+
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::{collections::HashMap, fs, path::Path, process::Command};
+use std::collections::HashMap;
 
-pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
-    let metadata: Value = fs::read(
-        path.parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("go-tool.json"),
-    )
-    .ok()
-    .map(|b| serde_json::from_slice(&b))
-    .transpose()?
-    .unwrap_or(json!({}));
-    let go = metadata["executable"]
-        .as_str()
-        .map(std::path::PathBuf::from)
-        .or_else(|| crate::host::tool("go"))
-        .context(
-            "Go execution trace import requires a compatible Go toolchain on PATH or HUNIN_GO",
-        )?;
-    let began = std::time::Instant::now();
-    let deadline = std::time::Duration::from_secs(60);
-    let mut output = crate::host::probe::output(
-        Command::new(&go)
-            .args(["tool", "trace", "-d=parsed"])
-            .arg(path),
-        None,
-        deadline,
-        64 * 1024 * 1024,
-    )?;
-    if !output.status.success()
-        && String::from_utf8_lossy(&output.stderr).contains("invalid debug mode")
-    {
-        let remaining = deadline
-            .checked_sub(began.elapsed())
-            .filter(|time| !time.is_zero())
-            .context("Go trace decoder deadline elapsed before legacy-format fallback")?;
-        output = crate::host::probe::output(
-            Command::new(&go).args(["tool", "trace", "-d=1"]).arg(path),
-            None,
-            remaining,
-            64 * 1024 * 1024,
-        )?;
-    }
-    if !output.status.success() {
-        bail!(
-            "Go execution trace decode failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let text =
-        std::str::from_utf8(&output.stdout).context("Go trace decoder emitted non-UTF8 data")?;
-    parse(text, run_id, key)
+pub(super) use tool::read;
+
+pub(super) fn decode(
+    decoded: &tool::Decoded,
+    run_id: &str,
+    key: &str,
+) -> Result<(Vec<Value>, Vec<String>)> {
+    let (records, mut diagnostics) = parse(&decoded.text, run_id, key)?;
+    diagnostics.extend(decoded.diagnostics.clone());
+    Ok((records, diagnostics))
 }
 
 fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {

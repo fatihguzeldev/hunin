@@ -84,7 +84,17 @@ pub(crate) fn publish(
             )
         })
         .transpose()?;
-    let document = json!({"run_id":run_id,"raw":raw,"sidecars":sidecars,"native_context_artifact_id":context.map(|a|a.id),"source_snapshots":sources,"normalization_fingerprint":profile.input_fingerprint,"decoder_provenance_artifact_id":decoder.map(|a|a.id),"decoder_identity":profile.decoder_provenance.as_ref().map(|value|&value["identity"]),"status":"accepted"});
+    let document = json!({
+        "run_id":run_id,
+        "raw":raw,
+        "sidecars":sidecars,
+        "native_context_artifact_id":context.map(|artifact|artifact.id),
+        "source_snapshots":sources,
+        "normalization_fingerprint":profile.input_fingerprint,
+        "decoder_provenance_artifact_id":decoder.map(|artifact|artifact.id),
+        "decoder_identity":profile.decoder_provenance.as_ref().map(|value|&value["identity"]),
+        "status":"accepted",
+    });
     let accepted = store.publish_result(PublicationRequest {
         run_id,
         source_key: &format!("import-v1:{}", raw.sha256),
@@ -152,7 +162,7 @@ pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Resul
     } else {
         crate::importers::import(&path, &raw.format, run_id)?
     };
-    if raw.format == "vmprof" && inputs["decoder_identity"].is_null() {
+    if profile.decoder_provenance.is_some() && inputs["decoder_identity"].is_null() {
         profile.diagnostics.push("Legacy normalization has no decoder identity; this reanalysis uses the current identified decoder and cannot establish the historical decoder environment.".into());
     }
     publish(store, run_id, profile)
