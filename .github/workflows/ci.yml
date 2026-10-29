@@ -315,6 +315,16 @@ jobs:
       - name: Verify automatic GraalPy collection
         if: always() && steps.graalpy.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime graalpy --executable "${{ env.HUNIN_TEST_GRAALPY }}" --output collector-evidence/graalpy
+      - name: Verify GraalPy native target entry forms
+        if: always() && steps.graalpy.outcome == 'success'
+        env:
+          HUNIN_TEST_GRAAL: ${{ env.HUNIN_TEST_GRAALPY }}
+        run: cargo +stable test --locked --test python_entry graal_native_entry_forms_preserve_main_lifetime_and_runtime_semantics -- --ignored --exact --nocapture
+      - name: Verify GraalPy spawn identity and retained failure outcomes
+        if: always() && steps.graalpy.outcome == 'success' && runner.os != 'Windows'
+        env:
+          HUNIN_TEST_GRAAL: ${{ env.HUNIN_TEST_GRAALPY }}
+        run: cargo +stable test --locked --test graal_entry unix::graal_spawn_identity_failure_preserves_target_outcome_and_raw_profile -- --ignored --exact --nocapture
       - name: Verify GraalPy SDK public API
         if: always() && steps.graalpy.outcome == 'success'
         run: python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_GRAALPY'],'-m','unittest','discover','-s','sdk/python'],check=True)"

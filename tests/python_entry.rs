@@ -107,13 +107,15 @@ raise SystemExit(7)
         assert_eq!(captured.stderr, native.stderr, "{label}");
         let stdout = String::from_utf8(captured.stdout).unwrap();
         let diagnostic = format!(
-            "Printing output to {}\n",
+            "Printing output to {}",
             request.artifact_dir.join("cpu.graal.json").display()
         );
-        // The runtime itself emits this diagnostic; preserve it as evidence,
-        // rather than disguising it as byte-exact target stdout parity.
+        // The runtime itself emits this diagnostic using its host line ending;
+        // separating it for this comparison does not establish byte-exact
+        // target stdout parity or strip production capture evidence.
         let target_stdout = stdout
-            .strip_suffix(&diagnostic)
+            .strip_suffix(&format!("{diagnostic}\r\n"))
+            .or_else(|| stdout.strip_suffix(&format!("{diagnostic}\n")))
             .expect("CPUSampler output-file diagnostic");
         let native_stdout = String::from_utf8(native.stdout).unwrap();
         let observations = |value: &str, expected_pid: Option<u32>| {
