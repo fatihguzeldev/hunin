@@ -69,6 +69,11 @@ impl std::error::Error for Failure {}
 /// The protocol schema owns the wire shape. This codec maps known typed origins
 /// and leaves every other error generic; messages are never a classifier.
 pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value {
+    let budget = error.downcast_ref::<super::responses::BudgetExceeded>().map(|budget| {
+        json!({"scope":"operation_result","dimension":"encoded_result_bytes","limit":budget.maximum,"observed":budget.observed})
+    }).or_else(|| error.downcast_ref::<crate::storage::ReadBudgetExceeded>().map(|budget| {
+        json!({"scope":"selected_record_query","dimension":budget.dimension.as_str(),"limit":budget.limit,"observed":budget.observed})
+    }));
     let code = match error.downcast_ref::<Failure>().map(|failure| failure.kind) {
         Some(Kind::UnknownOperation) => "unknown_operation",
         Some(Kind::InvalidParameters) => "invalid_parameters",
@@ -76,6 +81,7 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         Some(Kind::Capacity { .. }) => "capacity_exceeded",
         Some(Kind::ReadAbandoned) => "request_abandoned",
         Some(Kind::ReadDeadline) => "request_deadline_exceeded",
+        None if budget.is_some() => "work_budget_exceeded",
         None => "operation_failed",
     };
     let mut result = json!({"code":code,"operation":operation,"message":format!("{error:#}")});
@@ -85,6 +91,9 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
     }) = error.downcast_ref::<Failure>()
     {
         result["capacity"] = json!({"scope":scope,"maximum_in_flight":maximum});
+    }
+    if let Some(budget) = budget {
+        result["budget"] = budget;
     }
     result
 }
@@ -103,6 +112,10 @@ mod tests {
             anyhow::Error::new(Failure::capacity("test_family", 2)),
             anyhow::Error::new(Failure::read_abandoned()),
             anyhow::Error::new(Failure::read_deadline()),
+            anyhow::Error::new(super::super::responses::BudgetExceeded {
+                maximum: 1,
+                observed: 2,
+            }),
             anyhow::anyhow!("unknown operation invalid parameters conflict"),
         ];
         let actual: BTreeSet<_> = errors

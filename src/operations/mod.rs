@@ -4,6 +4,7 @@ mod contracts;
 mod errors;
 mod inputs;
 mod inspection;
+mod responses;
 mod workers;
 pub(crate) use errors::operation_failure;
 
@@ -91,7 +92,8 @@ impl Operations {
             .transpose()
             .map_err(errors::Failure::invalid_parameters)?
             .unwrap_or(0);
-        match name {
+        let read_response = definition["_meta"]["hunin/lifecycle"]["kind"] == "read";
+        let result: Result<Value> = match name {
             "storage.inspect" => {
                 let store = store.clone();
                 self.aggregate_work
@@ -256,7 +258,12 @@ impl Operations {
                     .await
             }
             _ => bail!("unknown operation"),
+        };
+        let result = result?;
+        if read_response {
+            responses::check(&result)?;
         }
+        Ok(result)
     }
 
     fn analysis_results(&self, params: &Value, limit: usize, cursor: usize) -> Result<Value> {

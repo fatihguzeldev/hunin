@@ -23,7 +23,8 @@
           "capacity_exceeded",
           "request_abandoned",
           "request_deadline_exceeded",
-          "conflict"
+          "conflict",
+          "work_budget_exceeded"
         ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
@@ -37,6 +38,11 @@
         "maximum_in_flight": 2,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -86,7 +92,8 @@
           "capacity_exceeded",
           "request_abandoned",
           "request_deadline_exceeded",
-          "conflict"
+          "conflict",
+          "work_budget_exceeded"
         ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
@@ -100,6 +107,11 @@
         "maximum_in_flight": 2,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -132,11 +144,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -165,11 +182,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -375,11 +397,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -433,11 +460,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -493,11 +525,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -547,11 +584,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -588,11 +630,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -628,11 +675,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -700,11 +752,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -762,11 +819,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -812,11 +874,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -914,7 +981,8 @@
           "capacity_exceeded",
           "request_abandoned",
           "request_deadline_exceeded",
-          "conflict"
+          "conflict",
+          "work_budget_exceeded"
         ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
@@ -928,6 +996,11 @@
         "maximum_in_flight": 2,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -964,11 +1037,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -1144,7 +1222,8 @@
           "capacity_exceeded",
           "request_abandoned",
           "request_deadline_exceeded",
-          "conflict"
+          "conflict",
+          "work_budget_exceeded"
         ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
@@ -1158,6 +1237,11 @@
         "maximum_in_flight": 8,
         "queue": "fail_fast",
         "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -1190,11 +1274,16 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },

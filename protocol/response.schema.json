@@ -1436,7 +1436,8 @@
             "operation_failed",
             "capacity_exceeded",
             "request_abandoned",
-            "request_deadline_exceeded"
+            "request_deadline_exceeded",
+            "work_budget_exceeded"
           ]
         },
         "operation": {
@@ -1457,6 +1458,27 @@
             }
           },
           "required": ["scope", "maximum_in_flight"],
+          "additionalProperties": false
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string"
+            },
+            "dimension": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["scope", "dimension", "limit", "observed"],
           "additionalProperties": false
         }
       },
