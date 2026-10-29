@@ -176,3 +176,25 @@ test('comparison pair preferences survive reload and observation replacement wit
   });
   assert.deepEqual(reload.forRun('other').comparison, {});
 });
+
+test('resource and artifact page positions restore without cached rows and invalidate with selected observations', () => {
+  const storage = session();
+  const first = new Investigations(storage);
+  first.observeResult('run', 'a');
+  first.forRun('run').resources = { cursor: '2000', previous: [null] };
+  first.forRun('run').evidence.artifacts = { cursor: '50', previous: [null] };
+  first.persist('run');
+  const reload = new Investigations(storage);
+  reload.observeResult('run', 'a');
+  assert.deepEqual(reload.forRun('run').resources, {
+    cursor: '2000',
+    previous: [null],
+  });
+  assert.deepEqual(reload.forRun('run').evidence.artifacts, {
+    cursor: '50',
+    previous: [null],
+  });
+  reload.observeResult('run', 'b');
+  assert.deepEqual(reload.forRun('run').resources, { previous: [] });
+  assert.equal(reload.forRun('run').evidence.artifacts, undefined);
+});

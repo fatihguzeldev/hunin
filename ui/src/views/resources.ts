@@ -2,6 +2,7 @@ import { operation, type Series } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
 import { duration, numeric } from '../format';
 import type { ViewContext } from '../workspace';
+import type { PageLocation } from '../pagination';
 
 function plot(series: Series): SVGSVGElement {
   const points = series.points.slice(0, 2_000);
@@ -47,10 +48,16 @@ function identity(series: Series): string {
   return `PID ${series.pid} · thread ${series.tid || 'unavailable'} (${series.thread_id_source ?? 'namespace unknown'}) · context ${series.context_id ?? 'unavailable'} · producer ${series.producer_id ?? 'unavailable'} · clock ${series.clock ?? 'unknown'} (${series.clock_alignment ?? 'unknown'})${typeof series.process_role === 'string' && series.process_role ? ` · ${series.process_role}` : ''}`;
 }
 
-export async function resources(
+export async function resources(context: ViewContext): Promise<HTMLElement> {
+  return resourcePage(context, context.investigation.resources, 'replace');
+}
+
+async function resourcePage(
   context: ViewContext,
-  cursor?: string,
+  location: PageLocation,
+  history: 'push' | 'replace',
 ): Promise<HTMLElement> {
+  const cursor = location.cursor;
   const { series, next_cursor, returned_points, total_points } =
     await operation(
       'resources.query',
@@ -63,11 +70,11 @@ export async function resources(
       context.signal,
     );
   context.signal.throwIfAborted();
-  if (!series.length)
-    return empty(
-      'No resource observations',
-      'This recording has no accepted process or thread resource series.',
-    );
+  context.investigation.resources = {
+    cursor,
+    previous: [...location.previous],
+  };
+  context.persist(history);
   const body = el(
     'div',
     { class: 'stack' },
@@ -168,6 +175,13 @@ export async function resources(
       ),
     ),
   );
+  if (!series.length)
+    body.append(
+      empty(
+        'No resource observations',
+        'This recording or window has no accepted process or thread resource series.',
+      ),
+    );
   if (returned_points !== undefined && total_points !== undefined)
     body.append(
       el(
@@ -176,11 +190,11 @@ export async function resources(
         `${numeric(returned_points)} of ${numeric(total_points)} resource points on this page`,
       ),
     );
-  async function showPage(page?: string): Promise<void> {
+  async function showPage(page: PageLocation): Promise<void> {
     if (context.signal.aborted) return;
     body.replaceChildren(loading('Loading more resource series…'));
     try {
-      const next = await resources(context, page);
+      const next = await resourcePage(context, page, 'push');
       if (!context.signal.aborted) body.replaceWith(next);
     } catch (error) {
       if (context.signal.aborted) return;
@@ -191,10 +205,26 @@ export async function resources(
       );
     }
   }
+  if (location.previous.length)
+    body.append(
+      button(
+        'Previous resource page',
+        () => {
+          void showPage({
+            cursor: location.previous.at(-1) ?? undefined,
+            previous: location.previous.slice(0, -1),
+          });
+        },
+        'button subtle',
+      ),
+    );
   if (next_cursor)
     body.append(
       button('Next resource page', () => {
-        void showPage(next_cursor);
+        void showPage({
+          cursor: next_cursor,
+          previous: [...location.previous, cursor ?? null],
+        });
       }),
     );
   if (cursor)
@@ -202,7 +232,7 @@ export async function resources(
       button(
         'First resource page',
         () => {
-          void showPage();
+          void showPage({ previous: [] });
         },
         'button subtle',
       ),

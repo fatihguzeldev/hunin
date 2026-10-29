@@ -1,3 +1,5 @@
+import type { PageLocation } from './pagination.js';
+
 export type ProfileInvestigation = {
   unit: string;
   path: string[];
@@ -25,6 +27,7 @@ export type EvidenceSelection =
 
 export type EvidenceInvestigation = {
   cursor?: string;
+  artifacts?: PageLocation;
   selection?: EvidenceSelection;
 };
 
@@ -41,6 +44,7 @@ export type Investigation = {
   timeline: TimelineInvestigation;
   evidence: EvidenceInvestigation;
   comparison: { before?: string; after?: string };
+  resources: PageLocation;
   source?: SourceSelection;
 };
 
@@ -71,12 +75,27 @@ function strings(value: unknown, limit = 128): string[] | undefined {
     : undefined;
 }
 
+function pageLocation(value: unknown): PageLocation | undefined {
+  const location = object(value);
+  if (
+    !location ||
+    !Array.isArray(location.previous) ||
+    !location.previous.every(
+      (cursor): cursor is string | null =>
+        cursor === null || typeof cursor === 'string',
+    )
+  )
+    return undefined;
+  return { cursor: text(location.cursor), previous: [...location.previous] };
+}
+
 function empty(): Investigation {
   return {
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
     timeline: { kind: '', alignment: 'aligned' },
     evidence: {},
     comparison: {},
+    resources: { previous: [] },
   };
 }
 
@@ -139,6 +158,9 @@ function decode(value: unknown): SavedInvestigation | undefined {
   }
   const evidence = object(state?.evidence);
   result.evidence.cursor = text(evidence?.cursor);
+  const artifactPage = pageLocation(evidence?.artifacts);
+  if (artifactPage) result.evidence.artifacts = artifactPage;
+  result.resources = pageLocation(state?.resources) ?? { previous: [] };
   const selection = object(evidence?.selection);
   if (selection && typeof selection.id === 'string') {
     if (selection.kind === 'observation')
@@ -286,6 +308,8 @@ export class Investigations {
       entry.state.timeline.cursor = undefined;
       entry.state.timeline.selectedId = undefined;
       entry.state.evidence.cursor = undefined;
+      entry.state.evidence.artifacts = undefined;
+      entry.state.resources = { previous: [] };
       if (entry.state.evidence.selection?.kind === 'observation')
         entry.state.evidence.selection = undefined;
     }

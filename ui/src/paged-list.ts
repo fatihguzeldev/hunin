@@ -1,16 +1,18 @@
 import { button, el, errorView, loading } from './dom';
-import { PagedQuery, type Page } from './pagination';
+import { PagedQuery, type Page, type PageLocation } from './pagination';
 
 export function pagedList<T>(options: {
   label: string;
   signal?: AbortSignal;
+  location?: PageLocation;
+  onLocation?: (location: PageLocation, navigate: boolean) => void;
   nextLabel: string;
   load: (cursor: string | undefined, signal: AbortSignal) => Promise<Page<T>>;
   render: (items: T[]) => HTMLElement;
   pollWhen?: (items: T[]) => boolean;
 }): { element: HTMLElement; refresh: (reset?: boolean) => Promise<void> } {
   const element = el('div', { class: 'stack' });
-  const query = new PagedQuery(options.load, options.signal);
+  const query = new PagedQuery(options.load, options.signal, options.location);
   let poll: ReturnType<typeof setTimeout> | undefined;
   options.signal?.addEventListener('abort', () => clearTimeout(poll), {
     once: true,
@@ -24,7 +26,7 @@ export function pagedList<T>(options: {
         ? button(
             'Previous page',
             () => {
-              void update(() => query.previous());
+              void update(() => query.previous(), true);
             },
             'button subtle',
           )
@@ -33,7 +35,7 @@ export function pagedList<T>(options: {
         ? button(
             options.nextLabel,
             () => {
-              void update(() => query.next());
+              void update(() => query.next(), true);
             },
             'button subtle',
           )
@@ -42,7 +44,7 @@ export function pagedList<T>(options: {
         ? button(
             'First page',
             () => {
-              void refresh(true);
+              void update(() => query.refresh(true), true);
             },
             'button subtle',
           )
@@ -50,12 +52,16 @@ export function pagedList<T>(options: {
     );
   }
 
-  async function update(request: () => Promise<boolean>): Promise<void> {
+  async function update(
+    request: () => Promise<boolean>,
+    navigate = false,
+  ): Promise<void> {
     clearTimeout(poll);
     if (options.signal?.aborted) return;
     element.replaceChildren(loading(`Loading ${options.label}…`));
     try {
       if (!(await request()) || options.signal?.aborted) return;
+      options.onLocation?.(query.location, navigate);
       element.replaceChildren(options.render(query.page.items), navigation());
       if (options.pollWhen?.(query.page.items))
         poll = setTimeout(() => {
@@ -65,7 +71,7 @@ export function pagedList<T>(options: {
       if (options.signal?.aborted) return;
       element.replaceChildren(
         errorView(error, () => {
-          void update(request);
+          void update(request, navigate);
         }),
         navigation(),
       );

@@ -1,5 +1,7 @@
 import { linkedRequest } from './requests.js';
 
+export type PageLocation = { cursor?: string; previous: (string | null)[] };
+
 export type Page<T> = { items: T[]; next_cursor?: string | null };
 
 /** Keep opaque cursors and commit navigation only after its request succeeds. */
@@ -16,7 +18,19 @@ export class PagedQuery<T> {
       signal: AbortSignal,
     ) => Promise<Page<T>>,
     private signal: AbortSignal = new AbortController().signal,
-  ) {}
+    location?: PageLocation,
+  ) {
+    this.cursor = location?.cursor;
+    this.previousCursors =
+      location?.previous.map((cursor) => cursor ?? undefined) ?? [];
+  }
+
+  get location(): PageLocation {
+    return {
+      cursor: this.cursor,
+      previous: this.previousCursors.map((cursor) => cursor ?? null),
+    };
+  }
 
   get hasPrevious(): boolean {
     return this.previousCursors.length > 0;

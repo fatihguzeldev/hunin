@@ -61,3 +61,22 @@ test('replacing an in-flight page aborts only the obsolete read and rejects late
   assert.equal(await obsolete, false);
   assert.deepEqual(query.page.items, ['current']);
 });
+
+test('payload-free page locations restore opaque cursors and previous first-page navigation', async () => {
+  const read = async (cursor: string | undefined): Promise<Page<string>> => ({
+    items: [cursor ?? 'first'],
+    next_cursor: cursor === undefined ? 'opaque-next' : undefined,
+  });
+  const query = new PagedQuery(read);
+  await query.refresh();
+  await query.next();
+  assert.deepEqual(query.location, { cursor: 'opaque-next', previous: [null] });
+  const location = JSON.parse(JSON.stringify(query.location));
+  const restored = new PagedQuery(read, new AbortController().signal, location);
+  await restored.refresh();
+  assert.deepEqual(restored.page.items, ['opaque-next']);
+  assert.equal(restored.hasPrevious, true);
+  await restored.previous();
+  assert.deepEqual(restored.page.items, ['first']);
+  assert.deepEqual(restored.location, { cursor: undefined, previous: [] });
+});

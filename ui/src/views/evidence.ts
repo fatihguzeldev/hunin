@@ -479,6 +479,11 @@ export async function evidence(context: ViewContext): Promise<HTMLElement> {
   const artifacts = pagedList<Artifact>({
     label: 'artifacts',
     signal: context.signal,
+    location: state.artifacts,
+    onLocation: (location, navigate) => {
+      state.artifacts = location;
+      context.persist(navigate ? 'push' : 'replace');
+    },
     nextLabel: 'More artifacts',
     load: async (pageCursor, readSignal) => {
       const page = await operation(
