@@ -78,6 +78,7 @@ pub(crate) fn publish(
             input_id: &id,
             document: &document,
         }),
+        deadline: None,
     })?;
     Ok(Publication {
         accepted,

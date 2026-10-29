@@ -18,6 +18,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
+mod publication_tests;
+
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
@@ -224,6 +227,7 @@ impl Store {
             input_identity,
             records,
             metadata: None,
+            deadline: None,
         })
     }
 
@@ -240,6 +244,7 @@ impl Store {
             input_identity: &format!("normalization:{fingerprint}"),
             records,
             metadata: None,
+            deadline: None,
         })
     }
 
@@ -274,6 +279,7 @@ impl Store {
             input_identity,
             records,
             metadata,
+            deadline: None,
         })
     }
 
@@ -284,10 +290,12 @@ impl Store {
             input_identity,
             records,
             metadata,
+            deadline,
         } = request;
         self.run(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        publication::check_deadline(deadline)?;
         if let Some(id) =
             metadata.and_then(|value| value.analysis_execution_id().map(str::to_owned))
         {
@@ -315,6 +323,7 @@ impl Store {
             if let Some(metadata) = metadata {
                 write_publication_metadata(&tx, metadata, &metadata.replayed_document(&id))?;
             }
+            publication::check_deadline(deadline)?;
             tx.commit()?;
             return Ok(false);
         }
@@ -379,6 +388,7 @@ impl Store {
         if let Some(metadata) = metadata {
             write_publication_metadata(&tx, metadata, metadata.document())?;
         }
+        publication::check_deadline(deadline)?;
         tx.commit()?;
         Ok(true)
     }

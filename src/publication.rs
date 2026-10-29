@@ -12,6 +12,16 @@ pub(crate) struct PublicationRequest<'a> {
     pub input_identity: &'a str,
     pub records: &'a [Value],
     pub metadata: Option<PublicationMetadata<'a>>,
+    pub deadline: Option<std::time::Instant>,
+}
+
+/// A checkpoint cannot preempt a synchronous unit or an in-flight disk commit.
+/// Recheck after acquiring the writer and before beginning the commit.
+pub(crate) fn check_deadline(deadline: Option<std::time::Instant>) -> Result<()> {
+    if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        bail!("result publication deadline exceeded");
+    }
+    Ok(())
 }
 
 /// Metadata has a lifecycle role before it has a persistence namespace. Values

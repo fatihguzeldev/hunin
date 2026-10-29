@@ -56,6 +56,20 @@ impl Control {
             bytes: Arc::new(AtomicU64::new(0)),
         }
     }
+
+    pub fn check(&self) -> Result<()> {
+        if *self.cancellation.borrow() {
+            bail!("analysis cancelled");
+        }
+        check_deadline(self.deadline)
+    }
+}
+
+pub(super) fn check_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        bail!("analysis timed out");
+    }
+    Ok(())
 }
 async fn copy_bounded<R: AsyncRead + Unpin>(
     mut input: R,
@@ -95,12 +109,7 @@ pub async fn execute(
     stderr: &Path,
     mut control: Control,
 ) -> Result<ExitStatus> {
-    if *control.cancellation.borrow() {
-        bail!("analysis cancelled");
-    }
-    if control.deadline <= Instant::now() {
-        bail!("analysis timed out");
-    }
+    control.check()?;
     let mut command = Command::new(tool_path(Path::new(&arguments[0])));
     command
         .args(&arguments[1..])
@@ -147,5 +156,6 @@ pub async fn execute(
     let status = outcome?;
     a?;
     b?;
+    control.check()?;
     Ok(status)
 }
