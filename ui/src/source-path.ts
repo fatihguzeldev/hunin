@@ -6,6 +6,12 @@ export function hasLocalSource(path?: string | null): path is string {
 }
 
 /** A measured code identity can also name a retained virtual source-map URI. */
-export function hasInspectableSource(path?: string | null, codeId?: string | null): path is string {
-  return hasLocalSource(path) || Boolean(path && codeId && !/^(node|wasm):/i.test(path));
+export function hasInspectableSource(
+  path?: string | null,
+  codeId?: string | null,
+): path is string {
+  return (
+    hasLocalSource(path) ||
+    Boolean(path && codeId && !/^(node|wasm):/i.test(path))
+  );
 }

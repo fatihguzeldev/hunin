@@ -9,21 +9,36 @@ export class PagedQuery<T> {
 
   constructor(private fetchPage: (cursor?: string) => Promise<Page<T>>) {}
 
-  get hasPrevious(): boolean { return this.previousCursors.length > 0; }
+  get hasPrevious(): boolean {
+    return this.previousCursors.length > 0;
+  }
 
   refresh(reset = false): Promise<boolean> {
-    return this.load(reset ? undefined : this.cursor, reset ? [] : this.previousCursors);
+    return this.load(
+      reset ? undefined : this.cursor,
+      reset ? [] : this.previousCursors,
+    );
   }
 
   next(): Promise<boolean> {
-    return this.page.next_cursor ? this.load(this.page.next_cursor, [...this.previousCursors, this.cursor]) : Promise.resolve(false);
+    return this.page.next_cursor
+      ? this.load(this.page.next_cursor, [...this.previousCursors, this.cursor])
+      : Promise.resolve(false);
   }
 
   previous(): Promise<boolean> {
-    return this.hasPrevious ? this.load(this.previousCursors.at(-1), this.previousCursors.slice(0, -1)) : Promise.resolve(false);
+    return this.hasPrevious
+      ? this.load(
+          this.previousCursors.at(-1),
+          this.previousCursors.slice(0, -1),
+        )
+      : Promise.resolve(false);
   }
 
-  private async load(cursor: string | undefined, previous: (string | undefined)[]): Promise<boolean> {
+  private async load(
+    cursor: string | undefined,
+    previous: (string | undefined)[],
+  ): Promise<boolean> {
     const version = ++this.version;
     try {
       const page = await this.fetchPage(cursor);

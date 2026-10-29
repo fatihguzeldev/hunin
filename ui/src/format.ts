@@ -11,7 +11,8 @@ export function percentage(value: number | null | undefined): string {
 export function duration(nanoseconds: number): string {
   if (nanoseconds < 1_000) return `${numeric(nanoseconds)} ns`;
   if (nanoseconds < 1_000_000) return `${numeric(nanoseconds / 1_000)} µs`;
-  if (nanoseconds < 1_000_000_000) return `${numeric(nanoseconds / 1_000_000)} ms`;
+  if (nanoseconds < 1_000_000_000)
+    return `${numeric(nanoseconds / 1_000_000)} ms`;
   return `${numeric(nanoseconds / 1_000_000_000)} s`;
 }
 
