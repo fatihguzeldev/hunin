@@ -10,6 +10,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Capabilities"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -33,6 +47,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunPage"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -51,6 +79,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunDetails"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "snapshot": "result_identity covers only the selected observations used for this summary, not a lease across later queries.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -119,6 +162,35 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "start",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "handle": {
+          "output": "run.id",
+          "meaning": "recording identity"
+        },
+        "cancel": {
+          "operation": "runs.cancel",
+          "parameter": "run_id"
+        },
+        "reconnect": {
+          "operation": "runs.get",
+          "parameter": "run_id",
+          "requires_additional_run_id": false
+        },
+        "authority": "Read retained server state. Missing/unknown state is not completion. Polling interest is client-owned.",
+        "version": 1,
+        "session_end": "MCP session EOF or service shutdown applies the existing cleanup policy for jobs owned by that service; disposing a read/view is separate."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -137,6 +209,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "cancel",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "Cancellation request is explicit; confirm the retained terminal state rather than inferring it from request completion.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -161,6 +248,21 @@
         }
       },
       "required": ["removed"]
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "If the response is lost, inspect the retained store state; a completed client request is not the publication serialization point.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters", "conflict"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -188,6 +290,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ProfileHotspots"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -232,6 +348,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ProfileTree"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -278,6 +408,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Timeline"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -318,6 +462,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Resources"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -345,6 +503,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Contexts"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -371,6 +543,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Evidence"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -429,6 +615,20 @@
         }
       },
       "required": ["artifacts", "next_cursor"]
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -477,6 +677,20 @@
         }
       },
       "required": ["content", "encoding", "next_offset", "size"]
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -513,6 +727,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/SourceRead"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -543,6 +771,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ImportResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "If the response is lost, inspect the retained store state; a completed client request is not the publication serialization point.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -565,6 +808,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Comparison"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -592,6 +849,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisPage"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -638,6 +909,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisRegistered"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "If the response is lost, inspect the retained store state; a completed client request is not the publication serialization point.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -664,6 +950,35 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisStarted"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "start",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "handle": {
+          "output": "result_set_id",
+          "meaning": "attempt execution handle; final replay result_set_id may differ"
+        },
+        "cancel": {
+          "operation": "analyses.cancel",
+          "parameter": "execution_id"
+        },
+        "reconnect": {
+          "operation": "analyses.results",
+          "parameter": "execution_id",
+          "requires_additional_run_id": true
+        },
+        "authority": "Read retained server state. Missing/unknown state is not completion. Polling interest is client-owned.",
+        "version": 1,
+        "session_end": "MCP session EOF or service shutdown applies the existing cleanup policy for jobs owned by that service; disposing a read/view is separate."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -696,6 +1011,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisResultPage"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "lookup": "execution_id selects the original attempt document, scoped by run_id; omitted execution_id retains pagination. Empty result does not mean completion.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -719,6 +1049,20 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ScenarioPage"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -791,6 +1135,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ScenarioSaveResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "If the response is lost, inspect the retained store state; a completed client request is not the publication serialization point.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -813,6 +1172,35 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "start",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "handle": {
+          "output": "run.id",
+          "meaning": "recording identity"
+        },
+        "cancel": {
+          "operation": "runs.cancel",
+          "parameter": "run_id"
+        },
+        "reconnect": {
+          "operation": "runs.get",
+          "parameter": "run_id",
+          "requires_additional_run_id": false
+        },
+        "authority": "Read retained server state. Missing/unknown state is not completion. Polling interest is client-owned.",
+        "version": 1,
+        "session_end": "MCP session EOF or service shutdown applies the existing cleanup policy for jobs owned by that service; disposing a read/view is separate."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -831,6 +1219,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisCanceled"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "cancel",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "Cancellation request is explicit; confirm the retained terminal state rather than inferring it from request completion.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   },
   {
@@ -853,6 +1256,21 @@
     },
     "outputSchema": {
       "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ReanalysisResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "authority": "If the response is lost, inspect the retained store state; a completed client request is not the publication serialization point.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": ["invalid_parameters"],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      }
     }
   }
 ]

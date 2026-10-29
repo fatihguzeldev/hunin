@@ -47,6 +47,61 @@ fn published_output_schemas_resolve_without_external_files_or_network() {
     }
 }
 
+#[test]
+fn advertised_lifecycle_handles_resolve_to_callable_cancel_and_reconnect_contracts() {
+    let definitions = catalog();
+    let responses: Value =
+        serde_json::from_str(include_str!("../protocol/response.schema.json")).unwrap();
+    let codes = responses["$defs"]["OperationFailure"]["properties"]["code"]["enum"]
+        .as_array()
+        .unwrap();
+    for operation in definitions {
+        let lifecycle = &operation["_meta"]["hunin/lifecycle"];
+        assert_eq!(lifecycle["version"], 1);
+        assert!(matches!(
+            lifecycle["kind"].as_str(),
+            Some("read" | "mutation" | "start" | "cancel")
+        ));
+        let errors = &operation["_meta"]["hunin/operation-errors"];
+        for code in errors["typed_origin_codes"].as_array().unwrap() {
+            assert!(codes.contains(code));
+        }
+        assert!(codes.contains(&errors["fallback"]));
+        assert!(codes.contains(&errors["dispatch_unknown"]));
+        if lifecycle["kind"] != "start" {
+            continue;
+        }
+        let mut output = &operation["outputSchema"];
+        for field in lifecycle["handle"]["output"].as_str().unwrap().split('.') {
+            while let Some(reference) = output["$ref"].as_str() {
+                output = operation["outputSchema"]
+                    .pointer(reference.strip_prefix('#').unwrap())
+                    .unwrap();
+            }
+            output = &output["properties"][field];
+            assert!(
+                !output.is_null(),
+                "{} handle field {field}",
+                operation["name"]
+            );
+        }
+        assert_eq!(output["type"], "string");
+        for (link, kind) in [("cancel", "cancel"), ("reconnect", "read")] {
+            let route = &lifecycle[link];
+            let target = definitions
+                .iter()
+                .find(|entry| entry["name"] == route["operation"])
+                .unwrap();
+            assert_eq!(target["_meta"]["hunin/lifecycle"]["kind"], kind);
+            let parameter = route["parameter"].as_str().unwrap();
+            assert_eq!(
+                target["inputSchema"]["properties"][parameter]["type"],
+                "string"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn run_contract_preserves_extension_status_null_options_and_arbitrary_metadata() {
     let data = tempfile::tempdir().unwrap();
