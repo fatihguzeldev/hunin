@@ -154,6 +154,8 @@ jobs:
       - name: Python target entry semantics
         if: always()
         run: python -m unittest discover -s collectors/python -p test_entry.py
+      - name: Offline decoder provenance controls
+        run: python -m unittest discover -s src/importers/vmprof -p test_decode.py
       - name: Go SDK tests
         if: always()
         working-directory: sdk/go
