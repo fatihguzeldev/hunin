@@ -158,6 +158,59 @@
     }
   },
   {
+    "name": "runs.metadata",
+    "description": "Read recording metadata independently of observation aggregation; unavailable selection identity stays explicit",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunMetadata"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "snapshot": "Optional result identity covers selected immutable result IDs in one read transaction; it is not a lease for later queries or a summary.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict",
+          "work_budget_exceeded"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      }
+    }
+  },
+  {
     "name": "runs.get",
     "description": "Inspect a recording and prepared summary",
     "inputSchema": {

@@ -477,6 +477,12 @@ export type StorageInspection = {
   "limitations": Array<string>;
 };
 
+export type RunMetadata = {
+  "run": Run;
+  "result_identity"?: string;
+  "result_identity_diagnostic"?: string;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -490,6 +496,9 @@ export type OperationInputs = {
   "runs.list": {
   "limit"?: number;
   "cursor"?: string;
+};
+  "runs.metadata": {
+  "run_id": string;
 };
   "runs.get": {
   "run_id": string;
@@ -640,6 +649,7 @@ export type OperationOutputs = {
   "capabilities": Capabilities;
   "storage.inspect": StorageInspection;
   "runs.list": RunPage;
+  "runs.metadata": RunMetadata;
   "runs.get": RunDetails;
   "runs.start": RunResult;
   "runs.cancel": RunResult;
@@ -882,6 +892,10 @@ export function isStorageInspection(value: unknown): value is StorageInspection 
   return (isOutputObject(value) && Object.hasOwn(value, "findings") && Object.hasOwn(value, "scans") && Object.hasOwn(value, "limits_hit") && Object.hasOwn(value, "budgets") && Object.hasOwn(value, "elapsed_ms") && Object.hasOwn(value, "database_changed_during_scan") && Object.hasOwn(value, "content_hashes_checked") && Object.hasOwn(value, "deletion_authorized") && Object.hasOwn(value, "reference_view") && Object.hasOwn(value, "filesystem_view") && Object.hasOwn(value, "path_encoding") && Object.hasOwn(value, "limitations") && (Array.isArray(value["findings"]) && value["findings"].length <= 2000 && value["findings"].every(item => isInspectionFinding(item))) && (Array.isArray(value["scans"]) && value["scans"].length >= 5 && value["scans"].length <= 5 && value["scans"].every(item => isInspectionScan(item))) && (Array.isArray(value["limits_hit"]) && new Set(value["limits_hit"]).size === value["limits_hit"].length && value["limits_hit"].every(item => ((item === "artifact_rows" || item === "filesystem_entries" || item === "findings" || item === "time") && typeof item === "string"))) && (isOutputObject(value["budgets"]) && Object.hasOwn(value["budgets"], "artifact_row_limit") && Object.hasOwn(value["budgets"], "filesystem_entry_limit") && Object.hasOwn(value["budgets"], "finding_limit") && Object.hasOwn(value["budgets"], "budget_ms") && (typeof value["budgets"]["artifact_row_limit"] === "number" && Number.isInteger(value["budgets"]["artifact_row_limit"]) && value["budgets"]["artifact_row_limit"] >= 1 && value["budgets"]["artifact_row_limit"] <= 10000) && (typeof value["budgets"]["filesystem_entry_limit"] === "number" && Number.isInteger(value["budgets"]["filesystem_entry_limit"]) && value["budgets"]["filesystem_entry_limit"] >= 1 && value["budgets"]["filesystem_entry_limit"] <= 10000) && (typeof value["budgets"]["finding_limit"] === "number" && Number.isInteger(value["budgets"]["finding_limit"]) && value["budgets"]["finding_limit"] >= 1 && value["budgets"]["finding_limit"] <= 2000) && (typeof value["budgets"]["budget_ms"] === "number" && Number.isInteger(value["budgets"]["budget_ms"]) && value["budgets"]["budget_ms"] >= 1 && value["budgets"]["budget_ms"] <= 5000) && Object.keys(value["budgets"]).every(key => ["artifact_row_limit","filesystem_entry_limit","finding_limit","budget_ms"].includes(key))) && (typeof value["elapsed_ms"] === "number" && Number.isFinite(value["elapsed_ms"]) && value["elapsed_ms"] >= 0) && (typeof value["database_changed_during_scan"] === "boolean") && (value["content_hashes_checked"] === 0) && (value["deletion_authorized"] === false) && (value["reference_view"] === "sqlite_read_transaction") && (value["filesystem_view"] === "live_metadata") && (value["path_encoding"] === "lossy_display_only") && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && Object.keys(value).every(key => ["findings","scans","limits_hit","budgets","elapsed_ms","database_changed_during_scan","content_hashes_checked","deletion_authorized","reference_view","filesystem_view","path_encoding","limitations"].includes(key)));
 }
 
+export function isRunMetadata(value: unknown): value is RunMetadata {
+  return (isOutputObject(value) && Object.hasOwn(value, "run") && isRun(value["run"]) && (!Object.hasOwn(value, "result_identity") || (typeof value["result_identity"] === "string")) && (!Object.hasOwn(value, "result_identity_diagnostic") || (typeof value["result_identity_diagnostic"] === "string")) && Object.keys(value).every(key => ["run","result_identity","result_identity_diagnostic"].includes(key)));
+}
+
 // Every operation result is checked against its declared wire contract.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
@@ -893,6 +907,9 @@ export function validateOperationOutput(name: string, value: unknown): void {
       break;
     case "runs.list":
       if (!isRunPage(value)) throw new Error("Hunin returned an invalid runs.list result.");
+      break;
+    case "runs.metadata":
+      if (!isRunMetadata(value)) throw new Error("Hunin returned an invalid runs.metadata result.");
       break;
     case "runs.get":
       if (!isRunDetails(value)) throw new Error("Hunin returned an invalid runs.get result.");

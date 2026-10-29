@@ -1831,6 +1831,23 @@
         "limitations"
       ],
       "additionalProperties": false
+    },
+    "RunMetadata": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "result_identity": {
+          "type": "string",
+          "description": "Opaque selected-result ID snapshot, independently read from run metadata; no cross-query lease."
+        },
+        "result_identity_diagnostic": {
+          "type": "string"
+        }
+      },
+      "required": ["run"],
+      "additionalProperties": false
     }
   }
 }

@@ -118,6 +118,19 @@ impl Operations {
                     json!({"run":run,"summary":query::summary(&snapshot.records),"result_identity":snapshot.result_identity}),
                 )
             }
+            "runs.metadata" => {
+                let store = store.clone();
+                let run_id = id()?.to_owned();
+                self.metadata_work.read(move |interest| {
+                    let run = store.run(&run_id)?;
+                    let identity = store.with_query_snapshot(&run_id, Default::default(), move || interest.check(), |_| Ok(()));
+                    match identity {
+                        Ok(snapshot) => Ok(json!({"run":run,"result_identity":snapshot.result_identity})),
+                        Err(error) if error.is::<crate::storage::ReadBudgetExceeded>() => Ok(json!({"run":run,"result_identity_diagnostic":format!("Selection identity unavailable within the metadata read budget: {error:#}")})),
+                        Err(error) => Err(error),
+                    }
+                }).await
+            }
             "runs.start" => Ok(
                 json!({"run":self.engine.start(serde_json::from_value::<StartRequest>(params).map_err(errors::Failure::invalid_parameters)?).await?}),
             ),
