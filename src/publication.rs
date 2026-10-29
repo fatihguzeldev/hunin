@@ -2,8 +2,75 @@
 //! holding its write transaction; this module does not open storage or commit.
 
 use crate::model::relations::{ObservationLinks, Ownership, OwnershipKind, SelectedObservation};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+
+pub(crate) struct PublicationRequest<'a> {
+    pub run_id: &'a str,
+    pub source_key: &'a str,
+    pub input_identity: &'a str,
+    pub records: &'a [Value],
+    pub metadata: Option<PublicationMetadata<'a>>,
+}
+
+/// Metadata has a lifecycle role before it has a persistence namespace. Values
+/// retain their existing extensible wire representation during the migration.
+#[derive(Clone, Copy)]
+pub(crate) enum PublicationMetadata<'a> {
+    Analysis {
+        execution_id: &'a str,
+        document: &'a Value,
+    },
+    Normalization {
+        input_id: &'a str,
+        document: &'a Value,
+    },
+    Other {
+        namespace: &'a str,
+        id: &'a str,
+        document: &'a Value,
+    },
+}
+
+impl PublicationMetadata<'_> {
+    pub fn analysis_execution_id(&self) -> Option<&str> {
+        match self {
+            Self::Analysis { execution_id, .. } => Some(execution_id),
+            _ => None,
+        }
+    }
+
+    pub fn document(&self) -> &Value {
+        match self {
+            Self::Analysis { document, .. }
+            | Self::Normalization { document, .. }
+            | Self::Other { document, .. } => document,
+        }
+    }
+
+    pub fn declared_inputs(&self) -> Result<Vec<&str>> {
+        let Some(inputs) = self.document().get("input_result_sets") else {
+            return Ok(Vec::new());
+        };
+        inputs
+            .as_array()
+            .context("input_result_sets must be an array")?
+            .iter()
+            .map(|id| {
+                id.as_str()
+                    .context("input result identity must be a string")
+            })
+            .collect()
+    }
+
+    pub fn replayed_document(&self, result_id: &str) -> Value {
+        let mut document = self.document().clone();
+        document["status"] = json!("replayed");
+        document["result_set_id"] = json!(result_id);
+        document
+    }
+}
 
 pub(crate) fn validate_relations(
     proposed: &[ObservationLinks],

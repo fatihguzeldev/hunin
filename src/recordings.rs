@@ -1,3 +1,4 @@
+use crate::publication::{PublicationMetadata, PublicationRequest};
 use crate::{importers::ImportedProfile, model::runs::Artifact, storage::Store};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -68,13 +69,16 @@ pub(crate) fn publish(
     }
     let id = format!("{run_id}:{}", raw.sha256);
     let document = json!({"run_id":run_id,"raw":raw,"sidecars":sidecars,"native_context_artifact_id":context.map(|a|a.id),"source_snapshots":sources,"normalization_fingerprint":profile.input_fingerprint,"status":"accepted"});
-    let accepted = store.publish(
+    let accepted = store.publish_result(PublicationRequest {
         run_id,
-        &format!("import-v1:{}", raw.sha256),
-        &format!("normalization:{}", profile.input_fingerprint),
-        &profile.records,
-        Some(("profile-inputs", &id, &document)),
-    )?;
+        source_key: &format!("import-v1:{}", raw.sha256),
+        input_identity: &format!("normalization:{}", profile.input_fingerprint),
+        records: &profile.records,
+        metadata: Some(PublicationMetadata::Normalization {
+            input_id: &id,
+            document: &document,
+        }),
+    })?;
     Ok(Publication {
         accepted,
         diagnostics: profile.diagnostics,

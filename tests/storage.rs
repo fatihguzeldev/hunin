@@ -508,3 +508,59 @@ fn persisted_cancellation_wins_the_publication_race_and_owned_documents_are_remo
     assert!(!capture.exists());
     assert!(!attempt.exists());
 }
+
+#[test]
+fn concurrent_cancellation_and_publication_have_one_serialized_outcome() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store
+        .save_document(
+            "analysis-results",
+            "raced",
+            &json!({"run_id":"run-1","status":"running"}),
+        )
+        .unwrap();
+    let other = Store::open(root.path()).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let ready = barrier.clone();
+    let publishing = store.clone();
+    let publish = std::thread::spawn(move || {
+        let records: Vec<_> = (0..256)
+            .map(|index| event(&format!("raced-{index}")))
+            .collect();
+        ready.wait();
+        publishing.publish(
+            "run-1",
+            "analysis:raced",
+            "raced-input",
+            &records,
+            Some((
+                "analysis-results",
+                "raced",
+                &json!({"run_id":"run-1","status":"accepted"}),
+            )),
+        )
+    });
+    barrier.wait();
+    let cancellation = other.request_analysis_cancel("raced").unwrap();
+    let outcome = publish.join().unwrap();
+    let document = store.document("analysis-results", "raced").unwrap();
+    match outcome {
+        Ok(accepted) => {
+            assert!(accepted);
+            assert_eq!(cancellation["status"], "accepted");
+            assert_eq!(document["status"], "accepted");
+            assert_eq!(store.records("run-1").unwrap().len(), 256);
+        }
+        Err(error) => {
+            assert!(
+                error.to_string().contains("cancelled before publication"),
+                "{error:#}"
+            );
+            assert_eq!(cancellation["cancellation_requested"], true);
+            assert_eq!(document["cancellation_requested"], true);
+            assert!(store.records("run-1").unwrap().is_empty());
+        }
+    }
+}

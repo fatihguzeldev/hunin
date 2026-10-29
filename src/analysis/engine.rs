@@ -317,13 +317,19 @@ impl Engine {
                 analysis["package_digest"].as_str().unwrap(),
                 input.fingerprint
             );
-            if let Err(error) = self.store.publish(
-                &run_id,
-                &source,
-                &identity,
-                &records,
-                Some(("analysis-results", &id, &document)),
-            ) {
+            if let Err(error) = self
+                .store
+                .publish_result(crate::publication::PublicationRequest {
+                    run_id: &run_id,
+                    source_key: &source,
+                    input_identity: &identity,
+                    records: &records,
+                    metadata: Some(crate::publication::PublicationMetadata::Analysis {
+                        execution_id: &id,
+                        document: &document,
+                    }),
+                })
+            {
                 let requested = self
                     .store
                     .document("analysis-results", &id)

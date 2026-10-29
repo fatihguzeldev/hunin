@@ -4,7 +4,7 @@ use crate::{
         relations::{Ownership, OwnershipKind, SelectedObservation},
         runs::{Artifact, Run, RunStatus},
     },
-    publication,
+    publication::{self, PublicationMetadata, PublicationRequest},
 };
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -218,7 +218,13 @@ impl Store {
 
     /// Validate and publish a whole result set in one transaction. Replays are no-ops.
     pub fn accept(&self, run_id: &str, input_identity: &str, records: &[Value]) -> Result<bool> {
-        self.publish(run_id, input_identity, input_identity, records, None)
+        self.publish_result(PublicationRequest {
+            run_id,
+            source_key: input_identity,
+            input_identity,
+            records,
+            metadata: None,
+        })
     }
 
     pub fn accept_import(
@@ -228,13 +234,13 @@ impl Store {
         fingerprint: &str,
         records: &[Value],
     ) -> Result<bool> {
-        self.publish(
+        self.publish_result(PublicationRequest {
             run_id,
             source_key,
-            &format!("normalization:{fingerprint}"),
+            input_identity: &format!("normalization:{fingerprint}"),
             records,
-            None,
-        )
+            metadata: None,
+        })
     }
 
     pub fn publish(
@@ -245,10 +251,46 @@ impl Store {
         records: &[Value],
         document: Option<(&str, &str, &Value)>,
     ) -> Result<bool> {
+        // Compatibility adapter for existing callers of the generic API. New
+        // application code supplies lifecycle metadata explicitly.
+        let metadata = document.map(|(namespace, id, document)| match namespace {
+            "analysis-results" => PublicationMetadata::Analysis {
+                execution_id: id,
+                document,
+            },
+            "profile-inputs" => PublicationMetadata::Normalization {
+                input_id: id,
+                document,
+            },
+            _ => PublicationMetadata::Other {
+                namespace,
+                id,
+                document,
+            },
+        });
+        self.publish_result(PublicationRequest {
+            run_id,
+            source_key,
+            input_identity,
+            records,
+            metadata,
+        })
+    }
+
+    pub(crate) fn publish_result(&self, request: PublicationRequest<'_>) -> Result<bool> {
+        let PublicationRequest {
+            run_id,
+            source_key,
+            input_identity,
+            records,
+            metadata,
+        } = request;
         self.run(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(("analysis-results", id, _)) = document {
+        if let Some(id) =
+            metadata.and_then(|value| value.analysis_execution_id().map(str::to_owned))
+        {
             let cancelled: Option<bool> = tx.query_row("SELECT COALESCE(json_extract(payload,'$.cancellation_requested'),0) FROM documents WHERE namespace='analysis-results' AND id=?1",[id],|r|r.get(0)).optional()?;
             anyhow::ensure!(
                 cancelled != Some(true),
@@ -270,11 +312,8 @@ impl Store {
                 anyhow::ensure!(stale == 0, "stored result depends on superseded inputs; recompute the analysis");
                 tx.execute("UPDATE result_sets SET active=1 WHERE id=?1", [&id])?;
             }
-            if let Some((namespace, key, value)) = document {
-                let mut value = value.clone();
-                value["status"] = serde_json::json!("replayed");
-                value["result_set_id"] = serde_json::json!(id);
-                write_document(&tx, namespace, key, &value)?;
+            if let Some(metadata) = metadata {
+                write_publication_metadata(&tx, metadata, &metadata.replayed_document(&id))?;
             }
             tx.commit()?;
             return Ok(false);
@@ -300,19 +339,8 @@ impl Store {
         ingestion::validate(run_id, records, &existing)?;
         let mut dependencies =
             publication::validate_relations(&ingestion::links(records), &selected)?;
-        if let Some((_, _, value)) = document
-            && let Some(inputs) = value.get("input_result_sets")
-        {
-            for id in inputs
-                .as_array()
-                .context("input_result_sets must be an array")?
-            {
-                dependencies.insert(
-                    id.as_str()
-                        .context("input result identity must be a string")?
-                        .to_owned(),
-                );
-            }
+        if let Some(metadata) = metadata {
+            dependencies.extend(metadata.declared_inputs()?.into_iter().map(str::to_owned));
         }
         for id in &dependencies {
             let selected: i64 = tx.query_row(
@@ -325,9 +353,8 @@ impl Store {
                 "analysis input changed before publication; rerun with current selected results"
             );
         }
-        let result_id = document
-            .filter(|(ns, _, _)| *ns == "analysis-results")
-            .map(|(_, id, _)| id.to_owned())
+        let result_id = metadata
+            .and_then(|value| value.analysis_execution_id().map(str::to_owned))
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         tx.execute(
             "INSERT INTO result_sets(id,run_id,input_identity,source_key,active) VALUES(?1,?2,?3,?4,1)",
@@ -349,8 +376,8 @@ impl Store {
                 ])?;
             }
         }
-        if let Some((namespace, id, value)) = document {
-            write_document(&tx, namespace, id, value)?;
+        if let Some(metadata) = metadata {
+            write_publication_metadata(&tx, metadata, metadata.document())?;
         }
         tx.commit()?;
         Ok(true)
@@ -702,6 +729,19 @@ fn selected_records(connection: &Connection, run_id: &str) -> Result<Vec<Value>>
         .query_map([run_id], |row| row.get::<_, String>(0))?
         .map(|row| Ok(serde_json::from_str(&row?)?))
         .collect()
+}
+
+fn write_publication_metadata(
+    connection: &Connection,
+    metadata: PublicationMetadata<'_>,
+    document: &Value,
+) -> Result<()> {
+    let (namespace, id) = match metadata {
+        PublicationMetadata::Analysis { execution_id, .. } => ("analysis-results", execution_id),
+        PublicationMetadata::Normalization { input_id, .. } => ("profile-inputs", input_id),
+        PublicationMetadata::Other { namespace, id, .. } => (namespace, id),
+    };
+    write_document(connection, namespace, id, document)
 }
 
 fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Value) -> Result<()> {
