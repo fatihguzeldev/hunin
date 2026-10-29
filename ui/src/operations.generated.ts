@@ -149,3 +149,38 @@ export type OperationInputs = {
   "artifact_id": string;
 };
 };
+
+export type OperationOutputs = {
+  "artifacts.list": {
+  "artifacts": Array<{
+  "id": string;
+  "name": string;
+  "size": number;
+  "sha256": string;
+  "format": string;
+}>;
+  "next_cursor": string | null;
+};
+  "artifacts.read": {
+  "content": string;
+  "encoding": "utf8_lossy";
+  "next_offset": number | null;
+  "size": number;
+};
+};
+
+function isOutputObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Only declared output schemas are checked while the catalog is migrated.
+export function validateOperationOutput(name: string, value: unknown): void {
+  switch (name) {
+    case "artifacts.list":
+      if (!(isOutputObject(value) && Object.hasOwn(value, "artifacts") && Object.hasOwn(value, "next_cursor") && (Array.isArray(value["artifacts"]) && value["artifacts"].every(item => (isOutputObject(item) && Object.hasOwn(item, "id") && Object.hasOwn(item, "name") && Object.hasOwn(item, "size") && Object.hasOwn(item, "sha256") && Object.hasOwn(item, "format") && (typeof item["id"] === "string") && (typeof item["name"] === "string") && (typeof item["size"] === "number" && Number.isInteger(item["size"]) && item["size"] >= 0) && (typeof item["sha256"] === "string") && (typeof item["format"] === "string")))) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)))) throw new Error("Hunin returned an invalid artifacts.list result.");
+      break;
+    case "artifacts.read":
+      if (!(isOutputObject(value) && Object.hasOwn(value, "content") && Object.hasOwn(value, "encoding") && Object.hasOwn(value, "next_offset") && Object.hasOwn(value, "size") && (typeof value["content"] === "string") && (value["encoding"] === "utf8_lossy") && ((typeof value["next_offset"] === "number" && Number.isInteger(value["next_offset"]) && value["next_offset"] >= 0) || (value["next_offset"] === null)) && (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0))) throw new Error("Hunin returned an invalid artifacts.read result.");
+      break;
+  }
+}

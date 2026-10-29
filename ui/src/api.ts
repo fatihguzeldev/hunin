@@ -1,5 +1,5 @@
 import type { Observation } from './record.generated';
-import type { OperationInputs } from './operations.generated';
+import { validateOperationOutput, type OperationInputs, type OperationOutputs } from './operations.generated';
 
 export type Run = {
   id: string; name: string; status: 'running' | 'completed' | 'failed' | 'canceled';
@@ -12,7 +12,7 @@ export type Summary = { sample_count: number; total_weight: number; weight_unit:
 export type Capability = { runtime: string; available: boolean; version?: string | null; executable?: string | null; probe_status?: string; verification?: string; modes?: { mode: string; mechanism: string; availability: string; basis: string; recording_verified: boolean }[]; capabilities: string[]; diagnostics: string[] };
 export type Hotspot = { function: string; file?: string; line?: number; code_id?: string | null; self_weight: number; inclusive_weight: number; weight_unit: string };
 export type TreeNode = { id: string; name: string; file?: string; line?: number; code_id?: string | null; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
-export type Artifact = { id: string; name: string; size: number; sha256: string; format: string };
+export type Artifact = OperationOutputs['artifacts.list']['artifacts'][number];
 export type Analysis = { id: string; name: string; version: string; command: string[]; requirements: unknown; dependencies?: unknown; status?: string };
 export type AnalysisResult = { id: string; result_set_id?: string; analysis_id: string; version: string; status: string; selected?: boolean; diagnostics: string[]; created_at_us: number; finished_at_us?: number; input_fingerprint: string };
 export type Series = { id: string; name: string; unit: string; scope: string; pid: number; tid?: string | null; producer_id?: string | null; context_id?: string | null; thread_id_source?: string | null; clock?: string | null; clock_alignment?: string | null; process_started_at_seconds?: number | null; process_role?: string | null; point_count?: number; returned_points?: number; truncated?: boolean; points: { id: string; timestamp_us: number; value: number }[] };
@@ -31,8 +31,6 @@ type Responses = {
   'resources.query': { series: Series[]; next_cursor?: string; returned_points?: number; total_points?: number };
   'contexts.query': { contexts: Observation[]; relations: Observation[]; next_cursor?: string };
   'evidence.get': { records: Observation[] };
-  'artifacts.list': { artifacts: Artifact[]; next_cursor?: string | null };
-  'artifacts.read': { content: string; next_offset?: number | null; size: number };
   'source.read': { path: string; content: string; start_line: number; identity_verified: boolean; source_kind?: 'recorded_snapshot' | 'current_file' | 'recorded_source_map'; build_mapping_verified?: boolean; diagnostic?: string; provenance?: unknown };
   'recordings.reanalyze': { accepted: boolean; diagnostics: string[]; summary: Summary };
   'analyses.list': { analyses: Analysis[]; next_cursor?: string | null };
@@ -44,7 +42,7 @@ type Responses = {
   'scenarios.list': { scenarios: Scenario[]; next_cursor?: string | null };
   'scenarios.save': { scenario: Scenario };
   'scenarios.run': { run: Run };
-};
+} & OperationOutputs;
 
 export type Operations = { [K in keyof Responses]: { input: OperationInputs[K]; output: Responses[K] } };
 
@@ -72,5 +70,6 @@ export async function operation<K extends keyof Operations>(
     throw new ApiError(error.code ?? 'request_failed', error.message ?? 'The operation failed.', error.details);
   }
   if (!response.ok || !('result' in envelope)) throw new Error(`The local service returned HTTP ${response.status}.`);
+  validateOperationOutput(name, envelope.result);
   return envelope.result as Operations[K]['output'];
 }

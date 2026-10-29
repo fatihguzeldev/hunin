@@ -5,9 +5,18 @@ import ts from 'typescript';
 import { generate, generateOperations, generatedMatches } from '../scripts/generate-record.mjs';
 
 async function moduleFrom(path) {
-  const source = await readFile(new URL(path, import.meta.url), 'utf8');
+  return import(await moduleUrl(new URL(path, import.meta.url)));
+}
+
+async function moduleUrl(url) {
+  const source = await readFile(url, 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+  let resolved = outputText;
+  for (const match of outputText.matchAll(/from (['"])(\.[^'"]+)\1/g)) {
+    const target = new URL(`${match[2]}.ts`, url);
+    resolved = resolved.replace(match[0], `from ${JSON.stringify(await moduleUrl(target))}`);
+  }
+  return `data:text/javascript;base64,${Buffer.from(resolved).toString('base64')}`;
 }
 
 test('canonical schema produces required fields per observation kind', async () => {
@@ -25,6 +34,13 @@ test('operation input types are generated from the authoritative transport contr
   assert.ok(generatedMatches(await readFile(new URL('../src/operations.generated.ts', import.meta.url), 'utf8'), generated));
   assert.ok(generated.includes('"timeline.query"'));
   assert.ok(generated.includes('"command": Array<string>'));
+  assert.ok(generated.includes('export type OperationOutputs'));
+  assert.ok(generated.includes('"next_cursor": string | null;'));
+  assert.ok(generated.includes('"encoding": "utf8_lossy";'));
+});
+
+test('operation output generation refuses unsupported validation rules', () => {
+  assert.throws(() => generateOperations([{ name: 'future', inputSchema: {}, outputSchema: { type: 'string', pattern: '^accepted$' } }]), /Unsupported operation output schema keyword: pattern/);
 });
 
 test('generated freshness tolerates Windows checkout line endings but rejects stale types', () => {
@@ -54,6 +70,31 @@ test('transport preserves operation arguments and rejects backend errors', async
     await assert.rejects(operation('runs.list', {}), /HTTP 200/);
     globalThis.fetch = async () => Response.json({ error: null });
     await assert.rejects(operation('runs.list', {}), /invalid error envelope/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('artifact responses preserve null cursors and byte offsets while rejecting malformed results', async () => {
+  const { operation } = await moduleFrom('../src/api.ts');
+  const original = globalThis.fetch;
+  let result;
+  try {
+    globalThis.fetch = async () => Response.json({ result });
+    result = { artifacts: [{ id: 'a1', name: 'profile', size: 4, sha256: 'digest', format: 'raw' }], next_cursor: null };
+    assert.deepEqual(await operation('artifacts.list', { run_id: 'r1' }), result);
+    result = { content: '\ufffd', encoding: 'utf8_lossy', next_offset: 3, size: 4 };
+    assert.deepEqual(await operation('artifacts.read', { run_id: 'r1', artifact_id: 'a1', offset: 2, limit: 1 }), result);
+    result = { content: '', encoding: 'utf8_lossy', next_offset: null, size: 4, future_metadata: true };
+    assert.deepEqual(await operation('artifacts.read', { run_id: 'r1', artifact_id: 'a1', offset: 4 }), result);
+    for (const malformed of [
+      { artifacts: [], next_cursor: 4 },
+      { artifacts: [] },
+      { artifacts: [{ id: 'a1', name: 'profile', size: '4', sha256: 'digest', format: 'raw' }], next_cursor: null },
+    ]) {
+      result = malformed;
+      await assert.rejects(operation('artifacts.list', { run_id: 'r1' }), /invalid artifacts.list result/);
+    }
+    result = { content: '', encoding: 'base64', next_offset: null, size: 4 };
+    await assert.rejects(operation('artifacts.read', { run_id: 'r1', artifact_id: 'a1' }), /invalid artifacts.read result/);
   } finally { globalThis.fetch = original; }
 });
 
