@@ -4,6 +4,7 @@ mod contracts;
 mod errors;
 mod inputs;
 mod inspection;
+mod workers;
 pub(crate) use errors::operation_failure;
 
 use crate::{
@@ -25,6 +26,8 @@ use std::{
 pub struct Operations {
     pub engine: Engine,
     pub analyses: crate::analysis::Engine,
+    aggregate_work: workers::WorkPool,
+    metadata_work: workers::WorkPool,
 }
 
 pub fn catalog() -> &'static Vec<Value> {
@@ -53,10 +56,15 @@ impl Operations {
         Self {
             engine: Engine::new(store.clone()),
             analyses: crate::analysis::Engine::new(store),
+            aggregate_work: workers::WorkPool::new("operations_family_aggregation", 2),
+            metadata_work: workers::WorkPool::new("operations_family_metadata", 8),
         }
     }
     pub async fn shutdown(&self) -> Result<()> {
+        self.aggregate_work.close();
+        self.metadata_work.close();
         let (recordings, analyses) = tokio::join!(self.engine.shutdown(), self.analyses.shutdown());
+        tokio::join!(self.aggregate_work.drain(), self.metadata_work.drain());
         recordings?;
         analyses?;
         Ok(())
@@ -86,13 +94,15 @@ impl Operations {
         match name {
             "storage.inspect" => {
                 let store = store.clone();
-                tokio::task::spawn_blocking(move || inspection::inspect(&store, &params))
+                self.aggregate_work
+                    .read(move |_| inspection::inspect(&store, &params))
                     .await
-                    .context("storage inspection task failed")?
             }
-            "capabilities" => tokio::task::spawn_blocking(capabilities::discover)
-                .await
-                .context("capability discovery task failed"),
+            "capabilities" => {
+                self.aggregate_work
+                    .read(|_| Ok(capabilities::discover()))
+                    .await
+            }
             "runs.list" => {
                 let mut runs = store.runs(limit + 1, cursor)?;
                 let more = runs.len() > limit;
@@ -169,25 +179,32 @@ impl Operations {
             "source.read" => crate::source::read(store, &params),
             "recordings.import" => {
                 let operations = self.clone();
-                tokio::task::spawn_blocking(move || operations.import(&params))
+                self.aggregate_work
+                    .run(move || operations.import(&params))
                     .await
-                    .context("recording import task failed")?
             }
             "recordings.reanalyze" => {
                 let store = store.clone();
                 let run_id = id()?.to_owned();
                 let artifact_id = params["artifact_id"].as_str().unwrap().to_owned();
-                tokio::task::spawn_blocking(move || {
+                self.aggregate_work.run(move || {
                     let publication = crate::recordings::reanalyze(&store, &run_id, &artifact_id)?;
                     Ok(json!({"accepted":publication.accepted,"diagnostics":publication.diagnostics,"summary":query::summary(&store.records(&run_id)?)}))
-                }).await.context("recording reanalysis task failed")?
+                }).await
             }
-            "comparisons.create" => comparison::compare(
-                store,
-                params["before"].as_str().unwrap(),
-                params["after"].as_str().unwrap(),
-                params["weight_unit"].as_str(),
-            ),
+            "comparisons.create" => {
+                let store = store.clone();
+                self.aggregate_work
+                    .read(move |_interest| {
+                        comparison::compare(
+                            &store,
+                            params["before"].as_str().unwrap(),
+                            params["after"].as_str().unwrap(),
+                            params["weight_unit"].as_str(),
+                        )
+                    })
+                    .await
+            }
             "scenarios.list" => Ok(metadata_page(
                 "scenarios",
                 store.documents_page("scenarios", None, limit + 1, cursor)?,
@@ -222,17 +239,15 @@ impl Operations {
             )),
             "analyses.results" => {
                 let operations = self.clone();
-                tokio::task::spawn_blocking(move || {
-                    operations.analysis_results(&params, limit, cursor)
-                })
-                .await
-                .context("analysis result read task failed")?
+                self.metadata_work
+                    .read(move |_| operations.analysis_results(&params, limit, cursor))
+                    .await
             }
             "analyses.register" => {
                 let analyses = self.analyses.clone();
-                tokio::task::spawn_blocking(move || analyses.register(&params))
+                self.aggregate_work
+                    .run(move || analyses.register(&params))
                     .await
-                    .context("analysis registration task failed")?
             }
             "analyses.run" => self.analyses.run(&params).await,
             "analyses.cancel" => {

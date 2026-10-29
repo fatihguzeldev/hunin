@@ -403,9 +403,13 @@ export type Comparison = {
 };
 
 export type OperationFailure = {
-  "code": "unknown_operation" | "invalid_parameters" | "conflict" | "operation_failed";
+  "code": "unknown_operation" | "invalid_parameters" | "conflict" | "operation_failed" | "capacity_exceeded" | "request_abandoned" | "request_deadline_exceeded";
   "operation": string;
   "message": string;
+  "capacity"?: {
+  "scope": string;
+  "maximum_in_flight": number;
+};
 };
 
 export type ImportFormat = {
@@ -849,7 +853,7 @@ export function isComparison(value: unknown): value is Comparison {
 }
 
 export function isOperationFailure(value: unknown): value is OperationFailure {
-  return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "operation") && Object.hasOwn(value, "message") && ((value["code"] === "unknown_operation" || value["code"] === "invalid_parameters" || value["code"] === "conflict" || value["code"] === "operation_failed") && typeof value["code"] === "string") && (typeof value["operation"] === "string") && (typeof value["message"] === "string") && Object.keys(value).every(key => ["code","operation","message"].includes(key)));
+  return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "operation") && Object.hasOwn(value, "message") && ((value["code"] === "unknown_operation" || value["code"] === "invalid_parameters" || value["code"] === "conflict" || value["code"] === "operation_failed" || value["code"] === "capacity_exceeded" || value["code"] === "request_abandoned" || value["code"] === "request_deadline_exceeded") && typeof value["code"] === "string") && (typeof value["operation"] === "string") && (typeof value["message"] === "string") && (!Object.hasOwn(value, "capacity") || (isOutputObject(value["capacity"]) && Object.hasOwn(value["capacity"], "scope") && Object.hasOwn(value["capacity"], "maximum_in_flight") && (typeof value["capacity"]["scope"] === "string") && (typeof value["capacity"]["maximum_in_flight"] === "number" && Number.isInteger(value["capacity"]["maximum_in_flight"]) && value["capacity"]["maximum_in_flight"] >= 1) && Object.keys(value["capacity"]).every(key => ["scope","maximum_in_flight"].includes(key)))) && Object.keys(value).every(key => ["code","operation","message","capacity"].includes(key)));
 }
 
 export function isImportFormat(value: unknown): value is ImportFormat {

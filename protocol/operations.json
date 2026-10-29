@@ -18,11 +18,25 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -67,11 +81,25 @@
         "snapshot": "SQL references use one read transaction; filesystem metadata remains live. Findings never authorize repair or deletion."
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -829,11 +857,23 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -869,11 +909,25 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -971,11 +1025,23 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -1073,11 +1139,25 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   },
@@ -1318,11 +1398,23 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "capacity_exceeded",
+          "conflict"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
         "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
       }
     }
   }

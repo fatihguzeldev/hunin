@@ -1433,7 +1433,10 @@
             "unknown_operation",
             "invalid_parameters",
             "conflict",
-            "operation_failed"
+            "operation_failed",
+            "capacity_exceeded",
+            "request_abandoned",
+            "request_deadline_exceeded"
           ]
         },
         "operation": {
@@ -1441,6 +1444,20 @@
         },
         "message": {
           "type": "string"
+        },
+        "capacity": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string"
+            },
+            "maximum_in_flight": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": ["scope", "maximum_in_flight"],
+          "additionalProperties": false
         }
       },
       "required": ["code", "operation", "message"],
