@@ -98,9 +98,53 @@ def owned_link(link, prefix):
         return False
 
 
+def _switch_link(executable, prefix, bin_dir):
+    """Publish only the next-launch link; version directories remain immutable."""
+    executable = executable.resolve(strict=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    link = bin_dir / "hunin"
+    if (link.exists() or link.is_symlink()) and not owned_link(link, prefix):
+        raise ValueError(
+            f"Preserving existing executable: {link}. Bundle available at {executable}."
+        )
+    with tempfile.TemporaryDirectory(prefix=".hunin-activate-", dir=bin_dir) as stage:
+        replacement = Path(stage) / "hunin"
+        replacement.symlink_to(executable)
+        replacement.replace(link)
+
+
+def activate(prefix, version, bin_dir):
+    """Select an intact installed version. No process is stopped or data opened."""
+    host = host_platform()
+    if host.startswith("windows"):
+        raise ValueError(
+            "Windows activation uses the versioned executable path; --bin-dir activation is Unix-only"
+        )
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", version):
+        raise ValueError("Invalid installed version")
+    prefix = prefix.resolve()
+    directory = prefix / f"{version}-{host}"
+    if directory.is_symlink():
+        raise ValueError(f"Preserving existing installation symlink: {directory}")
+    manifest = verify(directory)
+    verify_host(manifest)
+    if manifest["version"] != version:
+        raise ValueError("Installed directory does not match its declared version")
+    executable = directory / "hunin"
+    _switch_link(executable, prefix, bin_dir)
+    return {
+        "executable": str(executable),
+        "component_compatibility": "legacy_unknown",
+    }
+
+
 def install(bundle, prefix, bin_dir=None):
     manifest = verify(bundle)
     verify_host(manifest)
+    if bin_dir and manifest["platform"].startswith("windows"):
+        raise ValueError(
+            "--bin-dir activation is Unix-only; Windows uses the versioned executable path"
+        )
     destination = prefix / f"{manifest['version']}-{manifest['platform']}"
     if destination.exists() or destination.is_symlink():
         raise ValueError(
@@ -127,17 +171,7 @@ def install(bundle, prefix, bin_dir=None):
         staged.rename(destination)
     executable = destination / executable.name
     if bin_dir:
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        link = bin_dir / "hunin"
-        if (link.exists() or link.is_symlink()) and not owned_link(link, prefix):
-            raise ValueError(
-                f"Preserving existing executable: {link}. Bundle installed at {executable}."
-            )
-        replacement = bin_dir / ".hunin-link"
-        if replacement.exists() or replacement.is_symlink():
-            raise ValueError(f"Preserving existing staging link: {replacement}")
-        replacement.symlink_to(executable)
-        replacement.replace(link)
+        _switch_link(executable, prefix, bin_dir)
     return executable
 
 
@@ -154,19 +188,43 @@ def main(bundle_root=None):
         type=Path,
         help="Unix only: directory for a hunin symlink; no PATH modification",
     )
+    parser.add_argument(
+        "--activate",
+        metavar="VERSION",
+        help="Unix only: select an intact version already under --prefix for new invocations; running processes and recording data are unchanged",
+    )
     args = parser.parse_args()
     if os.name == "nt" and args.bin_dir:
         parser.error(
             "--bin-dir is Unix-only; add the printed executable directory to your user PATH"
         )
-    executable = install(
-        bundle_root or Path(__file__).resolve().parent,
-        args.prefix.expanduser().resolve(),
-        args.bin_dir.expanduser().resolve() if args.bin_dir else None,
-    )
-    print(
-        f"Installed {executable}\nAdd {args.bin_dir or executable.parent} to your PATH, or invoke the executable directly."
-    )
+    prefix = args.prefix.expanduser().resolve()
+    bin_dir = args.bin_dir.expanduser().resolve() if args.bin_dir else None
+    if args.activate and not bin_dir:
+        parser.error(
+            "--activate requires --bin-dir; Windows uses the versioned executable path directly"
+        )
+    try:
+        if args.activate:
+            selected = activate(prefix, args.activate, bin_dir)
+            print(
+                f"Activated {selected['executable']} for new invocations. Running processes and recording data were not changed."
+            )
+            if selected["component_compatibility"] == "legacy_unknown":
+                print(
+                    "Legacy installation: component compatibility is unknown; only manifest integrity and host identity were verified. The executable must accept its recording data schema."
+                )
+        else:
+            executable = install(
+                bundle_root or Path(__file__).resolve().parent,
+                prefix,
+                bin_dir,
+            )
+            print(
+                f"Installed {executable}\nAdd {args.bin_dir or executable.parent} to your PATH, or invoke the executable directly. Version directories are immutable; choose another prefix for a different build of the same version."
+            )
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"Installation failed: {error}\n")
 
 
 if __name__ == "__main__":

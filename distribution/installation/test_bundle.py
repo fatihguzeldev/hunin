@@ -19,9 +19,10 @@ class InstalledBundleTests(unittest.TestCase):
         host.start()
         self.addCleanup(host.stop)
 
-    def bundle(self, root, version):
+    def bundle(self, root, version, target="linux-x64"):
         root.mkdir(parents=True)
-        files = {"hunin": b"test-binary", "ui/index.html": b"test-ui"}
+        executable = "hunin.exe" if target.startswith("windows") else "hunin"
+        files = {executable: b"test-binary", "ui/index.html": b"test-ui"}
         for name, data in files.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +32,7 @@ class InstalledBundleTests(unittest.TestCase):
                 {
                     "schema_version": 1,
                     "version": version,
-                    "platform": "linux-x64",
+                    "platform": target,
                     "files": {
                         name: {
                             "size": len(data),
@@ -137,6 +138,20 @@ class InstalledBundleTests(unittest.TestCase):
                 installer.install(bundle, prefix)
             self.assertEqual(destination.readlink(), missing)
 
+    def test_windows_selects_an_explicit_executable_path_without_bin_activation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = self.bundle(root / "bundle", "0.2.0", "windows-x64")
+            with patch.object(installer, "host_platform", return_value="windows-x64"):
+                with self.assertRaisesRegex(ValueError, "Unix-only"):
+                    installer.install(bundle, root / "refused", root / "bin")
+                self.assertFalse((root / "refused").exists())
+                installed = installer.install(bundle, root / "installed")
+                self.assertEqual(installed.name, "hunin.exe")
+                with self.assertRaisesRegex(ValueError, "Unix-only"):
+                    installer.activate(root / "installed", "0.2.0", root / "bin")
+                self.assertFalse((root / "bin").exists())
+
     @unittest.skipIf(os.name == "nt", "The optional bin symlink is Unix-only")
     def test_bin_link_preserves_unrelated_and_dangling_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -177,3 +192,72 @@ class InstalledBundleTests(unittest.TestCase):
             link.unlink()
             link.symlink_to(previous / "hunin")
             self.assertFalse(installer.owned_link(link, prefix))
+
+    @unittest.skipIf(os.name == "nt", "Activation through a bin symlink is Unix-only")
+    def test_activation_switches_verified_versions_without_touching_old_bytes_or_data(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "installed with spaces"
+            older = self.bundle(prefix / "0.1.0-linux-x64", "0.1.0")
+            newer = self.bundle(prefix / "0.2.0-linux-x64", "0.2.0")
+            data = root / "recording data"
+            data.write_text("not an installer-owned path")
+            (root / "bin").mkdir()
+            link = root / "bin/hunin"
+            link.symlink_to(newer / "hunin")
+            with (newer / "hunin").open("rb") as already_open:
+                activation = installer.activate(prefix, "0.1.0", root / "bin")
+                self.assertEqual(link.resolve(), (older / "hunin").resolve())
+                self.assertEqual(already_open.read(), b"test-binary")
+            self.assertEqual(activation["component_compatibility"], "legacy_unknown")
+            self.assertEqual(
+                Path(activation["executable"]), (older / "hunin").resolve()
+            )
+            self.assertEqual((newer / "hunin").read_bytes(), b"test-binary")
+            self.assertEqual(data.read_text(), "not an installer-owned path")
+
+    @unittest.skipIf(os.name == "nt", "Activation through a bin symlink is Unix-only")
+    def test_corrupt_activation_target_and_unrelated_link_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "installed"
+            older = self.bundle(prefix / "0.1.0-linux-x64", "0.1.0")
+            newer = self.bundle(prefix / "0.2.0-linux-x64", "0.2.0")
+            (root / "bin").mkdir()
+            link = root / "bin/hunin"
+            link.symlink_to(newer / "hunin")
+            (older / "hunin").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                installer.activate(prefix, "0.1.0", root / "bin")
+            self.assertEqual(link.resolve(), (newer / "hunin").resolve())
+            unrelated = root / "another executable"
+            unrelated.write_bytes(b"preserve")
+            link.unlink()
+            link.symlink_to(unrelated)
+            with self.assertRaisesRegex(ValueError, "Preserving existing executable"):
+                installer.activate(prefix, "0.2.0", root / "bin")
+            self.assertEqual(link.readlink(), unrelated)
+            self.assertEqual(unrelated.read_bytes(), b"preserve")
+
+    @unittest.skipIf(os.name == "nt", "Activation through a bin symlink is Unix-only")
+    def test_activation_publication_failure_cleans_only_its_owned_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "installed"
+            self.bundle(prefix / "0.1.0-linux-x64", "0.1.0")
+            newer = self.bundle(prefix / "0.2.0-linux-x64", "0.2.0")
+            (root / "bin").mkdir()
+            link = root / "bin/hunin"
+            link.symlink_to(newer / "hunin")
+            unrelated = root / "bin/.hunin-link"
+            unrelated.write_text("an unrelated old staging path")
+            with patch.object(
+                Path, "replace", side_effect=OSError("controlled publication failure")
+            ):
+                with self.assertRaisesRegex(OSError, "controlled publication"):
+                    installer.activate(prefix, "0.1.0", root / "bin")
+            self.assertEqual(link.resolve(), (newer / "hunin").resolve())
+            self.assertEqual(unrelated.read_text(), "an unrelated old staging path")
+            self.assertFalse(list((root / "bin").glob(".hunin-activate-*")))
