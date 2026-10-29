@@ -85,8 +85,10 @@ impl Operations {
             }
             "runs.get" => {
                 let run = store.run(id()?)?;
-                let records = store.records(&run.id)?;
-                Ok(json!({"run":run,"summary":query::summary(&records)}))
+                let snapshot = store.records_snapshot(&run.id)?;
+                Ok(
+                    json!({"run":run,"summary":query::summary(&snapshot.records),"result_identity":snapshot.result_identity}),
+                )
             }
             "runs.start" => Ok(
                 json!({"run":self.engine.start(serde_json::from_value::<StartRequest>(params)?).await?}),

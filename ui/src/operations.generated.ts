@@ -39,6 +39,7 @@ export type RunResult = {
 export type RunDetails = {
   "run": Run;
   "summary": Summary;
+  "result_identity"?: string;
 };
 
 export type ImportResult = {
@@ -606,7 +607,7 @@ export function isRunResult(value: unknown): value is RunResult {
 }
 
 export function isRunDetails(value: unknown): value is RunDetails {
-  return (isOutputObject(value) && Object.hasOwn(value, "run") && Object.hasOwn(value, "summary") && isRun(value["run"]) && isSummary(value["summary"]));
+  return (isOutputObject(value) && Object.hasOwn(value, "run") && Object.hasOwn(value, "summary") && isRun(value["run"]) && isSummary(value["summary"]) && (!Object.hasOwn(value, "result_identity") || (typeof value["result_identity"] === "string")));
 }
 
 export function isImportResult(value: unknown): value is ImportResult {

@@ -306,6 +306,30 @@ test('run responses retain legacy metadata and extension statuses but reject mal
       operation('runs.list', {}),
       /invalid runs.list result/,
     );
+    const details = {
+      run,
+      summary: {
+        sample_count: 0,
+        total_weight: 0,
+        weight_unit: 'samples',
+        span_count: 0,
+        metric_count: 0,
+        relation_count: 0,
+        diagnostics: [],
+      },
+    };
+    result = details;
+    assert.deepEqual(
+      await operation('runs.get', { run_id: 'legacy' }),
+      details,
+    );
+    result = { ...details, result_identity: 'opaque-snapshot' };
+    assert.deepEqual(await operation('runs.get', { run_id: 'legacy' }), result);
+    result = { ...details, result_identity: 7 };
+    await assert.rejects(
+      operation('runs.get', { run_id: 'legacy' }),
+      /invalid runs.get result/,
+    );
   } finally {
     globalThis.fetch = original;
   }

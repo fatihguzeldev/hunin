@@ -23,6 +23,13 @@ pub struct Store {
     root: PathBuf,
 }
 
+/// A selected-observation read snapshot. Its identity does not cover future
+/// independent queries, mutable run status, or unrelated stored documents.
+pub struct RecordsSnapshot {
+    pub result_identity: String,
+    pub records: Vec<Value>,
+}
+
 impl Store {
     pub fn document(&self, namespace: &str, id: &str) -> Result<Value> {
         let text: String = self
@@ -352,11 +359,28 @@ impl Store {
     pub fn records(&self, run_id: &str) -> Result<Vec<Value>> {
         self.run(run_id)?;
         let c = self.connection()?;
-        let mut statement = c.prepare("SELECT o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq")?;
-        statement
-            .query_map([run_id], |r| r.get::<_, String>(0))?
-            .map(|r| Ok(serde_json::from_str(&r?)?))
-            .collect()
+        selected_records(&c, run_id)
+    }
+
+    pub fn records_snapshot(&self, run_id: &str) -> Result<RecordsSnapshot> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        tx.query_row("SELECT id FROM runs WHERE id=?1", [run_id], |_| Ok(()))
+            .optional()?
+            .context("recording not found")?;
+        let identities: Vec<String> = tx
+            .prepare("SELECT id FROM result_sets WHERE run_id=?1 AND active=1 ORDER BY id")?
+            .query_map([run_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let records = selected_records(&tx, run_id)?;
+        tx.commit()?;
+        // Immutable result IDs identify accepted bytes without hashing the
+        // entire recording a second time. Run identity scopes the empty case.
+        let identity = Sha256::digest(serde_json::to_vec(&(run_id, identities))?);
+        Ok(RecordsSnapshot {
+            result_identity: format!("selected-results-v1:{identity:x}"),
+            records,
+        })
     }
 
     pub fn records_history(&self, run_id: &str) -> Result<Vec<Value>> {
@@ -670,6 +694,14 @@ fn same_artifact_contents(first: &Path, second: &Path) -> Result<bool> {
         remaining -= count as u64;
     }
     Ok(true)
+}
+
+fn selected_records(connection: &Connection, run_id: &str) -> Result<Vec<Value>> {
+    let mut statement = connection.prepare("SELECT o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq")?;
+    statement
+        .query_map([run_id], |row| row.get::<_, String>(0))?
+        .map(|row| Ok(serde_json::from_str(&row?)?))
+        .collect()
 }
 
 fn write_document(connection: &Connection, namespace: &str, id: &str, value: &Value) -> Result<()> {

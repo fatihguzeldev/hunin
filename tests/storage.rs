@@ -374,6 +374,33 @@ fn reanalysis_selects_one_normalization_and_preserves_history() {
 }
 
 #[test]
+fn observation_snapshot_identity_tracks_selection_even_without_observations() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let empty = store.records_snapshot("run-1").unwrap();
+    store.accept_import("run-1", "raw", "first", &[]).unwrap();
+    let first = store.records_snapshot("run-1").unwrap();
+    store.accept_import("run-1", "raw", "second", &[]).unwrap();
+    let second = store.records_snapshot("run-1").unwrap();
+    assert_ne!(empty.result_identity, first.result_identity);
+    assert_ne!(first.result_identity, second.result_identity);
+    assert_eq!(first.records, second.records);
+    store.accept_import("run-1", "raw", "first", &[]).unwrap();
+    assert_eq!(
+        store.records_snapshot("run-1").unwrap().result_identity,
+        first.result_identity
+    );
+    let mut other = run();
+    other.id = "other-run".into();
+    store.save_run(&other).unwrap();
+    assert_ne!(
+        store.records_snapshot("other-run").unwrap().result_identity,
+        empty.result_identity
+    );
+}
+
+#[test]
 fn reanalysis_invalidates_dependents_and_keeps_independent_results() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

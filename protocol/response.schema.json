@@ -142,6 +142,10 @@
         },
         "summary": {
           "$ref": "#/$defs/Summary"
+        },
+        "result_identity": {
+          "type": "string",
+          "description": "Opaque identity of the selected-observation snapshot used for this summary. It is not a lease spanning later independent queries; older services may omit it."
         }
       },
       "required": ["run", "summary"]
