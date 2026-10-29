@@ -17,6 +17,8 @@ export default defineConfig(
     'tests/workloads/**',
     // These are emitted from the protocol authority, not independently edited.
     'ui/src/*.generated.ts',
+    'sdk/javascript/*.d.mts',
+    'sdk/javascript/test/**',
   ]),
   {
     files: ['**/*.{ts,mts}'],
