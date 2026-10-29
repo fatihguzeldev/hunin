@@ -87,7 +87,7 @@ jobs:
             platform: linux-arm64
             binary: target/release/hunin
             rust_target: aarch64-unknown-linux-gnu
-          - os: macos-14
+          - os: macos-15
             platform: macos-arm64
             binary: target/release/hunin
             rust_target: aarch64-apple-darwin
