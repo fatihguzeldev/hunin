@@ -326,7 +326,20 @@ mod tests {
         })
         .await
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(220)).await;
+        // Queue saturation alone does not prove the next OS refresh completed.
+        // Observe an actual dropped row before asking the observer to stop.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while observer
+                .delivery
+                .queue_full_dropped_rows
+                .load(Ordering::Relaxed)
+                == 0
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the live process produced no dropped row after queue saturation");
         let completion = observer.finish().await;
         assert!(completion.worker_error.is_none());
         let report = completion.delivery;
