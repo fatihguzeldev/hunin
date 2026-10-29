@@ -36,6 +36,17 @@ async fn recording_metadata_does_not_require_aggregating_large_selected_payloads
         .unwrap_err();
     assert!(error.is::<ReadBudgetExceeded>());
     let operations = Operations::new(store);
+    let aggregate = hunin::interfaces::mcp::handle(&operations,&json!({"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"runs.get","arguments":{"run_id":"large"}}}),true).await;
+    assert_eq!(aggregate["result"]["isError"], true, "{aggregate}");
+    let failure = &aggregate["result"]["_meta"]["hunin/operation-error"];
+    assert_eq!(failure["code"], "work_budget_exceeded");
+    assert_eq!(failure["budget"]["dimension"], "record_bytes");
+    // The unrelated large event does not prevent a narrow metric query.
+    let resources = operations
+        .call("resources.query", json!({"run_id":"large"}))
+        .await
+        .unwrap();
+    assert_eq!(resources["series"].as_array().unwrap().len(), 0);
     let response = hunin::interfaces::mcp::handle(&operations,&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"runs.metadata","arguments":{"run_id":"large"}}}),true).await;
     assert_eq!(response["result"]["isError"], false, "{response}");
     let metadata = &response["result"]["structuredContent"];

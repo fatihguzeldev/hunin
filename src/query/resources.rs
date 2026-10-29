@@ -1,3 +1,5 @@
+use super::WorkBudget;
+use anyhow::Result;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -7,9 +9,19 @@ pub fn resources(records: &[Value]) -> Value {
 }
 
 pub fn resources_page(records: &[Value], params: &Value) -> Value {
+    resources_page_checked(records, params, &mut WorkBudget::unlimited())
+        .expect("unlimited query work")
+}
+
+pub(super) fn resources_page_checked(
+    records: &[Value],
+    params: &Value,
+    work: &mut WorkBudget,
+) -> Result<Value> {
     let mut groups: BTreeMap<String, (Value, Vec<&Value>)> = BTreeMap::new();
     let mut unmapped_points = 0;
     for record in records.iter().filter(|r| r["kind"] == "metric") {
+        work.check()?;
         let unmapped = record["attributes"]["clock_alignment"] == "unmapped";
         let timestamp = record["timestamp_us"].as_u64().unwrap_or(0);
         if !unmapped
@@ -36,19 +48,25 @@ pub fn resources_page(records: &[Value], params: &Value) -> Value {
             .or_else(|| attrs["tid_kind"].as_str())
             .unwrap_or("producer-local");
         let metadata = json!({"name":record["name"],"unit":record["unit"],"scope":record["scope"],"pid":record["pid"],"tid":record["tid"],"producer_id":record["producer_id"],"context_id":record["context_id"],"thread_id_source":thread_source,"clock":clock,"clock_alignment":if unmapped{"unmapped"}else{"aligned"},"time_mapping":mapping,"process_started_at_seconds":attrs["process_started_at_seconds"],"process_lifetime_id":attrs["process_lifetime_id"],"process_role":attrs["process_role"],"temporality":attrs["temporality"]});
+        let key = metadata.to_string();
+        if !groups.contains_key(&key) {
+            work.entry()?;
+        }
         groups
-            .entry(metadata.to_string())
+            .entry(key)
             .or_insert_with(|| (metadata, Vec::new()))
             .1
             .push(record);
     }
     for (_, points) in groups.values_mut() {
+        work.check()?;
         points.sort_by(|a, b| {
             a["timestamp_us"]
                 .as_u64()
                 .cmp(&b["timestamp_us"].as_u64())
                 .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
         });
+        work.check()?;
     }
     let total_points = groups
         .values()
@@ -67,6 +85,7 @@ pub fn resources_page(records: &[Value], params: &Value) -> Value {
     let mut returned = 0;
     let mut series = Vec::new();
     for (key, (mut metadata, points)) in groups {
+        work.check()?;
         if skip >= points.len() {
             skip -= points.len();
             continue;
@@ -95,5 +114,8 @@ pub fn resources_page(records: &[Value], params: &Value) -> Value {
     } else {
         Vec::new()
     };
-    json!({"series":series,"next_cursor":if next<total_points{Some(next.to_string())}else{None},"returned_points":returned,"total_points":total_points,"point_limit":point_limit,"unaligned_point_count":unmapped_points,"diagnostics":diagnostics})
+    work.check()?;
+    Ok(
+        json!({"series":series,"next_cursor":if next<total_points{Some(next.to_string())}else{None},"returned_points":returned,"total_points":total_points,"point_limit":point_limit,"unaligned_point_count":unmapped_points,"diagnostics":diagnostics}),
+    )
 }

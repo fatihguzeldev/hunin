@@ -235,7 +235,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -245,6 +251,27 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -456,7 +483,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -466,6 +499,27 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -519,7 +573,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -529,6 +589,27 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -584,7 +665,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -594,6 +681,27 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -643,7 +751,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -653,6 +767,27 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -1054,12 +1189,25 @@
         "pool": "aggregation",
         "maximum_in_flight": 2,
         "queue": "fail_fast",
-        "reservation": "Held until the actual blocking worker finishes, including after its caller is dropped. Separate Operations instances and processes are independent; this is not a memory quota."
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
       },
       "hunin/encoded-result-budget": {
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },

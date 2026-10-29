@@ -64,6 +64,8 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         json!({"scope":"operation_result","dimension":"encoded_result_bytes","limit":budget.maximum,"observed":budget.observed})
     }).or_else(|| error.downcast_ref::<crate::storage::ReadBudgetExceeded>().map(|budget| {
         json!({"scope":"selected_record_query","dimension":budget.dimension.as_str(),"limit":budget.limit,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::query::WorkBudgetExceeded>().map(|budget| {
+        json!({"scope":"selected_record_query","dimension":budget.dimension.as_str(),"limit":budget.limit,"observed":budget.observed})
     }));
     let capacity = error.downcast_ref::<crate::model::CapacityExceeded>();
     let code = match error.downcast_ref::<Failure>().map(|failure| failure.kind) {
@@ -125,5 +127,28 @@ mod tests {
                 .map(|code| code.as_str().unwrap().to_owned())
                 .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn query_work_budget_retains_its_actual_dimension_through_context() {
+        let error = anyhow::Error::new(crate::query::WorkBudgetExceeded {
+            dimension: crate::query::WorkDimension::FrameVisits,
+            limit: 2,
+            observed: 3,
+        })
+        .context("reading selected stacks");
+        let result = operation_failure("profiles.hotspots", &error);
+        assert_eq!(result["code"], "work_budget_exceeded");
+        assert_eq!(
+            result["budget"],
+            json!({"scope":"selected_record_query","dimension":"frame_visits","limit":2,"observed":3})
+        );
+        assert_eq!(
+            operation_failure(
+                "control",
+                &anyhow::anyhow!("query frame_visits budget exceeded")
+            )["code"],
+            "operation_failed"
+        );
     }
 }

@@ -112,11 +112,13 @@ impl Operations {
                 Ok(json!({"runs":runs,"next_cursor":more.then(||(cursor+limit).to_string())}))
             }
             "runs.get" => {
-                let run = store.run(id()?)?;
-                let snapshot = store.records_snapshot(&run.id)?;
-                Ok(
-                    json!({"run":run,"summary":query::summary(&snapshot.records),"result_identity":snapshot.result_identity}),
-                )
+                let store = store.clone();
+                let run_id = id()?.to_owned();
+                self.aggregate_work.read(move |interest| {
+                    let run = store.run(&run_id)?;
+                    let snapshot = query::read_recording(&store, &run_id, query::RecordingQuery::Summary, Default::default(), move || interest.check())?;
+                    Ok(json!({"run":run,"summary":snapshot.value,"result_identity":snapshot.result_identity}))
+                }).await
             }
             "runs.metadata" => {
                 let store = store.clone();
@@ -149,14 +151,33 @@ impl Operations {
                 store.remove_run(id()?)?;
                 Ok(json!({"removed":true}))
             }
-            "profiles.hotspots" => Ok(query::hotspots(
-                &store.records(id()?)?,
-                params["weight_unit"].as_str().unwrap_or(""),
-                limit,
-            )),
-            "profiles.tree" => Ok(query::tree_page(&store.records(id()?)?, &params)),
-            "timeline.query" => Ok(query::timeline(&store.records(id()?)?, &params)),
-            "resources.query" => Ok(query::resources_page(&store.records(id()?)?, &params)),
+            "profiles.hotspots" | "profiles.tree" | "timeline.query" | "resources.query" => {
+                let store = store.clone();
+                let run_id = id()?.to_owned();
+                let name = name.to_owned();
+                self.aggregate_work
+                    .read(move |interest| {
+                        let request = match name.as_str() {
+                            "profiles.hotspots" => query::RecordingQuery::Hotspots {
+                                unit: params["weight_unit"].as_str().unwrap_or(""),
+                                limit,
+                            },
+                            "profiles.tree" => query::RecordingQuery::Tree(&params),
+                            "timeline.query" => query::RecordingQuery::Timeline(&params),
+                            "resources.query" => query::RecordingQuery::Resources(&params),
+                            _ => unreachable!(),
+                        };
+                        Ok(query::read_recording(
+                            &store,
+                            &run_id,
+                            request,
+                            Default::default(),
+                            move || interest.check(),
+                        )?
+                        .value)
+                    })
+                    .await
+            }
             "contexts.query" => {
                 let mut selected = store.context_records_page(id()?, limit + 1, cursor)?;
                 let more = selected.len() > limit;
@@ -210,12 +231,13 @@ impl Operations {
             "comparisons.create" => {
                 let store = store.clone();
                 self.aggregate_work
-                    .read(move |_interest| {
+                    .read(move |interest| {
                         comparison::compare(
                             &store,
                             params["before"].as_str().unwrap(),
                             params["after"].as_str().unwrap(),
                             params["weight_unit"].as_str(),
+                            move || interest.check(),
                         )
                     })
                     .await

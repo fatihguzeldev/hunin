@@ -123,6 +123,7 @@ pub fn compare(
     before: &str,
     after: &str,
     requested_unit: Option<&str>,
+    checkpoint: impl FnMut() -> Result<()> + Send + Clone + 'static,
 ) -> Result<Value> {
     let before = store.run(before)?;
     let after = store.run(after)?;
@@ -248,8 +249,17 @@ pub fn compare(
         }
         metrics.push(row);
     }
-    let a = store.records(&before.id)?;
-    let b = store.records(&after.id)?;
+    let limits = query::QueryLimits::default();
+    let (a, b) = query::comparison_inputs(
+        store,
+        &before.id,
+        &after.id,
+        limits.read.clone(),
+        checkpoint.clone(),
+    )?;
+    let mut work = query::WorkBudget::new(limits, checkpoint);
+    let a = a.value;
+    let b = b.value;
     for (name, input, unit, cumulative, scope, basis) in [
         (
             "process.rss.max_process",
@@ -268,8 +278,10 @@ pub fn compare(
             "sum of last cumulative CPU observations per OS process lifetime; collector wrapper excluded; final cumulative values may be missed",
         ),
     ] {
+        work.check()?;
         let x = resource_value(&a, input, unit, cumulative);
         let y = resource_value(&b, input, unit, cumulative);
+        work.check()?;
         if x.is_some() || y.is_some() {
             let sufficient = x.as_ref().zip(y.as_ref()).is_some_and(|(x, y)| {
                 x.identity_known
@@ -322,9 +334,14 @@ pub fn compare(
         reasons.push("Available sampled weight units differ or one recording has no samples");
     }
     const HOTSPOT_LIMIT: usize = 1000;
-    let before_page = query::comparison_hotspots(&a, requested_unit.unwrap_or(""), HOTSPOT_LIMIT);
+    let before_page = query::comparison_hotspots_checked(
+        &a,
+        requested_unit.unwrap_or(""),
+        HOTSPOT_LIMIT,
+        &mut work,
+    )?;
     let unit = before_page.result["weight_unit"].as_str().unwrap();
-    let after_page = query::comparison_hotspots(&b, unit, HOTSPOT_LIMIT);
+    let after_page = query::comparison_hotspots_checked(&b, unit, HOTSPOT_LIMIT, &mut work)?;
     let before_available = before_units.contains(unit);
     let after_available = after_units.contains(unit);
     let before_truncated = before_page.total_functions > HOTSPOT_LIMIT;
@@ -359,6 +376,7 @@ pub fn compare(
         json!({"function":r["function"],"file":r["file"],"module":r["module"],"before":before,"after":after,"delta":before.zip(after).map(|(before,after)|after-before),"unit":unit,"basis":"profiler sample weight grouped by function/file/module across measured code versions; not elapsed time or a speedup ratio","before_available":before.is_some(),"after_available":after.is_some(),"presence":presence})
     }).collect::<Vec<_>>();
     let hotspot_selection = json!({"weight_unit":unit,"limit_per_recording":HOTSPOT_LIMIT,"before_available":before_available,"after_available":after_available,"before_total_functions":before_page.total_functions,"after_total_functions":after_page.total_functions,"before_truncated":before_truncated,"after_truncated":after_truncated});
+    work.check()?;
     Ok(
         json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"hotspot_selection":hotspot_selection,"sample_weight_units":{"before":before_units,"after":after_units},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred.","Hotspots group observed function/file/module names across measured code versions; this grouping does not establish semantic equivalence. A missing row outside a truncated rank window is unknown, not an unobserved function."]}),
     )
