@@ -141,10 +141,26 @@ jobs:
         working-directory: ui
         run: npm test
       - name: Core and SDK Rust tests
+        id: core_rust
         if: always()
+        shell: python
         env:
           HUNIN_EXECUTABLE_LAUNCH_EVIDENCE: collector-evidence/executable-launch
-        run: cargo +stable test --locked --all
+        run: |
+          import pathlib, shutil, subprocess, sys
+          path = pathlib.Path('collector-evidence/core-sdk-rust.log')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          with path.open('w+b') as log:
+              result = subprocess.run(['cargo', '+stable', 'test', '--locked', '--all'], stdout=log, stderr=subprocess.STDOUT)
+              log.seek(0)
+              shutil.copyfileobj(log, sys.stdout.buffer)
+          sys.exit(result.returncode)
+      - name: Retain failed core diagnostics before native acceptance
+        if: always() && steps.core_rust.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-rust-failure-${{ matrix.platform }}
+          path: collector-evidence/core-sdk-rust.log
       - name: JavaScript SDK tests
         if: always()
         run: node --test sdk/javascript/dist/sdk.test.mjs
