@@ -3,6 +3,20 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import { defineConfig, globalIgnores } from 'eslint/config';
 
+// Build systems can emit files such as compiler_depend.ts which are not
+// TypeScript. Match component source, rather than arbitrary files on disk.
+const ownedSources = [
+  '*.mts',
+  'quality/**/*.mts',
+  'ui/src/**/*.ts',
+  'ui/scripts/**/*.mts',
+  'ui/test/**/*.mts',
+  'ui/vite.config.ts',
+  'collectors/javascript/src/**/*.{ts,mts}',
+  'sdk/javascript/src/**/*.{ts,mts}',
+  'sdk/conformance/*.mts',
+];
+
 export default defineConfig(
   globalIgnores([
     '**/node_modules/**',
@@ -21,13 +35,13 @@ export default defineConfig(
     'sdk/javascript/test/**',
   ]),
   {
-    files: ['**/*.{ts,mts}'],
+    files: ownedSources,
     extends: [js.configs.recommended],
     languageOptions: { ecmaVersion: 2022 },
     linterOptions: { reportUnusedDisableDirectives: 'error' },
   },
   {
-    files: ['**/*.{ts,mts}'],
+    files: ownedSources,
     extends: [tseslint.configs.recommended],
   },
   {

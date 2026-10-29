@@ -94,11 +94,10 @@ def check(group):
         ]
     if group == "rust":
         return [
-            run(["cargo", "+stable", "fmt", "--all", "--", "--check"]).returncode,
+            run(["cargo", "fmt", "--all", "--", "--check"]).returncode,
             run(
                 [
                     "cargo",
-                    "+stable",
                     "clippy",
                     "--workspace",
                     "--all-targets",

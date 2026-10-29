@@ -13,6 +13,65 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  quality:
+    name: owned source quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: quality/requirements.txt
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Install pinned quality dependencies
+        run: |
+          rustup show active-toolchain
+          python -m pip install -r quality/requirements.txt
+          npm ci --ignore-scripts
+          npm --prefix ui ci --ignore-scripts
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: quality-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+      - name: Emit runtime assets for checked consumers
+        run: npm run build:runtime
+      - name: TypeScript lint, format and types
+        run: python quality/check.py js
+      - name: Python lint and format
+        if: always()
+        run: python quality/check.py python
+      - name: Rust format and Clippy
+        if: always()
+        run: python quality/check.py rust
+      - name: Go format and vet
+        if: always()
+        run: python quality/check.py go
+      - name: C and C++ format and warnings
+        if: always()
+        run: python quality/check.py native
+      - uses: actions/cache/save@v4
+        if: success()
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: quality-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
   host:
     name: ${{ matrix.platform }}
     timeout-minutes: 45
@@ -181,6 +240,9 @@ jobs:
       - name: Verify Bun SDK bridge into canonical storage
         if: always() && steps.bun.outcome == 'success'
         run: cargo +stable test --locked --test sdk_contract bun_runtime_sdk_conforms -- --ignored --exact --nocapture
+      - name: Verify Bun producer completion and partial evidence retention
+        if: always() && steps.bun.outcome == 'success'
+        run: cargo +stable test --locked --test collector_completion bun_ -- --ignored
       - name: Install checksum-pinned Deno
         id: deno
         if: always() && steps.build.outcome == 'success'
@@ -197,9 +259,9 @@ jobs:
       - name: Verify Deno SDK bridge into canonical storage
         if: always() && steps.deno.outcome == 'success'
         run: cargo +stable test --locked --test sdk_contract deno_runtime_sdk_conforms -- --ignored --exact --nocapture
-      - name: Verify incomplete collector evidence retention
+      - name: Verify incomplete Deno worker evidence retention
         if: always() && steps.deno.outcome == 'success'
-        run: cargo +stable test --locked --test collector_completion -- --include-ignored
+        run: cargo +stable test --locked --test collector_completion deno_ -- --ignored
       - name: Verify installed JavaScript runtime worker collection
         if: always() && steps.build.outcome == 'success'
         run: node --test collectors/javascript/plan.test.mjs
