@@ -19,6 +19,27 @@ fn run(id: &str, cwd: &str, passed: bool) -> Run {
 }
 
 #[tokio::test]
+async fn analysis_without_result_identity_is_never_selected() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    // Historical metadata can lack both result_set_id and id. The document key
+    // still owns the metadata; an absent selected result must not match it.
+    store
+        .save_document(
+            "analysis-results",
+            "legacy-key",
+            &json!({"run_id":"recording","analysis_id":"legacy","status":"failed"}),
+        )
+        .unwrap();
+    let results = Operations::new(store)
+        .call("analyses.results", json!({"run_id":"recording"}))
+        .await
+        .unwrap();
+    assert_eq!(results["results"][0]["selected"], false);
+}
+
+#[tokio::test]
 async fn durable_metadata_lists_page_without_losing_history_or_crossing_runs() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

@@ -221,7 +221,8 @@ impl Operations {
                         &format!("analysis:{}", row["analysis_id"].as_str().unwrap_or("")),
                     )?;
                     let result_id = row["result_set_id"].as_str().or_else(|| row["id"].as_str());
-                    row["selected"] = json!(selected.as_deref() == result_id);
+                    row["selected"] =
+                        json!(result_id.is_some() && selected.as_deref() == result_id);
                 }
                 Ok(metadata_page("results", results, limit, cursor))
             }
