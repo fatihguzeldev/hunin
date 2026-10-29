@@ -1,6 +1,11 @@
-use crate::collection::{CaptureAdapter, LaunchExecutableKind, capture_modes, probe, tool};
+use crate::collection::{
+    CaptureAdapter, LaunchExecutableKind, capture_modes, probe, python_cpu_prerequisite, tool,
+};
 use serde_json::{Value, json};
 use std::{env, process::Command, sync::Arc, time::Duration};
+
+const CPU_PROGRESS_MECHANISM: &str = "os-thread-cpu-progress";
+const CPU_PROGRESS_BASIS: &str = "measured OS thread CPU counter progress statistically attributed to bounded Python stack snapshots";
 
 fn checked(command: &mut Command) -> anyhow::Result<String> {
     let output = probe::output(command, None, Duration::from_secs(2), 32 * 1024)?;
@@ -104,25 +109,27 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
     } else {
         "prerequisites_ready"
     };
+    let cpu_progress_availability = if matches!(runtime, "cpython" | "pypy") {
+        let mut state = availability;
+        if let Some(executable) = found.as_ref().filter(|_| version.is_some())
+            && let Err(error) = python_cpu_prerequisite(executable, Duration::from_secs(2))
+        {
+            state = "cpu_counter_prerequisite_failed";
+            diagnostics.push(format!("CPU-progress mode prerequisite failed: {error:#}"));
+        }
+        diagnostics.push("CPU-progress mode uses the standard library; CPU gaps above 100ms and capture latency above 10ms remain unattributed. GIL-holding native calls, native-only threads and undiscovered short-lived threads limit coverage. No vmprof installation is required for this mode.".into());
+        Some(state)
+    } else {
+        None
+    };
     let mechanism;
     let mut basis = "statistical stack samples";
     match runtime {
         "cpython" | "pypy" => {
             if cfg!(windows) {
-                mechanism = "os-thread-cpu-progress";
-                basis = "measured OS thread CPU counter progress statistically attributed to bounded Python stack snapshots";
-                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
-                    let directory = crate::collection::assets().join("collectors/python");
-                    let code = format!(
-                        "import sys,threading;sys.path.insert(0,{:?});from cpu_clock import clock;c=clock();tid=threading.current_thread().native_id;assert c.snapshot({{tid}}), 'OS thread CPU counter unavailable';c.close();print('CPU counter prerequisite verified')",
-                        directory.to_string_lossy()
-                    );
-                    if let Err(error) = checked(Command::new(executable).args(["-c", &code])) {
-                        availability = "cpu_counter_prerequisite_failed";
-                        diagnostics.push(format!("{error:#}"));
-                    }
-                }
-                diagnostics.push("Standard library route; CPU gaps above100ms and capture latency above10ms remain unattributed. GIL-holding native calls, native-only threads and undiscovered short-lived threads limit coverage. No vmprof installation is required.".into());
+                mechanism = CPU_PROGRESS_MECHANISM;
+                basis = CPU_PROGRESS_BASIS;
+                availability = cpu_progress_availability.unwrap_or(availability);
             } else {
                 mechanism = "vmprof-cpu-timer";
                 if let Some(executable) = found.as_ref().filter(|_| version.is_some())
@@ -215,7 +222,9 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
     if version.is_some() {
         capabilities.extend(["sdk-records", "process-resources"]);
     }
-    if availability == "prerequisites_ready" {
+    if availability == "prerequisites_ready"
+        || cpu_progress_availability == Some("prerequisites_ready")
+    {
         capabilities.push("cpu-sampling-prerequisites");
     }
     let modes = match capture_modes(runtime) {
@@ -223,6 +232,7 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             let (mode_mechanism, mode_availability, mode_basis) = match mode.launch.adapter {
                 CaptureAdapter::GoTestCpu => ("Go runtime pprof", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "aggregated sampled CPU time; one test package per recording"),
                 CaptureAdapter::GoTrace => ("Go execution tracer", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "runtime scheduler/GC events; not a CPU stack profile"),
+                CaptureAdapter::PythonCpuProgress => (CPU_PROGRESS_MECHANISM, cpu_progress_availability.unwrap_or(availability), CPU_PROGRESS_BASIS),
                 _ => (mechanism, availability, basis),
             };
             let default_executable = match mode.executable_kind {
@@ -305,6 +315,47 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("target executable")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn python_cpu_mode_has_independent_prerequisites_from_vmprof() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let interpreter = directory.path().join("selected-python");
+        std::fs::write(
+            &interpreter,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'Python 3.12.0\\n'; exit 0; fi\ncase \"$2\" in *vmprof*) exit 1;; *) printf 'CPU counter prerequisite verified\\n';; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let capability = runtime(
+            "cpython",
+            &[interpreter.to_str().unwrap()],
+            &json!({"state":"unknown"}),
+        );
+        let modes = capability["modes"].as_array().unwrap();
+        assert_eq!(
+            modes[0]["availability"],
+            "dependency_missing_or_incompatible"
+        );
+        let cpu = modes
+            .iter()
+            .find(|mode| mode["mode"] == "python-cpu")
+            .unwrap();
+        assert_eq!(cpu["launch_runtime"], "python-cpu");
+        assert_eq!(cpu["mechanism"], "os-thread-cpu-progress");
+        assert_eq!(cpu["availability"], "prerequisites_ready");
+        assert_eq!(cpu["default_executable"], interpreter.to_str().unwrap());
+        assert_eq!(cpu["selectable"], true);
+        assert_eq!(cpu["recording_verified"], false);
+        assert!(
+            capability["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "cpu-sampling-prerequisites")
         );
     }
 }

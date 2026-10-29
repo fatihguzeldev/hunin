@@ -42,6 +42,11 @@ impl RuntimeRegistration {
         }
     }
 
+    fn appears_in_capability_family(&self, family: &str) -> bool {
+        self.capability_family() == family
+            || (!cfg!(windows) && self.id == "python-cpu" && matches!(family, "cpython" | "pypy"))
+    }
+
     fn launch_mode(&'static self) -> CaptureModeRegistration {
         let (mode, command_requirement, executable_kind) = match self.adapter {
             CaptureAdapter::GoTestCpu | CaptureAdapter::GoTrace => (
@@ -62,7 +67,11 @@ impl RuntimeRegistration {
             CaptureAdapter::PythonVmprof
             | CaptureAdapter::PythonCpuProgress
             | CaptureAdapter::GraalCpuSampler => (
-                "automatic-cpu",
+                if self.id == "python-cpu" {
+                    "python-cpu"
+                } else {
+                    "automatic-cpu"
+                },
                 "Pass the selected Python interpreter with a script, -m module or -c code.",
                 LaunchExecutableKind::RuntimeInterpreter,
             ),
@@ -185,7 +194,7 @@ pub fn capture_modes(runtime: &str) -> Result<Vec<CaptureModeRegistration>> {
     let family = select_runtime(runtime)?.capability_family();
     let mut modes = RUNTIMES
         .iter()
-        .filter(|registration| registration.capability_family() == family)
+        .filter(|registration| registration.appears_in_capability_family(family))
         .map(RuntimeRegistration::launch_mode)
         .collect::<Vec<_>>();
     modes.sort_by_key(|mode| mode.mode != "automatic-cpu");
@@ -280,5 +289,27 @@ mod tests {
         }
         assert_eq!(capture_modes("TypeScript").unwrap()[0].launch.id, "node");
         assert!(capture_modes("not-a-runtime").is_err());
+    }
+
+    #[test]
+    fn python_families_keep_the_explicit_cpu_progress_route() {
+        for (family, canonical) in [("Python3", "cpython"), ("PyPy3", "pypy")] {
+            let modes = capture_modes(family).unwrap();
+            assert_eq!(modes[0].mode, "automatic-cpu");
+            assert_eq!(modes[0].launch.id, canonical);
+            if cfg!(windows) {
+                assert_eq!(modes.len(), 1, "the default already uses CPU progress");
+                assert_eq!(modes[0].launch.adapter, CaptureAdapter::PythonCpuProgress);
+            } else {
+                assert_eq!(modes.len(), 2);
+                assert_eq!(modes[1].mode, "python-cpu");
+                assert_eq!(modes[1].launch.id, "python-cpu");
+                assert_eq!(modes[1].launch.adapter, CaptureAdapter::PythonCpuProgress);
+                assert_eq!(
+                    modes[1].executable_kind,
+                    LaunchExecutableKind::RuntimeInterpreter
+                );
+            }
+        }
     }
 }

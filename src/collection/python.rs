@@ -1,6 +1,36 @@
 use super::{CaptureOutput, CapturePlan, CaptureRequest, assets, probe};
 use anyhow::{Context, Result, bail};
-use std::{collections::BTreeMap, process::Command};
+use std::{collections::BTreeMap, path::Path, process::Command, time::Duration};
+
+pub(crate) fn cpu_prerequisite(executable: &Path, timeout: Duration) -> Result<()> {
+    let output = probe::output(
+        Command::new(executable)
+            .args([
+                "-c",
+                r"import sys, threading
+sys.path.insert(0, sys.argv[1])
+from hunin_capture.cpu_progress.clocks import clock
+assert hasattr(threading.current_thread(), 'native_id'), 'Python native thread IDs required'
+counter = clock()
+try:
+    assert counter.snapshot({threading.current_thread().native_id}), 'OS thread CPU counter unavailable'
+finally:
+    counter.close()",
+            ])
+            .arg(assets().join("collectors/python")),
+        None,
+        timeout,
+        32 * 1024,
+    )
+    .with_context(|| format!("probe Python CPU counters with {}", executable.display()))?;
+    if !output.status.success() {
+        bail!(
+            "Python CPU progress prerequisites unavailable: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
 
 pub(super) fn vmprof(request: &CaptureRequest) -> Result<CapturePlan> {
     let interpreter = &request.command[0];
