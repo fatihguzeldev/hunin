@@ -1,3 +1,4 @@
+use super::identity::{ObservationId, ResultId};
 /// The kind distinction needed by ownership rules. Other wire observation kinds
 /// remain valid; the wire schema, rather than this projection, owns their list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,17 +23,17 @@ impl OwnershipKind {
 #[derive(Debug, Clone)]
 pub(crate) struct Ownership {
     pub kind: OwnershipKind,
-    pub parent_id: Option<String>,
-    pub context_id: Option<String>,
+    pub parent_id: Option<ObservationId>,
+    pub context_id: Option<ObservationId>,
 }
 
 pub(crate) struct ObservationLinks {
-    pub id: String,
+    pub id: ObservationId,
     pub ownership: Ownership,
-    pub references: Vec<String>,
+    pub references: Vec<ObservationId>,
 }
 
 pub(crate) struct SelectedObservation {
     pub ownership: Ownership,
-    pub result_set_id: String,
+    pub result_set_id: ResultId,
 }

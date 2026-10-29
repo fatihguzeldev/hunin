@@ -254,6 +254,7 @@ impl Store {
     }
 
     pub(crate) fn publish_result(&self, request: PublicationRequest<'_>) -> Result<bool> {
+        use crate::model::identity::{ObservationId, ResultId};
         let PublicationRequest {
             run_id,
             source_key,
@@ -279,16 +280,16 @@ impl Store {
             .query_row(
                 "SELECT id,active,source_key FROM result_sets WHERE run_id=?1 AND input_identity=?2",
                 params![run_id, input_identity],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, String>(2)?)),
+                |r| Ok((ResultId::from(r.get::<_, String>(0)?), r.get::<_, bool>(1)?, r.get::<_, String>(2)?)),
             )
             .optional()?
         {
             anyhow::ensure!(previous_source == source_key, "input identity belongs to another result source");
             if !active {
                 deactivate_source(&tx, run_id, source_key)?;
-                let stale: i64 = tx.query_row("SELECT COUNT(*) FROM result_set_dependencies d JOIN result_sets r ON r.id=d.input_result_set_id WHERE d.result_set_id=?1 AND r.active=0", [&id], |r|r.get(0))?;
+                let stale: i64 = tx.query_row("SELECT COUNT(*) FROM result_set_dependencies d JOIN result_sets r ON r.id=d.input_result_set_id WHERE d.result_set_id=?1 AND r.active=0", [id.as_str()], |r|r.get(0))?;
                 anyhow::ensure!(stale == 0, "stored result depends on superseded inputs; recompute the analysis");
-                tx.execute("UPDATE result_sets SET active=1 WHERE id=?1", [&id])?;
+                tx.execute("UPDATE result_sets SET active=1 WHERE id=?1", [id.as_str()])?;
             }
             if let Some(metadata) = metadata {
                 write_publication_metadata(&tx, metadata, &metadata.replayed_document(&id))?;
@@ -300,31 +301,32 @@ impl Store {
         deactivate_source(&tx, run_id, source_key)?;
         // The write transaction owns this selected snapshot through insertion.
         // Acceptance only needs relationship projections, never whole stack/source payloads.
-        let selected: HashMap<String, SelectedObservation> = tx
+        let selected: HashMap<ObservationId, SelectedObservation> = tx
             .prepare("SELECT o.id,o.kind,json_extract(o.record,'$.parent_id'),json_extract(o.record,'$.context_id'),o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
             .query_map([run_id], |row| {
                 let kind: String = row.get(1)?;
-                Ok((row.get(0)?, SelectedObservation {
+                Ok((ObservationId::from(row.get::<_, String>(0)?), SelectedObservation {
                     ownership: Ownership {
                         kind: OwnershipKind::from_wire(&kind),
-                        parent_id: row.get(2)?,
-                        context_id: row.get(3)?,
+                        parent_id: row.get::<_, Option<String>>(2)?.map(ObservationId::from),
+                        context_id: row.get::<_, Option<String>>(3)?.map(ObservationId::from),
                     },
-                    result_set_id: row.get(4)?,
+                    result_set_id: ResultId::from(row.get::<_, String>(4)?),
                 }))
             })?
             .collect::<rusqlite::Result<_>>()?;
         let existing = selected.keys().cloned().collect();
-        ingestion::validate(run_id, records, &existing)?;
+        ingestion::validate_ids(run_id, records, existing)?;
+        let proposed = ingestion::links(records);
         let mut dependencies =
-            publication::validate_relations(&ingestion::links(records), &selected)?;
+            publication::validate_relations(&proposed, &selected)?;
         if let Some(metadata) = metadata {
-            dependencies.extend(metadata.declared_inputs()?.into_iter().map(str::to_owned));
+            dependencies.extend(metadata.declared_inputs()?);
         }
         for id in &dependencies {
             let selected: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM result_sets WHERE id=?1 AND run_id=?2 AND active=1",
-                params![id, run_id],
+                params![id.as_str(), run_id],
                 |r| r.get(0),
             )?;
             anyhow::ensure!(
@@ -333,24 +335,24 @@ impl Store {
             );
         }
         let result_id = metadata
-            .and_then(|value| value.analysis_execution_id().map(str::to_owned))
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            .and_then(|value| value.analysis_execution_id().map(ResultId::from))
+            .unwrap_or_else(|| ResultId::from(uuid::Uuid::new_v4().to_string()));
         tx.execute(
             "INSERT INTO result_sets(id,run_id,input_identity,source_key,active) VALUES(?1,?2,?3,?4,1)",
-            params![result_id, run_id, input_identity,source_key],
+            params![result_id.as_str(), run_id, input_identity,source_key],
         )?;
         for id in dependencies {
-            tx.execute("INSERT INTO result_set_dependencies(result_set_id,input_result_set_id) VALUES(?1,?2)",params![result_id,id])?;
+            tx.execute("INSERT INTO result_set_dependencies(result_set_id,input_result_set_id) VALUES(?1,?2)",params![result_id.as_str(),id.as_str()])?;
         }
         {
             let mut insert=tx.prepare("INSERT INTO observations(run_id,id,kind,timestamp_us,result_set_id,record) VALUES(?1,?2,?3,?4,?5,?6)")?;
-            for r in records {
+            for (r, observation) in records.iter().zip(&proposed) {
                 insert.execute(params![
                     run_id,
-                    r["id"].as_str(),
+                    observation.id.as_str(),
                     r["kind"].as_str(),
                     r["timestamp_us"].as_u64(),
-                    result_id,
+                    result_id.as_str(),
                     serde_json::to_string(r)?
                 ])?;
             }

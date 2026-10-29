@@ -1,3 +1,4 @@
+use crate::model::identity::{ObservationId, ResultId};
 use crate::model::relations::{ObservationLinks, Ownership, OwnershipKind, SelectedObservation};
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -5,13 +6,21 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 pub fn validate(run_id: &str, records: &[Value], existing: &HashSet<String>) -> Result<()> {
+    let existing = existing.iter().cloned().map(ObservationId::from).collect();
+    validate_ids(run_id, records, existing)
+}
+
+pub(crate) fn validate_ids(
+    run_id: &str,
+    records: &[Value],
+    mut ids: HashSet<ObservationId>,
+) -> Result<()> {
     static SCHEMA: OnceLock<jsonschema::Validator> = OnceLock::new();
     let schema = SCHEMA.get_or_init(|| {
         let source: Value =
             serde_json::from_str(include_str!("../protocol/record.schema.json")).unwrap();
         jsonschema::validator_for(&source).expect("embedded observation schema")
     });
-    let mut ids = existing.clone();
     for record in records {
         if let Err(error) = schema.validate(record) {
             bail!("observation schema: {error}");
@@ -20,7 +29,7 @@ pub fn validate(run_id: &str, records: &[Value], existing: &HashSet<String>) -> 
             bail!("observation belongs to another run");
         }
         let id = record["id"].as_str().unwrap();
-        if !ids.insert(id.to_owned()) {
+        if !ids.insert(ObservationId::from(id)) {
             bail!("duplicate observation id: {id}");
         }
     }
@@ -52,10 +61,10 @@ pub fn validate_ownership(records: &[Value], existing: &HashMap<String, Value>) 
         .iter()
         .map(|(id, row)| {
             (
-                id.clone(),
+                ObservationId::from(id.clone()),
                 SelectedObservation {
                     ownership: ownership(row),
-                    result_set_id: String::new(),
+                    result_set_id: ResultId::from(""),
                 },
             )
         })
@@ -66,8 +75,8 @@ pub fn validate_ownership(records: &[Value], existing: &HashMap<String, Value>) 
 fn ownership(record: &Value) -> Ownership {
     Ownership {
         kind: OwnershipKind::from_wire(record["kind"].as_str().unwrap_or("")),
-        parent_id: record["parent_id"].as_str().map(str::to_owned),
-        context_id: record["context_id"].as_str().map(str::to_owned),
+        parent_id: record["parent_id"].as_str().map(ObservationId::from),
+        context_id: record["context_id"].as_str().map(ObservationId::from),
     }
 }
 
@@ -77,7 +86,7 @@ pub(crate) fn links(records: &[Value]) -> Vec<ObservationLinks> {
     records
         .iter()
         .map(|record| ObservationLinks {
-            id: record["id"].as_str().unwrap().to_owned(),
+            id: ObservationId::from(record["id"].as_str().unwrap()),
             ownership: ownership(record),
             references: ["parent_id", "context_id", "from", "to"]
                 .into_iter()
@@ -89,7 +98,7 @@ pub(crate) fn links(records: &[Value]) -> Vec<ObservationLinks> {
                         .flatten()
                         .filter_map(Value::as_str),
                 )
-                .map(str::to_owned)
+                .map(ObservationId::from)
                 .collect(),
         })
         .collect()

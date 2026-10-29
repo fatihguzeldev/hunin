@@ -1,6 +1,7 @@
 //! Result acceptance policy. Persistence supplies a selected snapshot while
 //! holding its write transaction; this module does not open storage or commit.
 
+use crate::model::identity::{ObservationId, ResultId};
 use crate::model::relations::{ObservationLinks, Ownership, OwnershipKind, SelectedObservation};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -59,7 +60,7 @@ impl PublicationMetadata<'_> {
         }
     }
 
-    pub fn declared_inputs(&self) -> Result<Vec<&str>> {
+    pub fn declared_inputs(&self) -> Result<Vec<ResultId>> {
         let Some(inputs) = self.document().get("input_result_sets") else {
             return Ok(Vec::new());
         };
@@ -70,11 +71,12 @@ impl PublicationMetadata<'_> {
             .map(|id| {
                 id.as_str()
                     .context("input result identity must be a string")
+                    .map(ResultId::from)
             })
             .collect()
     }
 
-    pub fn replayed_document(&self, result_id: &str) -> Value {
+    pub fn replayed_document(&self, result_id: &ResultId) -> Value {
         let mut document = self.document().clone();
         document["status"] = json!("replayed");
         document["result_set_id"] = json!(result_id);
@@ -84,21 +86,21 @@ impl PublicationMetadata<'_> {
 
 pub(crate) fn validate_relations(
     proposed: &[ObservationLinks],
-    selected: &HashMap<String, SelectedObservation>,
-) -> Result<HashSet<String>> {
+    selected: &HashMap<ObservationId, SelectedObservation>,
+) -> Result<HashSet<ResultId>> {
     validate_ownership(proposed, selected)?;
     dependencies(proposed, selected)
 }
 
 pub(crate) fn validate_ownership(
     proposed: &[ObservationLinks],
-    selected: &HashMap<String, SelectedObservation>,
+    selected: &HashMap<ObservationId, SelectedObservation>,
 ) -> Result<()> {
-    let own: HashMap<&str, &Ownership> = proposed
+    let own: HashMap<&ObservationId, &Ownership> = proposed
         .iter()
-        .map(|row| (row.id.as_str(), &row.ownership))
+        .map(|row| (&row.id, &row.ownership))
         .collect();
-    let lookup = |id: &str| {
+    let lookup = |id: &ObservationId| {
         own.get(id)
             .copied()
             .or_else(|| selected.get(id).map(|row| &row.ownership))
@@ -107,13 +109,13 @@ pub(crate) fn validate_ownership(
         for (field, id, kind, name) in [
             (
                 "parent_id",
-                row.ownership.parent_id.as_deref(),
+                row.ownership.parent_id.as_ref(),
                 OwnershipKind::Span,
                 "span",
             ),
             (
                 "context_id",
-                row.ownership.context_id.as_deref(),
+                row.ownership.context_id.as_ref(),
                 OwnershipKind::Context,
                 "context",
             ),
@@ -125,11 +127,17 @@ pub(crate) fn validate_ownership(
             }
         }
         for (field, target) in [
-            ("parent_id", parent_id as fn(&Ownership) -> Option<&str>),
-            ("context_id", context_id as fn(&Ownership) -> Option<&str>),
+            (
+                "parent_id",
+                parent_id as fn(&Ownership) -> Option<&ObservationId>,
+            ),
+            (
+                "context_id",
+                context_id as fn(&Ownership) -> Option<&ObservationId>,
+            ),
         ] {
             let mut seen = HashSet::new();
-            let mut current = Some((row.id.as_str(), &row.ownership));
+            let mut current = Some((&row.id, &row.ownership));
             while let Some((id, ownership)) = current {
                 if !seen.insert(id) {
                     bail!("cyclic {field} ownership");
@@ -141,22 +149,22 @@ pub(crate) fn validate_ownership(
     Ok(())
 }
 
-fn parent_id(ownership: &Ownership) -> Option<&str> {
-    ownership.parent_id.as_deref()
+fn parent_id(ownership: &Ownership) -> Option<&ObservationId> {
+    ownership.parent_id.as_ref()
 }
-fn context_id(ownership: &Ownership) -> Option<&str> {
-    ownership.context_id.as_deref()
+fn context_id(ownership: &Ownership) -> Option<&ObservationId> {
+    ownership.context_id.as_ref()
 }
 
 fn dependencies(
     proposed: &[ObservationLinks],
-    selected: &HashMap<String, SelectedObservation>,
-) -> Result<HashSet<String>> {
-    let own: HashSet<&str> = proposed.iter().map(|row| row.id.as_str()).collect();
+    selected: &HashMap<ObservationId, SelectedObservation>,
+) -> Result<HashSet<ResultId>> {
+    let own: HashSet<&ObservationId> = proposed.iter().map(|row| &row.id).collect();
     let mut dependencies = HashSet::new();
     for row in proposed {
         for reference in &row.references {
-            if own.contains(reference.as_str()) {
+            if own.contains(reference) {
                 continue;
             }
             let accepted = selected
