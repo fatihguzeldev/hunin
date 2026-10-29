@@ -167,54 +167,13 @@ pub fn resolve(name: &str, cwd: &Path) -> Option<PathBuf> {
     resolve_with_environment(name, cwd, &BTreeMap::new()).and_then(|path| path.canonicalize().ok())
 }
 
-/// Resolve the path used to launch a program. Following its final symlink can
-/// change interpreter semantics, including Python virtual-environment discovery.
-/// Physical executable identity is resolved separately by `resolve`.
+/// Preserve launcher spelling; physical source identity is resolved separately.
 pub fn resolve_with_environment(
     name: &str,
     cwd: &Path,
     overrides: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    let p = Path::new(name);
-    if p.is_absolute() || p.components().count() > 1 {
-        let path = cwd.join(p);
-        return path.is_file().then_some(path);
-    }
-    let names = if cfg!(windows) && p.extension().is_none() {
-        overrides
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("PATHEXT"))
-            .map(|(_, v)| v.clone())
-            .or_else(|| std::env::var("PATHEXT").ok())
-            .unwrap_or_else(|| ".EXE;.CMD;.BAT;.COM".into())
-            .split(';')
-            .map(|ext| format!("{name}{ext}"))
-            .collect::<Vec<_>>()
-    } else {
-        vec![name.to_owned()]
-    };
-    let path = overrides
-        .iter()
-        .find(|(k, _)| {
-            if cfg!(windows) {
-                k.eq_ignore_ascii_case("PATH")
-            } else {
-                k.as_str() == "PATH"
-            }
-        })
-        .map(|(_, v)| std::ffi::OsString::from(v))
-        .or_else(|| std::env::var_os("PATH"))
-        .unwrap_or_default();
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.is_absolute() {
-                directory
-            } else {
-                cwd.join(directory)
-            }
-        })
-        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-        .find(|p| p.is_file())
+    crate::host::resolve_launch_executable(name, cwd, overrides)
 }
 
 pub fn environment(overrides: &BTreeMap<String, String>) -> anyhow::Result<Value> {

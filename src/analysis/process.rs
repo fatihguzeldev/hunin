@@ -16,32 +16,8 @@ use tokio::{
 
 const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
-// Python/pip joins paths with `.`; Win32 verbatim paths do not normalize
-// those components. Keep canonical identities in storage and pass ordinary
-// drive/UNC spellings at the external process boundary.
-pub(super) fn tool_path(path: &Path) -> std::path::PathBuf {
-    #[cfg(windows)]
-    {
-        use std::{
-            ffi::OsString,
-            os::windows::ffi::{OsStrExt, OsStringExt},
-            path::{Component, Prefix},
-        };
-        let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
-        if let Some(Component::Prefix(prefix)) = path.components().next() {
-            match prefix.kind() {
-                Prefix::VerbatimDisk(_) => return OsString::from_wide(&units[4..]).into(),
-                Prefix::VerbatimUNC(_, _) => {
-                    let mut ordinary = vec![b'\\' as u16, b'\\' as u16];
-                    ordinary.extend_from_slice(&units[8..]);
-                    return OsString::from_wide(&ordinary).into();
-                }
-                _ => {}
-            }
-        }
-    }
-    path.to_path_buf()
-}
+pub(super) use crate::host::tool_path;
+
 #[derive(Clone)]
 pub struct Control {
     pub cancellation: watch::Receiver<bool>,
