@@ -93,14 +93,14 @@ if (directory) {
   let sequence = 0,
     stopping = false,
     finished = false;
-  let pending: Promise<void> | undefined;
-  async function save(restart: boolean) {
+  let pending: Promise<boolean> | undefined;
+  async function save(restart: boolean): Promise<boolean> {
     if (!restart) stopping = true;
     if (pending) {
-      await pending;
-      if (restart || finished) return;
+      const persisted = await pending;
+      if (restart || finished) return persisted;
     }
-    if (finished) return;
+    if (finished) return true;
     pending = (async () => {
       try {
         const { profile } = await post('Profiler.stop');
@@ -127,14 +127,16 @@ if (directory) {
           finished = true;
           session.disconnect();
         }
+        return true;
       } catch (error) {
         process.stderr.write(
           `hunin: Bun CPU collection failed: ${(error as Error).message}\n`,
         );
+        return false;
       }
     })();
     try {
-      await pending;
+      return await pending;
     } finally {
       pending = undefined;
     }
@@ -146,7 +148,9 @@ if (directory) {
   control.onmessage = (event) => {
     if (event.data === 'flush-stop') {
       clearInterval(timer);
-      void save(false).then(() => control.postMessage('flushed'));
+      void save(false).then((persisted) =>
+        control.postMessage(persisted ? 'flushed' : 'flush-failed'),
+      );
     }
   };
   const timer = setInterval(() => save(true), 50);

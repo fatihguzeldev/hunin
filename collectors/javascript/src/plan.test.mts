@@ -735,6 +735,73 @@ if (denoExecutable) {
 }
 
 if (bunExecutable!) {
+  for (const failSave of [false, true]) {
+    test(`Bun final save ${failSave ? 'failure is never acknowledged as flushed' : 'is acknowledged after profile and clock persistence'}`, () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hunin-bun-flush-result-'));
+      try {
+        const main = join(directory, 'flush.ts');
+        writeFileSync(
+          main,
+          `
+          import inspector from 'node:inspector';
+          import { readdirSync } from 'node:fs';
+          import { threadId } from 'node:worker_threads';
+          ${
+            failSave
+              ? `
+            const original = inspector.Session.prototype.post;
+            inspector.Session.prototype.post = function(method, ...args) {
+              if (method === 'Profiler.stop') {
+                args.at(-1)(Error('injected final save failure'));
+                return;
+              }
+              return original.call(this, method, ...args);
+            };
+          `
+              : ''
+          }
+          const channel = new BroadcastChannel('hunin-cpu-' + process.pid + '-' + threadId);
+          const timeout = setTimeout(() => { console.error('flush response missing'); process.exit(2); }, 3000);
+          channel.onmessage = event => {
+            clearTimeout(timeout);
+            const names = readdirSync(process.env.HUNIN_JS_PROFILE_DIR);
+            console.log(JSON.stringify({ message: event.data, profiles: names.filter(name => name.endsWith('.cpuprofile')).map(name => ({ name, hasClock: names.includes(name + '.meta.json') })) }));
+            channel.close();
+          };
+          channel.postMessage('flush-stop');
+        `,
+        );
+        const capture = plan({
+          command: [bunExecutable!, main],
+          cwd: directory,
+          artifact_dir: join(directory, 'capture'),
+          run_id: 'flush-result',
+          runtime: 'bun',
+        });
+        const result = spawnSync(capture.command[0], capture.command.slice(1), {
+          cwd: directory,
+          env: { ...process.env, ...capture.env },
+          encoding: 'utf8',
+          timeout: 10000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+        const response: {
+          message: string;
+          profiles: Array<{ name: string; hasClock: boolean }>;
+        } = JSON.parse(result.stdout);
+        assert.equal(response.message, failSave ? 'flush-failed' : 'flushed');
+        if (failSave)
+          assert.match(result.stderr, /injected final save failure/);
+        else {
+          assert.ok(response.profiles.length > 0);
+          assert.ok(response.profiles.every((profile) => profile.hasClock));
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
   test('Bun plans declare distinct generated preload identities without replacing user options', () => {
     const directory = mkdtempSync(join(tmpdir(), 'hunin-bun-session-'));
     try {
