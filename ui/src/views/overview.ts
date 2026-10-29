@@ -36,14 +36,25 @@ export async function overview(
   );
   signal?.throwIfAborted();
   const body = el('div', { class: 'stack' });
-  const elapsed = run.finished_at_us
-    ? duration((run.finished_at_us - run.started_at_us) * 1_000)
-    : 'Recording';
+  const imported = run.runtime === 'imported';
+  const elapsed = imported
+    ? '—'
+    : run.finished_at_us !== null
+      ? duration((run.finished_at_us - run.started_at_us) * 1_000)
+      : run.status === 'running'
+        ? 'Recording'
+        : '—';
   body.append(
     el(
       'div',
       { class: 'stats' },
-      stat('Elapsed', elapsed, 'wall clock · whole run'),
+      stat(
+        'Recording elapsed',
+        elapsed,
+        imported
+          ? 'Imported profile · execution duration unavailable'
+          : 'wall clock · whole recording lifecycle',
+      ),
       stat(
         'Sampled profile',
         weight(data.total_weight, data.weight_unit),
