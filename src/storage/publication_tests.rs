@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::time::Duration;
 
 #[test]
 fn publication_waiting_for_the_writer_cannot_outlive_its_deadline() {
