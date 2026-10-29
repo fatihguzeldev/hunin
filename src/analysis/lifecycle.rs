@@ -65,15 +65,15 @@ impl Engine {
             row["diagnostics"] = json!([
                 "Analyzer interrupted: its owning process is proven absent or its OS process lifetime changed. Partial evidence was retained; no stale PID was signaled and no output was accepted."
             ]);
-            if let Some(directory) = row["execution_dir"].as_str().map(PathBuf::from) {
-                if let Err(error) = self.retain(&mut row, &directory) {
-                    row["diagnostics"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(json!(format!(
-                            "Partial artifact retention failed: {error:#}"
-                        )));
-                }
+            if let Some(directory) = row["execution_dir"].as_str().map(PathBuf::from)
+                && let Err(error) = self.retain(&mut row, &directory)
+            {
+                row["diagnostics"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(format!(
+                        "Partial artifact retention failed: {error:#}"
+                    )));
             }
             self.store
                 .save_document("analysis-results", row["id"].as_str().unwrap(), &row)?;

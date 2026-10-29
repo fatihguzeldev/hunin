@@ -104,10 +104,10 @@ fn owner_absent(value: &Value, system: &System) -> bool {
     if windows_proven_absent(pid) {
         return true;
     }
-    if let Some(saved) = value["process_birth_identity"].as_str() {
-        if let Some(current) = super::process_identity::birth(pid) {
-            return saved != current;
-        }
+    if let Some(saved) = value["process_birth_identity"].as_str()
+        && let Some(current) = super::process_identity::birth(pid)
+    {
+        return saved != current;
     }
     if let Some(process) = system.process(Pid::from_u32(pid)) {
         return value["process_start_time_seconds"]
@@ -119,8 +119,8 @@ fn owner_absent(value: &Value, system: &System) -> bool {
     // OS liveness result that proves absence before recovering another owner.
     #[cfg(unix)]
     unsafe {
-        return libc::kill(pid as i32, 0) == -1
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        libc::kill(pid as i32, 0) == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
     }
     #[cfg(not(unix))]
     false

@@ -49,16 +49,16 @@ pub fn validate_declaration(requirements: &Value) -> Result<()> {
             bail!("known {key} is required when declared");
         }
     }
-    if let Some(values) = requirements.get("artifact_digests") {
-        if values.as_array().is_none_or(|list| {
+    if let Some(values) = requirements.get("artifact_digests")
+        && values.as_array().is_none_or(|list| {
             list.iter().any(|value| {
                 value
                     .as_str()
                     .is_none_or(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
             })
-        }) {
-            bail!("artifact_digests must contain SHA-256 digests");
-        }
+        })
+    {
+        bail!("artifact_digests must contain SHA-256 digests");
     }
     Ok(())
 }
@@ -74,12 +74,12 @@ pub fn check(requirements: &Value, run: &Run, artifacts: &[Artifact]) -> Result<
             run.runtime
         );
     }
-    if let Some(expected) = requirements["source_fingerprint"].as_str() {
-        if expected != run.source["fingerprint"].as_str().unwrap_or("unknown") {
-            bail!(
-                "analyzer source/build applicability mismatch; register against the measured source identity"
-            );
-        }
+    if let Some(expected) = requirements["source_fingerprint"].as_str()
+        && expected != run.source["fingerprint"].as_str().unwrap_or("unknown")
+    {
+        bail!(
+            "analyzer source/build applicability mismatch; register against the measured source identity"
+        );
     }
     for key in ["executable_sha256", "runtime_version"] {
         if let Some(expected) = requirements.get(key) {

@@ -33,22 +33,20 @@ pub(super) async fn wait(
     loop {
         if let Ok(file) = std::fs::File::open(&path) {
             let mut bytes = Vec::new();
-            if file.take(64 * 1024 + 1).read_to_end(&mut bytes).is_ok() && bytes.len() <= 64 * 1024
+            if file.take(64 * 1024 + 1).read_to_end(&mut bytes).is_ok()
+                && bytes.len() <= 64 * 1024
+                && let Ok(report) = serde_json::from_slice::<Value>(&bytes)
+                && report["schema"] == "hunin-xperf-session-v1"
+                && bound(&report, directory, pid, birth)
             {
-                if let Ok(report) = serde_json::from_slice::<Value>(&bytes) {
-                    if report["schema"] == "hunin-xperf-session-v1"
-                        && bound(&report, directory, pid, birth)
-                    {
-                        let state = report["state"].as_str().unwrap_or("unknown");
-                        if matches!(state, "stopped" | "refused") {
-                            return json!({"acknowledged":true,"state":state,"reason":"helper confirmed owned sessions stopped or refused before starting","report":report,"scope":"owned ETW controllers; separate from target process exit"});
-                        }
-                        if state == "cleanup_failed" {
-                            // Drop retries failed controllers once. Allow its
-                            // bounded retry to replace this intermediate report.
-                            failed_report = Some(report);
-                        }
-                    }
+                let state = report["state"].as_str().unwrap_or("unknown");
+                if matches!(state, "stopped" | "refused") {
+                    return json!({"acknowledged":true,"state":state,"reason":"helper confirmed owned sessions stopped or refused before starting","report":report,"scope":"owned ETW controllers; separate from target process exit"});
+                }
+                if state == "cleanup_failed" {
+                    // Drop retries failed controllers once. Allow its
+                    // bounded retry to replace this intermediate report.
+                    failed_report = Some(report);
                 }
             }
         }
