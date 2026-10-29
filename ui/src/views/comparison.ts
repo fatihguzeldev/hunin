@@ -1,192 +1,9 @@
 import { operation, type Comparison } from '../api';
+import { comparisonResults } from './comparison-results';
 import { linkedRequest } from '../requests';
 import { recordingHistory } from '../recording-history';
-import { badge, button, el, empty, errorView, field, loading } from '../dom';
-import { numeric, percentage } from '../format';
+import { button, el, empty, errorView, field, loading } from '../dom';
 import type { ViewContext } from '../workspace';
-
-function correctness(value: unknown): HTMLElement {
-  const passed =
-    value && typeof value === 'object' && 'passed' in value
-      ? value.passed
-      : null;
-  const validation =
-    value && typeof value === 'object' && 'validation' in value
-      ? value.validation
-      : null;
-  return el(
-    'div',
-    { class: 'stack' },
-    badge(
-      passed === true
-        ? 'correctness passed'
-        : passed === false
-          ? 'correctness failed'
-          : 'correctness unknown',
-      passed === true ? 'good' : passed === false ? 'bad' : 'warn',
-    ),
-    passed == null
-      ? el(
-          'p',
-          { class: 'metric-note' },
-          'Correctness validation is unavailable.',
-        )
-      : validation === 'exit_code_and_stdout'
-        ? el(
-            'p',
-            { class: 'metric-note' },
-            'Declared exit code and stdout checks',
-          )
-        : el(
-            'p',
-            { class: 'metric-note' },
-            'Exit code check only; output correctness is unvalidated.',
-          ),
-    el('pre', {}, JSON.stringify(value, null, 2)),
-  );
-}
-
-function results(data: Comparison): HTMLElement {
-  return el(
-    'div',
-    { class: 'stack' },
-    el(
-      'p',
-      { class: 'notice' },
-      data.comparable
-        ? 'The recorded workload and settings meet the backend comparison checks. Measurement noise and collection overhead still limit the claim.'
-        : 'These runs do not meet the comparison checks. Changes below describe the observations and cannot be presented as a validated optimization.',
-    ),
-    ...data.reasons.map((reason) => el('p', { class: 'metric-note' }, reason)),
-    ...(data.limitations ?? []).map((reason) =>
-      el('p', { class: 'metric-note' }, reason),
-    ),
-    el(
-      'div',
-      { class: 'evidence-grid' },
-      el(
-        'section',
-        { class: 'panel' },
-        el(
-          'div',
-          { class: 'panel-head' },
-          el('h2', {}, 'Before'),
-          el('small', {}, data.before.name),
-        ),
-        el(
-          'div',
-          { class: 'panel-body' },
-          correctness(data.correctness.before),
-        ),
-      ),
-      el(
-        'section',
-        { class: 'panel' },
-        el(
-          'div',
-          { class: 'panel-head' },
-          el('h2', {}, 'After'),
-          el('small', {}, data.after.name),
-        ),
-        el('div', { class: 'panel-body' }, correctness(data.correctness.after)),
-      ),
-    ),
-    el(
-      'section',
-      { class: 'panel' },
-      el(
-        'div',
-        { class: 'panel-head' },
-        el('h2', {}, 'Measured changes'),
-        badge(
-          data.comparable ? 'comparable' : 'limited',
-          data.comparable ? 'good' : 'warn',
-        ),
-      ),
-      el(
-        'div',
-        { class: 'table-scroll' },
-        el(
-          'table',
-          {},
-          el(
-            'thead',
-            {},
-            el(
-              'tr',
-              {},
-              el('th', {}, 'Metric / unit'),
-              el('th', { class: 'numeric' }, 'Before'),
-              el('th', { class: 'numeric' }, 'After'),
-              el('th', { class: 'numeric' }, 'Delta'),
-              el('th', { class: 'numeric' }, 'Change'),
-            ),
-          ),
-          el(
-            'tbody',
-            {},
-            ...data.metrics.map((metric) =>
-              el(
-                'tr',
-                {},
-                el(
-                  'td',
-                  {},
-                  metric.name,
-                  el('small', { class: 'source-label' }, metric.unit),
-                  metric.measurement_quality
-                    ? badge(
-                        metric.measurement_quality,
-                        metric.comparable === false ? 'warn' : '',
-                      )
-                    : null,
-                  metric.diagnostic
-                    ? el('small', { class: 'source-label' }, metric.diagnostic)
-                    : null,
-                  metric.before_observations !== undefined
-                    ? el(
-                        'small',
-                        { class: 'source-label' },
-                        `${metric.before_observations} before / ${metric.after_observations ?? 'unknown'} after observations`,
-                      )
-                    : null,
-                ),
-                el('td', { class: 'numeric' }, numeric(metric.before)),
-                el('td', { class: 'numeric' }, numeric(metric.after)),
-                el(
-                  'td',
-                  { class: 'numeric' },
-                  metric.delta == null
-                    ? '—'
-                    : `${metric.delta > 0 ? '+' : ''}${numeric(metric.delta)}`,
-                ),
-                el(
-                  'td',
-                  { class: 'numeric' },
-                  percentage(metric.percent_change),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-    el(
-      'details',
-      { class: 'panel' },
-      el(
-        'summary',
-        { class: 'panel-body' },
-        'Hotspot differences · backend result',
-      ),
-      el(
-        'pre',
-        { class: 'panel-body' },
-        JSON.stringify(data.hotspots, null, 2),
-      ),
-    ),
-  );
-}
 
 export async function comparison(context: ViewContext): Promise<HTMLElement> {
   if (context.runs.length < 2)
@@ -200,6 +17,13 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
   const known = new Map(context.runs.map((run) => [run.id, run]));
   const before = el('select');
   const after = el('select');
+  const unit = el('select');
+  unit.append(
+    el('option', { value: '' }, 'Automatic sample unit · service default'),
+  );
+  if (state.unit) unit.append(el('option', { value: state.unit }, state.unit));
+  unit.value = state.unit ?? '';
+  const unitInfo = el('p', { class: 'metric-note', role: 'status' });
   const content = el('div');
   let request: AbortController | undefined;
   let epoch = 0;
@@ -242,6 +66,7 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
   function changed(): void {
     state.before = before.value;
     state.after = after.value;
+    state.unit = unit.value || undefined;
     epoch++;
     request?.abort();
     compare.disabled = false;
@@ -256,6 +81,27 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
   populate();
   before.addEventListener('change', changed);
   after.addEventListener('change', changed);
+  unit.addEventListener('change', changed);
+  function populateUnits(data: Comparison): void {
+    const available = new Set([
+      ...data.sample_weight_units.before,
+      ...data.sample_weight_units.after,
+      ...(state.unit ? [state.unit] : []),
+    ]);
+    unit.replaceChildren(
+      el(
+        'option',
+        { value: '' },
+        `Automatic sample unit · ${data.hotspot_selection?.weight_unit ?? 'service default'}`,
+      ),
+      ...[...available].sort().map((value) => el('option', { value }, value)),
+    );
+    unit.value = state.unit ?? '';
+    unit.disabled = data.hotspot_selection === undefined;
+    unitInfo.textContent = data.hotspot_selection
+      ? 'Choose the sampled-weight unit to compare. Other units are separate measurements; sample weights do not establish elapsed time or a speed improvement.'
+      : 'This service did not provide explicit sample-unit selection and coverage metadata. Its default comparison remains visible.';
+  }
   const historyPicker = recordingHistory(context.signal, (run, side) => {
     known.set(run.id, run);
     state[side] = run.id;
@@ -270,14 +116,20 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
       { class: 'toolbar' },
       field('Before · baseline', before),
       field('After · candidate', after),
+      field('Sample weight unit', unit),
       compare,
     ),
+    unitInfo,
     historyPicker,
     content,
   );
   async function load(): Promise<void> {
     if (context.signal.aborted) return;
-    const pair = { before: before.value, after: after.value };
+    const pair = {
+      before: before.value,
+      after: after.value,
+      weight_unit: unit.value || undefined,
+    };
     if (!pair.before || !pair.after || pair.before === pair.after) {
       content.replaceChildren(
         empty(
@@ -293,6 +145,7 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
     const linked = linkedRequest(context.signal, request.signal);
     state.before = pair.before;
     state.after = pair.after;
+    state.unit = pair.weight_unit;
     context.persist();
     compare.disabled = true;
     content.replaceChildren(loading('Assessing comparability…'));
@@ -316,10 +169,12 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
         version !== epoch ||
         linked.signal.aborted ||
         before.value !== pair.before ||
-        after.value !== pair.after
+        after.value !== pair.after ||
+        (unit.value || undefined) !== pair.weight_unit
       )
         return;
-      content.replaceChildren(results(data));
+      populateUnits(data);
+      content.replaceChildren(comparisonResults(data, context));
     } catch (error) {
       if (version === epoch && !linked.signal.aborted)
         content.replaceChildren(

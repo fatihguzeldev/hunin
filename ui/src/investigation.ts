@@ -43,7 +43,12 @@ export type Investigation = {
   profile: ProfileInvestigation;
   timeline: TimelineInvestigation;
   evidence: EvidenceInvestigation;
-  comparison: { before?: string; after?: string };
+  comparison: {
+    before?: string;
+    after?: string;
+    unit?: string;
+    metric?: string;
+  };
   resources: PageLocation;
   source?: SourceSelection;
 };
@@ -183,6 +188,10 @@ function decode(value: unknown): SavedInvestigation | undefined {
   const comparison = object(state?.comparison);
   result.comparison.before = text(comparison?.before) || undefined;
   result.comparison.after = text(comparison?.after) || undefined;
+  const comparisonUnit = text(comparison?.unit);
+  const comparisonMetric = text(comparison?.metric);
+  if (comparisonUnit) result.comparison.unit = comparisonUnit;
+  if (comparisonMetric) result.comparison.metric = comparisonMetric;
   const source = object(state?.source);
   const path = text(source?.path);
   const view = text(source?.view);
