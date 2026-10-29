@@ -16,6 +16,7 @@ use std::{
 
 mod artifacts;
 mod bootstrap;
+pub use bootstrap::SCHEMA_VERSION;
 mod inspection;
 mod maintenance;
 mod observations;

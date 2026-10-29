@@ -151,7 +151,7 @@ impl Store {
         let transaction = connection.transaction()?;
         let schema: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         ensure!(
-            schema <= 2,
+            schema <= super::SCHEMA_VERSION,
             "inspection cannot interpret newer schema {schema}"
         );
         let areas = [

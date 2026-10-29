@@ -3,6 +3,9 @@ use anyhow::Result;
 use rusqlite::{Connection, TransactionBehavior};
 use std::{fs, path::Path, time::Duration};
 
+/// Current migration target and highest schema this executable understands.
+pub const SCHEMA_VERSION: u32 = 2;
+
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root.join("artifacts"))?;
@@ -28,8 +31,8 @@ fn migrate(c: rusqlite::Transaction<'_>) -> Result<()> {
     // A version observed before acquiring it cannot authorize a downgrade.
     let version: u32 = c.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     anyhow::ensure!(
-        version <= 2,
-        "recording database schema {version} requires a newer Hunin; this executable supports up to 2"
+        version <= SCHEMA_VERSION,
+        "recording database schema {version} requires a newer Hunin; this executable supports up to {SCHEMA_VERSION}"
     );
     c.execute_batch(include_str!("schema.sql"))?;
     let columns: Vec<String> = c
@@ -57,7 +60,8 @@ fn migrate(c: rusqlite::Transaction<'_>) -> Result<()> {
     if !columns.iter().any(|name| name == "owner_run_id") {
         c.execute_batch("ALTER TABLE documents ADD COLUMN owner_run_id TEXT REFERENCES runs(id) ON DELETE CASCADE;")?;
     }
-    c.execute_batch("UPDATE documents SET owner_run_id=json_extract(payload,'$.run_id') WHERE namespace IN('analysis-results','cancellations') AND owner_run_id IS NULL AND json_extract(payload,'$.run_id') IN(SELECT id FROM runs); PRAGMA user_version=2;")?;
+    c.execute_batch("UPDATE documents SET owner_run_id=json_extract(payload,'$.run_id') WHERE namespace IN('analysis-results','cancellations') AND owner_run_id IS NULL AND json_extract(payload,'$.run_id') IN(SELECT id FROM runs);")?;
+    c.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     c.commit()?;
     Ok(())
 }

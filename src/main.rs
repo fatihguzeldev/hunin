@@ -17,6 +17,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Describe compiled contracts without opening a recording store.
+    BuildInfo,
     Capabilities,
     Run {
         #[arg(long)]
@@ -80,6 +82,13 @@ fn parse_environment(value: &str) -> std::result::Result<(String, String), Strin
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::BuildInfo) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&hunin::product::build_info())?
+        );
+        return Ok(());
+    }
     let root = cli.data_dir.unwrap_or_else(|| {
         dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
@@ -87,6 +96,7 @@ async fn main() -> Result<()> {
     });
     let operations = Operations::new(Store::open(&root)?);
     let value = match cli.command {
+        Command::BuildInfo => unreachable!("build-info returns before opening a store"),
         Command::Capabilities => operations.call("capabilities", json!({})).await?,
         Command::Run {
             name,
