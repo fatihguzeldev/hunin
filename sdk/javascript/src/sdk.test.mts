@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-function run(workload: 'disabled' | 'concurrent', env: NodeJS.ProcessEnv = {}) {
+function run(
+  workload: 'disabled' | 'concurrent' | 'write-error',
+  env: NodeJS.ProcessEnv = {},
+) {
   const path = fileURLToPath(
     new URL(`./test/${workload}.mjs`, import.meta.url),
   );
@@ -18,6 +27,7 @@ function run(workload: 'disabled' | 'concurrent', env: NodeJS.ProcessEnv = {}) {
     [...flags, path],
     {
       encoding: 'utf8',
+      timeout: 10000,
       env: { ...process.env, HUNIN_RUN_ID: '', HUNIN_RECORD_DIR: '', ...env },
     },
   );
@@ -31,6 +41,59 @@ test('disabled instrumentation preserves values and exceptions', () => {
   const result = run('disabled');
   // Assertions also run inside the target, independently of the SDK internals.
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('write failure disables new propagation tokens without changing target behavior', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-sdk-write-error-'));
+  try {
+    const blocked = join(directory, 'not-a-directory');
+    writeFileSync(blocked, 'blocked-sdk-output');
+    const result = run('write-error', {
+      HUNIN_RUN_ID: 'test-run',
+      HUNIN_RECORD_DIR: blocked,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'target-ok\n');
+    assert.deepEqual(readdirSync(directory), ['not-a-directory']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('falsy serialization failures remain sticky and disable propagation', () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), 'hunin-sdk-serialization-error-'),
+  );
+  try {
+    const result = run('write-error', {
+      HUNIN_RUN_ID: 'test-run',
+      HUNIN_RECORD_DIR: directory,
+      HUNIN_SDK_FAILURE_TEST: 'serialize',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'target-ok\n');
+    assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('automatic flush failure does not return an undeliverable observation ID', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-sdk-auto-flush-error-'));
+  try {
+    const blocked = join(directory, 'not-a-directory');
+    writeFileSync(blocked, 'blocked-sdk-output');
+    const result = run('write-error', {
+      HUNIN_RUN_ID: 'test-run',
+      HUNIN_RECORD_DIR: blocked,
+      HUNIN_SDK_FAILURE_TEST: 'auto',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'target-ok\n');
+    assert.deepEqual(readdirSync(directory), ['not-a-directory']);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('concurrent asynchronous spans preserve independent parents and survive explicit flush', () => {

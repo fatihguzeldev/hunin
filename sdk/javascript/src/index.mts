@@ -71,6 +71,15 @@ function identity(): string {
   return `${producer}:${++sequence}`;
 }
 
+function fail(error: unknown): void {
+  failure =
+    error instanceof Error
+      ? error
+      : new Error('Hunin observation serialization or persistence failed', {
+          cause: error,
+        });
+}
+
 function append<K extends keyof Fields>(
   kind: K,
   fields: Fields[K],
@@ -98,9 +107,9 @@ function append<K extends keyof Fields>(
     };
     pending += JSON.stringify(row) + '\n';
     if (pending.length >= 65536) flush();
-    return row.id;
+    return failure ? undefined : row.id;
   } catch (error) {
-    failure = error;
+    fail(error);
   }
 }
 
@@ -134,12 +143,12 @@ export function flush(): void {
     pending = '';
     fsyncSync(fd);
   } catch (error) {
-    failure = error;
+    fail(error);
   }
 }
 
 export function captureContext(): Context | undefined {
-  if (!recording) return undefined;
+  if (!recording || failure) return undefined;
   return { run_id: recording.runId, ...ambient.getStore() };
 }
 
@@ -155,7 +164,7 @@ export function withContext<T>(
   callback: () => T,
   attributes: Attributes = {},
 ): T {
-  if (!recording) return callback();
+  if (!recording || failure) return callback();
   const token =
     typeof value === 'string'
       ? { run_id: recording.runId, context_id: context(value, attributes) }
@@ -169,14 +178,15 @@ export function withContext<T>(
 
 export function startSpan(name: string, attributes: Attributes = {}): Span {
   const parent = ambient.getStore();
-  const id = recording ? identity() : undefined;
-  const timestamp = recording ? now() : 0;
-  const started = recording ? performance.now() : 0;
+  const active = enabled();
+  const id = active ? identity() : undefined;
+  const timestamp = active ? now() : 0;
+  const started = active ? performance.now() : 0;
   let ended = false;
   return {
     id,
     end(extra = {}) {
-      if (ended || !recording) return;
+      if (ended || !recording || failure) return;
       ended = true;
       append('span', {
         id,
@@ -217,7 +227,7 @@ export function withSpan(
   callback: (span?: Span) => unknown,
   attributes: Attributes = {},
 ): unknown {
-  if (!recording) return callback();
+  if (!recording || failure) return callback();
   const span = startSpan(name, attributes);
   return span.run(() => {
     try {
