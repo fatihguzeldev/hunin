@@ -10,6 +10,41 @@ HERE = pathlib.Path(__file__).parent
 
 
 class VmprofCaptureTest(unittest.TestCase):
+    def test_command_main_survives_exit_callbacks_and_flushes_failed_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = pathlib.Path(directory) / "command.vmprof"
+            source = (
+                "import atexit\n"
+                "marker = 'target main'\n"
+                "def on_exit():\n"
+                "    import __main__\n"
+                "    print(__main__.marker)\n"
+                "atexit.register(on_exit)\n"
+                "raise SystemExit(7)\n"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(HERE.resolve() / "capture.py"),
+                    str(profile),
+                    "--",
+                    "-c",
+                    source,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual(result.stdout, "target main\n")
+            self.assertEqual(result.stderr, "")
+            self.assertGreater(profile.stat().st_size, 0)
+            metadata = json.loads(profile.with_suffix(".vmprof.meta.json").read_text())
+            self.assertEqual(metadata["interpreter"], sys.executable)
+            self.assertGreaterEqual(
+                metadata["epoch_end_us"], metadata["epoch_start_us"]
+            )
+
     def test_module_entry_uses_workload_directory_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

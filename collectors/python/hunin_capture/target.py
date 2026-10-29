@@ -1,9 +1,12 @@
 """Python entry-point semantics shared by collection adapters."""
 
 from pathlib import Path
+import builtins
+from importlib.machinery import BuiltinImporter
 import os
 import runpy
 import sys
+from types import ModuleType
 
 
 def run_target(target):
@@ -20,7 +23,16 @@ def run_target(target):
             raise SystemExit("-c requires Python code")
         sys.argv = ["-c", *target[2:]]
         sys.path[0] = os.getcwd()
-        exec(compile(target[1], "<string>", "exec"), {"__name__": "__main__"})
+        main = ModuleType("__main__")
+        main.__dict__["__builtins__"] = builtins
+        if sys.version_info < (3, 14):
+            main.__dict__["__annotations__"] = {}
+        if sys.implementation.name in ("cpython", "pypy"):
+            main.__loader__ = BuiltinImporter
+        # The target is the process's main module, including during exit hooks.
+        # An anonymous exec namespace leaves imports pointing at the collector.
+        sys.modules["__main__"] = main
+        exec(compile(target[1], "<string>", "exec"), main.__dict__)
     else:
         if target[0].startswith("-"):
             raise SystemExit("unsupported Python entry-point option: " + target[0])
