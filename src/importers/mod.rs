@@ -1,4 +1,7 @@
 mod firefox;
+mod formats;
+use formats::ProfileFormat;
+pub(crate) use formats::import_formats;
 mod go_trace;
 mod graal;
 mod javascript_sources;
@@ -61,7 +64,7 @@ pub fn import_with_native_context(
     manifest_path: &Path,
 ) -> Result<ImportedProfile> {
     anyhow::ensure!(
-        matches!(format, "firefox" | "firefox-profile" | "samply"),
+        ProfileFormat::parse(format)? == ProfileFormat::Firefox,
         "native image context requires a Firefox/samply recording"
     );
     import_inner(path, format, run_id, Some(manifest_path))
@@ -72,15 +75,16 @@ fn import_inner(
     run_id: &str,
     native_context: Option<&Path>,
 ) -> Result<ImportedProfile> {
+    let kind = ProfileFormat::parse(format)?;
     let bytes = fs::read(path).with_context(|| format!("read profile {}", path.display()))?;
     let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
-    let sidecars = sidecars(path, format);
+    let sidecars = sidecars(path, kind);
     let mut digest = Sha256::new();
     digest.update(b"hunin-import-v9\0");
     digest.update(format.as_bytes());
     digest.update([0]);
     digest.update(&bytes);
-    if matches!(format, "v8" | "v8-cpuprofile" | "cpuprofile") {
+    if kind == ProfileFormat::V8 {
         digest.update(
             path.file_name()
                 .unwrap_or_default()
@@ -114,7 +118,7 @@ fn import_inner(
     } else {
         bytes
     };
-    let mut native_raw = if matches!(format, "firefox" | "firefox-profile" | "samply") {
+    let mut native_raw = if kind == ProfileFormat::Firefox {
         Some(serde_json::from_slice::<Value>(&raw)?)
     } else {
         None
@@ -151,10 +155,10 @@ fn import_inner(
         digest.update(b"native-image-identifiers-v1\0");
         digest.update(serde_json::to_vec(&images.fingerprint())?);
     }
-    let vmprof = (format == "vmprof")
+    let vmprof = (kind == ProfileFormat::Vmprof)
         .then(|| vmprof::read(path))
         .transpose()?;
-    let go_trace = (format == "go-trace")
+    let go_trace = (kind == ProfileFormat::GoTrace)
         .then(|| go_trace::read(path))
         .transpose()?;
     let decoder_provenance = vmprof
@@ -166,13 +170,13 @@ fn import_inner(
         digest.update(serde_json::to_vec(&provenance["identity"])?);
     }
     let key = format!("{:x}", digest.finalize());
-    let scripts = if matches!(format, "v8" | "v8-cpuprofile" | "cpuprofile") {
+    let scripts = if kind == ProfileFormat::V8 {
         Some(javascript_sources::Scripts::load(path)?)
     } else {
         None
     };
-    let (records, mut diagnostics) = match format {
-        "firefox" | "firefox-profile" | "samply" => firefox::decode_with_lifetimes(
+    let (records, mut diagnostics) = match kind {
+        ProfileFormat::Firefox => firefox::decode_with_lifetimes(
             path,
             native_raw.as_ref().unwrap(),
             run_id,
@@ -180,21 +184,19 @@ fn import_inner(
             images.as_ref().unwrap(),
             lifetimes.as_ref(),
         )?,
-        "v8" | "v8-cpuprofile" | "cpuprofile" => v8::decode(
+        ProfileFormat::V8 => v8::decode(
             path,
             &serde_json::from_slice(&raw)?,
             run_id,
             &key,
             scripts.as_ref().unwrap(),
         )?,
-        "graal" | "graal-cpusampler" => {
-            graal::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?
-        }
-        "pprof" | "go-pprof" => pprof::decode(&raw, run_id, &key)?,
-        "python-cpu-progress" => python_cpu::decode(path, run_id, &key)?,
-        "go-trace" => go_trace::decode(go_trace.as_ref().unwrap(), run_id, &key)?,
-        "vmprof" => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
-        "hunin-jsonl" | "jsonl" => {
+        ProfileFormat::Graal => graal::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?,
+        ProfileFormat::Pprof => pprof::decode(&raw, run_id, &key)?,
+        ProfileFormat::PythonCpuProgress => python_cpu::decode(path, run_id, &key)?,
+        ProfileFormat::GoTrace => go_trace::decode(go_trace.as_ref().unwrap(), run_id, &key)?,
+        ProfileFormat::Vmprof => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
+        ProfileFormat::Jsonl => {
             let mut records = Vec::new();
             for (line, text) in std::str::from_utf8(&raw)?.lines().enumerate() {
                 if text.trim().is_empty() {
@@ -209,9 +211,6 @@ fn import_inner(
             }
             (records, Vec::new())
         }
-        other => bail!(
-            "unsupported profile format {other}; expected v8-cpuprofile, firefox, vmprof, graal-cpusampler, pprof or hunin-jsonl"
-        ),
     };
     if lifetimes.is_none()
         && native_raw.as_ref().is_some_and(|raw| {
@@ -244,25 +243,27 @@ fn import_inner(
     })
 }
 
-fn sidecars(path: &Path, format: &str) -> Vec<PathBuf> {
+fn sidecars(path: &Path, format: ProfileFormat) -> Vec<PathBuf> {
     let candidates = match format {
-        "firefox" | "firefox-profile" | "samply" => vec![
+        ProfileFormat::Firefox => vec![
             path.with_extension("syms.json"),
             path.with_extension("lifetimes.json"),
         ],
-        "v8" | "v8-cpuprofile" | "cpuprofile" => v8::metadata_paths(path)
+        ProfileFormat::V8 => v8::metadata_paths(path)
             .into_iter()
             .chain(v8::script_paths(path))
             .collect(),
-        "graal" | "graal-cpusampler" => vec![path.with_extension("meta.json")],
-        "vmprof" => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
-        "python-cpu-progress" => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
-        "go-trace" => vec![
+        ProfileFormat::Graal => vec![path.with_extension("meta.json")],
+        ProfileFormat::Vmprof => vec![PathBuf::from(format!("{}.meta.json", path.display()))],
+        ProfileFormat::PythonCpuProgress => {
+            vec![PathBuf::from(format!("{}.meta.json", path.display()))]
+        }
+        ProfileFormat::GoTrace => vec![
             path.parent()
                 .unwrap_or_else(|| Path::new("."))
                 .join("go-tool.json"),
         ],
-        _ => Vec::new(),
+        ProfileFormat::Pprof | ProfileFormat::Jsonl => Vec::new(),
     };
     let mut result = candidates
         .into_iter()

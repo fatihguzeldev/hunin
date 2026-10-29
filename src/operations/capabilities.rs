@@ -334,7 +334,15 @@ pub fn discover() -> Value {
         .into_iter()
         .map(|(runtime,worker)|worker.join().unwrap_or_else(|_|json!({"runtime":runtime,"available":false,"probe_status":"internal_probe_failure","diagnostics":["Capability worker failed; availability is unknown"]})))
         .collect::<Vec<_>>();
-    json!({"host":{"os":env::consts::OS,"arch":env::consts::ARCH},"native_sampling_permission":*permission,"runtimes":runtimes,"schema_version":1,"probe_limits":{"timeout_seconds_per_command":2,"output_bytes_per_stream":32768},"verification":"Discovery never labels executable presence as a verified CPU recording."})
+    json!({
+        "host":{"os":env::consts::OS,"arch":env::consts::ARCH},
+        "native_sampling_permission":*permission,
+        "runtimes":runtimes,
+        "import_formats":crate::importers::import_formats(),
+        "schema_version":1,
+        "probe_limits":{"timeout_seconds_per_command":2,"output_bytes_per_stream":32768},
+        "verification":"Discovery never labels executable presence as a verified CPU recording.",
+    })
 }
 
 #[cfg(test)]

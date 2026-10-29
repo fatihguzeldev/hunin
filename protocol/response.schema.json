@@ -431,6 +431,13 @@
         },
         "verification": {
           "type": "string"
+        },
+        "import_formats": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportFormat"
+          },
+          "description": "Optional for compatibility with older services. A present empty list means no advertised formats."
         }
       },
       "required": [
@@ -1425,6 +1432,46 @@
         }
       },
       "required": ["code", "operation", "message"],
+      "additionalProperties": false
+    },
+    "ImportFormat": {
+      "type": "object",
+      "description": "Supported decoder input metadata, not proof of external prerequisite availability.",
+      "properties": {
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requires_existing_recording": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "format",
+        "label",
+        "description",
+        "aliases",
+        "requires",
+        "requires_existing_recording"
+      ],
       "additionalProperties": false
     }
   }

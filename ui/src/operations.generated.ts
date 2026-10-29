@@ -135,6 +135,7 @@ export type Capabilities = {
   "output_bytes_per_stream": number;
 };
   "verification": string;
+  "import_formats"?: Array<ImportFormat>;
 };
 
 export type SourceRead = {
@@ -405,6 +406,15 @@ export type OperationFailure = {
   "message": string;
 };
 
+export type ImportFormat = {
+  "format": string;
+  "label": string;
+  "description": string;
+  "aliases": Array<string>;
+  "requires": Array<string>;
+  "requires_existing_recording": boolean;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -667,7 +677,7 @@ export function isNativeSamplingPermission(value: unknown): value is NativeSampl
 }
 
 export function isCapabilities(value: unknown): value is Capabilities {
-  return (isOutputObject(value) && Object.hasOwn(value, "host") && Object.hasOwn(value, "runtimes") && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "native_sampling_permission") && Object.hasOwn(value, "probe_limits") && Object.hasOwn(value, "verification") && (isOutputObject(value["host"]) && Object.hasOwn(value["host"], "os") && Object.hasOwn(value["host"], "arch") && (typeof value["host"]["os"] === "string") && (typeof value["host"]["arch"] === "string")) && (Array.isArray(value["runtimes"]) && value["runtimes"].every(item => isCapability(item))) && (value["schema_version"] === 1) && isNativeSamplingPermission(value["native_sampling_permission"]) && (isOutputObject(value["probe_limits"]) && Object.hasOwn(value["probe_limits"], "timeout_seconds_per_command") && Object.hasOwn(value["probe_limits"], "output_bytes_per_stream") && (typeof value["probe_limits"]["timeout_seconds_per_command"] === "number" && Number.isInteger(value["probe_limits"]["timeout_seconds_per_command"]) && value["probe_limits"]["timeout_seconds_per_command"] >= 0) && (typeof value["probe_limits"]["output_bytes_per_stream"] === "number" && Number.isInteger(value["probe_limits"]["output_bytes_per_stream"]) && value["probe_limits"]["output_bytes_per_stream"] >= 0)) && (typeof value["verification"] === "string"));
+  return (isOutputObject(value) && Object.hasOwn(value, "host") && Object.hasOwn(value, "runtimes") && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "native_sampling_permission") && Object.hasOwn(value, "probe_limits") && Object.hasOwn(value, "verification") && (isOutputObject(value["host"]) && Object.hasOwn(value["host"], "os") && Object.hasOwn(value["host"], "arch") && (typeof value["host"]["os"] === "string") && (typeof value["host"]["arch"] === "string")) && (Array.isArray(value["runtimes"]) && value["runtimes"].every(item => isCapability(item))) && (value["schema_version"] === 1) && isNativeSamplingPermission(value["native_sampling_permission"]) && (isOutputObject(value["probe_limits"]) && Object.hasOwn(value["probe_limits"], "timeout_seconds_per_command") && Object.hasOwn(value["probe_limits"], "output_bytes_per_stream") && (typeof value["probe_limits"]["timeout_seconds_per_command"] === "number" && Number.isInteger(value["probe_limits"]["timeout_seconds_per_command"]) && value["probe_limits"]["timeout_seconds_per_command"] >= 0) && (typeof value["probe_limits"]["output_bytes_per_stream"] === "number" && Number.isInteger(value["probe_limits"]["output_bytes_per_stream"]) && value["probe_limits"]["output_bytes_per_stream"] >= 0)) && (typeof value["verification"] === "string") && (!Object.hasOwn(value, "import_formats") || (Array.isArray(value["import_formats"]) && value["import_formats"].every(item => isImportFormat(item)))));
 }
 
 export function isSourceRead(value: unknown): value is SourceRead {
@@ -780,6 +790,10 @@ export function isComparison(value: unknown): value is Comparison {
 
 export function isOperationFailure(value: unknown): value is OperationFailure {
   return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "operation") && Object.hasOwn(value, "message") && ((value["code"] === "unknown_operation" || value["code"] === "invalid_parameters" || value["code"] === "conflict" || value["code"] === "operation_failed") && typeof value["code"] === "string") && (typeof value["operation"] === "string") && (typeof value["message"] === "string") && Object.keys(value).every(key => ["code","operation","message"].includes(key)));
+}
+
+export function isImportFormat(value: unknown): value is ImportFormat {
+  return (isOutputObject(value) && Object.hasOwn(value, "format") && Object.hasOwn(value, "label") && Object.hasOwn(value, "description") && Object.hasOwn(value, "aliases") && Object.hasOwn(value, "requires") && Object.hasOwn(value, "requires_existing_recording") && (typeof value["format"] === "string" && [...value["format"]].length >= 1) && (typeof value["label"] === "string") && (typeof value["description"] === "string") && (Array.isArray(value["aliases"]) && value["aliases"].every(item => (typeof item === "string"))) && (Array.isArray(value["requires"]) && value["requires"].every(item => (typeof item === "string"))) && (typeof value["requires_existing_recording"] === "boolean") && Object.keys(value).every(key => ["format","label","description","aliases","requires","requires_existing_recording"].includes(key)));
 }
 
 // Every operation result is checked against its declared wire contract.
