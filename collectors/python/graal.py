@@ -13,7 +13,14 @@ if __name__ == "__main__":
     target = sys.argv[2:]
     if target[:1] == ["--"]:
         target.pop(0)
-    metadata.write_text(json.dumps({"pid": os.getpid(), "interpreter": sys.executable,
-                                    "python_version": sys.version,
-                                    "epoch_start_us": time.time_ns() // 1000}))
+    metadata.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "interpreter": sys.executable,
+                "python_version": sys.version,
+                "epoch_start_us": time.time_ns() // 1000,
+            }
+        )
+    )
     run_target(target)

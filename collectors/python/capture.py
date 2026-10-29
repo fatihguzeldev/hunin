@@ -24,7 +24,11 @@ def main():
         "epoch_start_us": time.time_ns() // 1000,
         "process_cpu_start_us": time.process_time_ns() // 1000,
         "clock_alignment": "unmapped",
-        "vmprof_options": {"period": 0.00099, "lines": sys.implementation.name != "pypy", "memory": os.name != "nt"},
+        "vmprof_options": {
+            "period": 0.00099,
+            "lines": sys.implementation.name != "pypy",
+            "memory": os.name != "nt",
+        },
     }
     with output.open("w+b") as recording:
         # Windows vmprof rejects RSS capture. PyPy ignores line tracing with an
@@ -36,7 +40,9 @@ def main():
             vmprof.disable()
             metadata["epoch_end_us"] = time.time_ns() // 1000
             metadata["process_cpu_end_us"] = time.process_time_ns() // 1000
-            output.with_suffix(output.suffix + ".meta.json").write_text(json.dumps(metadata))
+            output.with_suffix(output.suffix + ".meta.json").write_text(
+                json.dumps(metadata)
+            )
 
 
 if __name__ == "__main__":

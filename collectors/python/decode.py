@@ -24,7 +24,9 @@ def decode(path):
     profile_os = str(state.meta.get("os", "")).lower()
     wall_timer = profile_os.startswith("win") or state.profile_real_time
     samples = []
-    for (trace, estimated_periods, tid, memory_kb), timestamp in zip(state.profiles, times):
+    for (trace, estimated_periods, tid, memory_kb), timestamp in zip(
+        state.profiles, times
+    ):
         stack = []
         for address in trace:
             if address <= 0:
@@ -46,24 +48,31 @@ def decode(path):
                 else:
                     frame["function"] = symbol
             stack.append(frame)
-        samples.append({
-            "timestamp_us": timestamp // 1000 if timestamp is not None else 0,
-            "timestamp_available": timestamp is not None,
-            "tid": str(tid),
-            "stack": stack,
-            "weight": 1,
-            "estimated_timer_periods": estimated_periods,
-            "rss_bytes": memory_kb * 1024 if state.profile_memory else None,
-        })
+        samples.append(
+            {
+                "timestamp_us": timestamp // 1000 if timestamp is not None else 0,
+                "timestamp_available": timestamp is not None,
+                "tid": str(tid),
+                "stack": stack,
+                "weight": 1,
+                "estimated_timer_periods": estimated_periods,
+                "rss_bytes": memory_kb * 1024 if state.profile_memory else None,
+            }
+        )
     return {
-        "format": "vmprof-decoded-v1", "pid": metadata.get("pid", 0),
+        "format": "vmprof-decoded-v1",
+        "pid": metadata.get("pid", 0),
         # vmprof's Windows writer uses QueryPerformanceCounter even when the
         # PROFILE_REAL_TIME flag is unset; the raw OS metadata is authoritative.
         "clock": "runtime_monotonic" if wall_timer else "process_cpu",
-        "sampling_basis": "wall_timer_stack_snapshots" if wall_timer else "process_cpu_timer",
+        "sampling_basis": "wall_timer_stack_snapshots"
+        if wall_timer
+        else "process_cpu_timer",
         "profile_os": profile_os,
-        "clock_alignment": "unmapped", "interval_us": state.period,
-        "metadata": metadata, "lost_time_seconds": state.lost_time,
+        "clock_alignment": "unmapped",
+        "interval_us": state.period,
+        "metadata": metadata,
+        "lost_time_seconds": state.lost_time,
         "samples": samples,
     }
 
