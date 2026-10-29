@@ -30,7 +30,7 @@ fn selected_recording_data_paths() {
             finished_at_us: Some(2),
             exit_code: Some(0),
             diagnostics: vec![],
-            source: json!({"fixture":"synthetic-stack-scaling-v1"}),
+            source: json!({"fixture":"synthetic-stack-scaling-v1","fingerprint":"fixture-v1"}),
             correctness: json!({"passed":true}),
         })
         .unwrap();
@@ -93,6 +93,17 @@ fn selected_recording_data_paths() {
         snapshot.records.len(),
         if replace { samples } else { samples * rounds }
     );
+    // Optional copies make exact disposable datasets available to the analyzer
+    // sizing control. Refuse an existing destination rather than replacing it.
+    if let Some(destination) = std::env::var_os("HUNIN_SIZING_STORE") {
+        let destination = std::path::PathBuf::from(destination);
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::copy(
+            root.path().join("hunin.sqlite"),
+            destination.join("hunin.sqlite"),
+        )
+        .unwrap();
+    }
     println!(
         "{}",
         json!({

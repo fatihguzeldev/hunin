@@ -1,9 +1,13 @@
-use super::{applicability, dependencies, package, process};
+use super::{
+    dependencies,
+    input::{self, Input},
+    package, process,
+};
 use crate::{model::now_us, storage::Store};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -24,10 +28,6 @@ pub struct Engine {
     pub(super) owner: crate::execution::ownership::Owner,
     pub(super) active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
-struct Input {
-    value: Value,
-    fingerprint: String,
-}
 impl Engine {
     pub fn new(store: Store) -> Self {
         Self {
@@ -39,39 +39,6 @@ impl Engine {
     }
     pub fn register(&self, params: &Value) -> Result<Value> {
         package::register(&self.store, params)
-    }
-    fn input(&self, analysis: &Value, run_id: &str) -> Result<Input> {
-        let run = self.store.run(run_id)?;
-        let artifacts = self
-            .store
-            .artifacts(run_id)?
-            .into_iter()
-            .filter(|a| !a.format.starts_with("analysis-"))
-            .collect::<Vec<_>>();
-        applicability::check(&analysis["requirements"], &run, &artifacts)?;
-        let source_key = format!("analysis:{}", analysis["id"].as_str().unwrap());
-        let input_result_sets = self.store.active_result_ids(run_id, &source_key)?;
-        let records = self
-            .store
-            .records_for_result_ids(run_id, &input_result_sets)?;
-        let artifacts: Vec<_> = artifacts
-            .into_iter()
-            .map(|a| {
-                let path = self.store.artifact_path(run_id, &a.id)?;
-                let mut value = serde_json::to_value(a)?;
-                value["path"] = json!(path);
-                Ok(value)
-            })
-            .collect::<Result<_>>()?;
-        let value = json!({"run":run,"records":records,"artifacts":artifacts,"input_result_sets":input_result_sets,"analyzer":{"id":analysis["id"],"version":analysis["version"],"package_digest":analysis["package_digest"]}});
-        let bytes = serde_json::to_vec(&value)?;
-        if bytes.len() > 128 * 1024 * 1024 {
-            bail!("analysis input exceeds the 128 MiB snapshot limit");
-        }
-        Ok(Input {
-            fingerprint: package::digest(&bytes),
-            value,
-        })
     }
     pub async fn run(&self, params: &Value) -> Result<Value> {
         if self.closing.load(Ordering::Acquire) {
@@ -97,7 +64,9 @@ impl Engine {
             json!({"initial_package_verification":phase.elapsed().as_micros() as u64});
         process::check_deadline(deadline)?;
         let phase = Instant::now();
-        let input = self.input(&analysis, run_id)?;
+        let input = input::snapshot(&self.store, &analysis, run_id, || {
+            process::check_deadline(deadline)
+        })?;
         timings["input_snapshot"] = json!(phase.elapsed().as_micros() as u64);
         process::check_deadline(deadline)?;
         let mut active = self.active.lock().await;
@@ -109,12 +78,9 @@ impl Engine {
         let directory = self.store.root().join("analysis-executions").join(&id);
         let phase = Instant::now();
         fs::create_dir_all(&directory)?;
-        fs::write(
-            directory.join("input.json"),
-            serde_json::to_vec(&input.value)?,
-        )?;
+        fs::write(directory.join("input.json"), &input.bytes)?;
         timings["input_staging"] = json!(phase.elapsed().as_micros() as u64);
-        let document = json!({"id":id,"result_set_id":id,"analysis_id":analysis_id,"run_id":run_id,"version":analysis["version"],"package_digest":analysis["package_digest"],"status":"running","created_at_us":now_us(),"attempt_started_at_us":attempt_started_at_us,"timeout_seconds":timeout,"deadline_us":attempt_started_at_us.saturating_add((timeout*1_000_000.0)as u64),"budget_scope":"preparation_setup_execution_verification_retention_publication_checkpoints","phase_timings_us":timings,"owner":self.owner,"input_result_sets":input.value["input_result_sets"],"input_fingerprint":input.fingerprint,"diagnostics":[],"execution_dir":directory});
+        let document = json!({"id":id,"result_set_id":id,"analysis_id":analysis_id,"run_id":run_id,"version":analysis["version"],"package_digest":analysis["package_digest"],"status":"running","created_at_us":now_us(),"attempt_started_at_us":attempt_started_at_us,"timeout_seconds":timeout,"deadline_us":attempt_started_at_us.saturating_add((timeout*1_000_000.0)as u64),"budget_scope":"preparation_setup_execution_verification_retention_publication_checkpoints","phase_timings_us":timings,"owner":self.owner,"input_result_sets":input.result_ids,"input_fingerprint":input.fingerprint,"diagnostics":[],"execution_dir":directory});
         self.store
             .save_document("analysis-results", &id, &document)?;
         let (sender, cancellation) = watch::channel(false);
@@ -216,12 +182,7 @@ impl Engine {
         let phase = Instant::now();
         let text = fs::read_to_string(directory.join("stdout.jsonl"))
             .context("analyzer output must be UTF-8 JSONL")?;
-        let inputs: HashSet<_> = input.value["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|r| r["id"].as_str())
-            .collect();
+        let inputs = &input.record_ids;
         let mut records = Vec::new();
         for (line, value) in text
             .lines()
@@ -259,7 +220,7 @@ impl Engine {
         timings["output_validation"] = json!(phase.elapsed().as_micros() as u64);
         control.check()?;
         let phase = Instant::now();
-        let current = self.input(analysis, input.value["run"]["id"].as_str().unwrap());
+        let current = input::snapshot(&self.store, analysis, &input.run_id, || control.check());
         timings["input_recheck"] = json!(phase.elapsed().as_micros() as u64);
         if current?.fingerprint != input.fingerprint {
             bail!("analysis inputs changed during execution; no stale output was published");
