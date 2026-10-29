@@ -1,4 +1,3 @@
-import importlib.util
 import io
 from pathlib import Path
 import tarfile
@@ -6,11 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location(
-    "native_build", Path(__file__).with_name("build.py")
-)
-native = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(native)
+from . import build as native
 
 
 class NativeBuildTests(unittest.TestCase):
