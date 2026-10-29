@@ -171,6 +171,8 @@ fn import_budget_with_limits(
     budget: &mut OutputBudget,
     deadline: Option<std::time::Instant>,
 ) -> Result<ImportedProfile> {
+    budget.set_deadline(deadline);
+    let deadline = budget.deadline();
     budget.check()?;
     let (snapshot, digest) = capture_inputs(path, format, limits, deadline)?;
     decode_snapshot(
@@ -261,6 +263,7 @@ fn decode_snapshot(
                 .get(&path.with_extension("lifetimes.json"))
                 .map(String::as_str),
             raw,
+            budget,
         )?
     } else {
         None
@@ -376,7 +379,7 @@ fn decode_snapshot(
         .map(native_identity::Images::into_snapshots)
         .unwrap_or_default();
     snapshot.verify()?;
-    Ok(ImportedProfile {
+    let profile = ImportedProfile {
         source: path.to_owned(),
         raw_sha256,
         format: format.to_owned(),
@@ -391,7 +394,9 @@ fn decode_snapshot(
         binary_snapshots,
         native_image_context,
         decoder_provenance,
-    })
+    };
+    budget.profile(&profile)?;
+    Ok(profile)
 }
 
 fn sidecars(path: &Path, format: ProfileFormat) -> Vec<PathBuf> {

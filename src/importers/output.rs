@@ -2,6 +2,8 @@
 //! Bytes sum encoded records without transport delimiters. Frame visits count
 //! attempted ancestry/copy work. Parsing and one Value assembly are synchronous;
 //! input dictionaries and retained attachments have separate bounds.
+//! Attachments count duplicated content and encoded auxiliary payload/copy work;
+//! parser/allocator overhead and one already constructed profile are not RSS quotas.
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::Value;
@@ -13,6 +15,7 @@ pub(super) struct Limits {
     pub bytes: u64,
     pub record_bytes: u64,
     pub frame_visits: u64,
+    pub attachment_bytes: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -21,6 +24,7 @@ impl Default for Limits {
             bytes: 128 * 1024 * 1024,
             record_bytes: 8 * 1024 * 1024,
             frame_visits: 2_000_000,
+            attachment_bytes: 512 * 1024 * 1024,
         }
     }
 }
@@ -31,6 +35,7 @@ pub(crate) enum OutputDimension {
     Bytes,
     RecordBytes,
     FrameVisits,
+    AttachmentBytes,
 }
 impl OutputDimension {
     pub fn as_str(self) -> &'static str {
@@ -39,6 +44,7 @@ impl OutputDimension {
             Self::Bytes => "normalized_bytes",
             Self::RecordBytes => "record_bytes",
             Self::FrameVisits => "frame_visits",
+            Self::AttachmentBytes => "attachment_bytes",
         }
     }
 }
@@ -68,6 +74,8 @@ pub(crate) struct OutputBudget {
     rows: u64,
     bytes: u64,
     frames: u64,
+    attachments: u64,
+    deadline: Option<Instant>,
     failed: Option<NormalizationOutputLimit>,
 }
 impl OutputBudget {
@@ -82,7 +90,89 @@ impl OutputBudget {
         if let Some(failure) = self.failed {
             return Err(failure.into());
         }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            bail!("profile-normalization-output-v1 checkpoint deadline elapsed");
+        }
         Ok(())
+    }
+    pub(super) fn set_deadline(&mut self, deadline: Option<Instant>) {
+        if let Some(deadline) = deadline {
+            self.deadline = Some(self.deadline.map_or(deadline, |old| old.min(deadline)));
+        }
+    }
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+    pub(super) fn attachment_content(&mut self, bytes: u64) -> Result<()> {
+        self.check()?;
+        let observed = self.attachments.saturating_add(bytes);
+        if observed > self.limits.attachment_bytes {
+            return Err(self.fail(
+                OutputDimension::AttachmentBytes,
+                self.limits.attachment_bytes,
+                observed,
+            ));
+        }
+        self.attachments = observed;
+        Ok(())
+    }
+    pub(super) fn metadata(&mut self, value: &impl Serialize) -> Result<()> {
+        self.check()?;
+        let maximum = self
+            .limits
+            .attachment_bytes
+            .saturating_sub(self.attachments);
+        let mut counter = Counter {
+            bytes: 0,
+            maximum,
+            exceeded: false,
+        };
+        let result = serde_json::to_writer(&mut counter, value);
+        if counter.exceeded {
+            return Err(self.fail(
+                OutputDimension::AttachmentBytes,
+                self.limits.attachment_bytes,
+                self.limits.attachment_bytes.saturating_add(1),
+            ));
+        }
+        result?;
+        self.check()?;
+        self.attachments += counter.bytes;
+        Ok(())
+    }
+    pub(super) fn profile(&mut self, profile: &super::ImportedProfile) -> Result<()> {
+        self.metadata(&ProfileMetadata {
+            format: &profile.format,
+            raw_sha256: &profile.raw_sha256,
+            input_fingerprint: &profile.input_fingerprint,
+            diagnostics: &profile.diagnostics,
+            native_image_context: &profile.native_image_context,
+            decoder_provenance: &profile.decoder_provenance,
+        })?;
+        self.attachment_content(profile.source.as_os_str().as_encoded_bytes().len() as u64)?;
+        for (path, sha) in &profile.sidecar_sha256 {
+            self.attachment_content(path.as_os_str().as_encoded_bytes().len() as u64)?;
+            self.metadata(sha)?;
+        }
+        for path in &profile.sidecars {
+            self.attachment_content(path.as_os_str().as_encoded_bytes().len() as u64)?;
+        }
+        for source in &profile.source_snapshots {
+            self.attachment_content(source.content.len() as u64)?;
+            self.metadata(&SourceMetadata {
+                uri: &source.uri,
+                sha256: &source.sha256,
+                provenance: &source.provenance,
+            })?;
+        }
+        for image in &profile.binary_snapshots {
+            self.attachment_content(image.content.len() as u64)?;
+            self.metadata(&image.sha256)?;
+        }
+        self.check()
     }
     fn fail(&mut self, dimension: OutputDimension, maximum: u64, observed: u64) -> anyhow::Error {
         let failure = NormalizationOutputLimit {
@@ -98,26 +188,19 @@ impl OutputBudget {
 pub(super) struct RecordBatch<'a> {
     records: Vec<Value>,
     budget: &'a mut OutputBudget,
-    deadline: Option<Instant>,
 }
 pub(super) struct ReservedRecord(Value);
 
 impl<'a> RecordBatch<'a> {
     pub fn new(budget: &'a mut OutputBudget, deadline: Option<Instant>) -> Self {
+        budget.set_deadline(deadline);
         Self {
             records: vec![],
             budget,
-            deadline,
         }
     }
     pub fn check(&mut self) -> Result<()> {
         self.budget.check()?;
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            bail!("profile-normalization-output-v1 checkpoint deadline elapsed");
-        }
         Ok(())
     }
     pub fn len(&self) -> usize {
@@ -297,6 +380,22 @@ impl StackBuilder {
         self.bytes = bytes;
         Ok(())
     }
+}
+
+#[derive(Serialize)]
+struct ProfileMetadata<'a> {
+    format: &'a str,
+    raw_sha256: &'a str,
+    input_fingerprint: &'a str,
+    diagnostics: &'a [String],
+    native_image_context: &'a Option<Value>,
+    decoder_provenance: &'a Option<Value>,
+}
+#[derive(Serialize)]
+struct SourceMetadata<'a> {
+    uri: &'a str,
+    sha256: &'a str,
+    provenance: &'a Value,
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 use super::checked_us;
 use super::output::{RecordBatch, ReservedRecord, StackBuilder};
 use anyhow::{Context, Result, bail, ensure};
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -35,6 +36,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn repeated_moves_cannot_expand_a_shared_library_before_emitting_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let raw = json!({"meta":{"startTime":1700000000000u64}});
+        let raw_sha = format!("{:x}", Sha256::digest(serde_json::to_vec(&raw).unwrap()));
+        let process = json!({"key":"p0","pid":"7","start_time_ms":0,"end_time_ms":100});
+        let mut events = vec![
+            json!({"kind":"mapping","op":"add","time_ms":0,"process":process,"load_id":"one","library":{"name":"shared library".repeat(1000)},"start_avma":"0x1000","end_avma":"0x1800","relative_address_at_start":0}),
+        ];
+        for index in 1..=20u64 {
+            events.push(json!({"kind":"mapping","op":"move","time_ms":index,"process":process,"old_start_avma":format!("0x{:x}",index*0x1000),"start_avma":format!("0x{:x}",(index+1)*0x1000),"end_avma":format!("0x{:x}",(index+1)*0x1000+0x800)}));
+        }
+        let input = json!({"schema_version":1,"raw_profile_sha256":raw_sha,"epoch_start_ms":1700000000000u64,"truncated":false,"collector":{"upstream_commit":UPSTREAM,"revision":"hunin-native1","os":"linux"},"events":events});
+        let path = directory.path().join("profile.lifetimes.json");
+        let bytes = serde_json::to_vec(&input).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let full = Timeline::load(
+            &path,
+            &raw_sha,
+            Some(&sha),
+            &raw,
+            &mut super::super::OutputBudget::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(full.instances.len(), 21);
+        let mut budget = super::super::OutputBudget::with_limits(super::super::output::Limits {
+            attachment_bytes: 40_000,
+            ..Default::default()
+        });
+        let error = match Timeline::load(&path, &raw_sha, Some(&sha), &raw, &mut budget) {
+            Ok(_) => panic!("auxiliary copies must be bounded before record emission"),
+            Err(error) => error,
+        };
+        let error = error
+            .downcast_ref::<super::super::NormalizationOutputLimit>()
+            .unwrap();
+        assert_eq!(error.dimension.as_str(), "attachment_bytes");
+        assert_eq!(error.maximum, 40_000);
+        assert_eq!(error.observed, 40_001);
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
     fn external_move_and_resize_close_old_ranges_before_linking_boundary_sample() {
         let directory = tempfile::tempdir().unwrap();
         let raw = json!({"meta":{"startTime":1700000000000u64}});
@@ -52,9 +97,15 @@ mod tests {
         let bytes = serde_json::to_vec(&input).unwrap();
         fs::write(&path, &bytes).unwrap();
         let sha = format!("{:x}", Sha256::digest(&bytes));
-        let timeline = Timeline::load(&path, &raw_sha, Some(&sha), &raw)
-            .unwrap()
-            .unwrap();
+        let timeline = Timeline::load(
+            &path,
+            &raw_sha,
+            Some(&sha),
+            &raw,
+            &mut super::super::OutputBudget::default(),
+        )
+        .unwrap()
+        .unwrap();
         let mut sample = json!({"id":"sample","run_id":"run","producer_id":"target","pid":7,"tid":"8","timestamp_us":1700000000030000u64,"attributes":{}});
         let links = timeline
             .link_sample(&json!({"pid":"7","tid":"8"}), 30.0, &mut sample, "key")
@@ -76,7 +127,7 @@ mod tests {
         );
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct Instance {
     process: Value,
     load_id: String,
@@ -135,6 +186,7 @@ impl Timeline {
         raw_sha: &str,
         expected_sha: Option<&str>,
         raw: &Value,
+        budget: &mut super::OutputBudget,
     ) -> Result<Option<Self>> {
         if !path.is_file() {
             return Ok(None);
@@ -179,6 +231,7 @@ impl Timeline {
         let events = input["events"]
             .as_array()
             .context("native lifetime events missing")?;
+        budget.metadata(&input["collector"])?;
         let mut result = Self {
             collector: input["collector"].clone(),
             epoch_ms: epoch,
@@ -229,6 +282,7 @@ impl Timeline {
                     );
                 }
             }
+            budget.metadata(outcome)?;
             result.target_outcome = Some(outcome.clone());
         }
         for event in events {
@@ -236,6 +290,7 @@ impl Timeline {
                 result.complete = false;
             }
             if event["kind"] == "lifecycle" {
+                budget.metadata(event)?;
                 result.lifecycle.push(event.clone());
                 if event["event"]
                     .as_str()
@@ -245,11 +300,13 @@ impl Timeline {
                         "{}:{}:{}",
                         event["process"]["key"], event["time_ms"], event["data"]["start_avma"]
                     );
+                    budget.metadata(event)?;
                     result.image_events.insert(key, event.clone());
                 }
             }
             if event["kind"] == "snapshot" {
                 let key = format!("{}:{}", event["process"]["key"], event["time_ms"]);
+                budget.metadata(event)?;
                 result.snapshots.insert(key, event.clone());
             }
             if event["kind"] == "sample" {
@@ -261,6 +318,7 @@ impl Timeline {
                     thread["tid"].as_str().context("sample thread missing")?,
                     ms(&event["time_ms"])?,
                 );
+                budget.metadata(event)?;
                 ensure!(
                     result.samples.insert(key, event.clone()).is_none(),
                     "ambiguous native sample mapping link"
@@ -318,6 +376,8 @@ impl Timeline {
                         "duplicate native load instance"
                     );
                     let index = result.instances.len();
+                    budget.metadata(process)?;
+                    budget.metadata(&op["library"])?;
                     result.instances.push(Instance {
                         process: process.clone(),
                         load_id: load,
@@ -376,6 +436,7 @@ impl Timeline {
                         json!([time, time]),
                         false,
                     )?;
+                    budget.metadata(&result.instances[index])?;
                     let mut next = result.instances[index].clone();
                     next.start = time;
                     next.end = None;

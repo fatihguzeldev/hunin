@@ -142,3 +142,26 @@ fn output_refusal_preserves_raw_and_the_previous_selected_result() {
     );
     assert_eq!(fs::read(path).unwrap(), rejected_raw.as_bytes());
 }
+
+#[test]
+fn common_profile_gate_rejects_auxiliary_metadata_even_when_record_output_fits() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("raw.jsonl");
+    fs::write(&path, b"{\"run_id\":\"run\"}\n").unwrap();
+    let mut budget = OutputBudget::with_limits(output::Limits {
+        attachment_bytes: 1,
+        ..Default::default()
+    });
+    let error = rejected(import_with_budget_controlled(
+        &path,
+        "jsonl",
+        "run",
+        &mut budget,
+        None,
+    ));
+    let error = error.downcast_ref::<NormalizationOutputLimit>().unwrap();
+    assert_eq!(error.dimension, OutputDimension::AttachmentBytes);
+    assert_eq!(error.maximum, 1);
+    assert_eq!(error.observed, 2);
+    assert!(path.is_file());
+}

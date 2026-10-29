@@ -102,3 +102,88 @@ fn a_record_is_measured_with_real_json_escaping_at_its_exact_byte_boundary() {
         }
     }
 }
+
+#[test]
+fn duplicated_attachment_content_is_charged_without_a_digest_discount() {
+    let mut budget = OutputBudget::with_limits(Limits {
+        attachment_bytes: 8,
+        ..Default::default()
+    });
+    budget.attachment_content(4).unwrap();
+    budget.attachment_content(4).unwrap();
+    assert_eq!(budget.attachments, 8);
+    let error = budget.attachment_content(1).unwrap_err();
+    let error = error.downcast_ref::<NormalizationOutputLimit>().unwrap();
+    assert_eq!(error.dimension, OutputDimension::AttachmentBytes);
+    assert_eq!(error.maximum, 8);
+    assert_eq!(error.observed, 9);
+    assert!(budget.attachment_content(0).is_err());
+}
+
+#[test]
+fn metadata_serialization_counts_real_bytes_and_stops_at_one_overflow_sentinel() {
+    let metadata = json!({"extension":"large metadata".repeat(100)});
+    let bytes = serde_json::to_vec(&metadata).unwrap().len() as u64;
+    let mut exact = OutputBudget::with_limits(Limits {
+        attachment_bytes: bytes,
+        ..Default::default()
+    });
+    exact.metadata(&metadata).unwrap();
+    assert_eq!(exact.attachments, bytes);
+    let mut limited = OutputBudget::with_limits(Limits {
+        attachment_bytes: bytes - 1,
+        ..Default::default()
+    });
+    let error = limited.metadata(&metadata).unwrap_err();
+    let error = error.downcast_ref::<NormalizationOutputLimit>().unwrap();
+    assert_eq!(error.dimension, OutputDimension::AttachmentBytes);
+    assert_eq!(error.observed, bytes);
+}
+
+#[test]
+fn common_profile_gate_counts_each_source_image_and_metadata_copy_across_profiles() {
+    let profile = crate::importers::ImportedProfile {
+        source: "same/raw.profile".into(),
+        raw_sha256: "a".repeat(64),
+        format: "control".into(),
+        records: vec![],
+        diagnostics: vec!["same diagnostic".into()],
+        input_fingerprint: "b".repeat(64),
+        sidecars: vec![],
+        sidecar_sha256: Default::default(),
+        source_snapshots: vec![crate::importers::SourceSnapshot {
+            uri: "file:///same.ts".into(),
+            content: "same source".repeat(30),
+            sha256: "c".repeat(64),
+            provenance: json!({"extension":"same metadata"}),
+        }],
+        binary_snapshots: vec![crate::importers::BinarySnapshot {
+            sha256: "d".repeat(64),
+            content: vec![7; 256],
+        }],
+        native_image_context: Some(json!({"checks":{"same":"image"}})),
+        decoder_provenance: Some(json!({"identity":{"decoder":"control"}})),
+    };
+    let mut measured = OutputBudget::default();
+    measured.profile(&profile).unwrap();
+    let one = measured.attachments;
+    assert!(
+        one > profile.source_snapshots[0].content.len() as u64
+            + profile.binary_snapshots[0].content.len() as u64
+    );
+    let mut budget = OutputBudget::with_limits(Limits {
+        attachment_bytes: one * 2,
+        ..Default::default()
+    });
+    budget.profile(&profile).unwrap();
+    budget.profile(&profile).unwrap();
+    assert_eq!(budget.attachments, one * 2);
+    let error = budget.profile(&profile).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<NormalizationOutputLimit>()
+            .unwrap()
+            .dimension,
+        OutputDimension::AttachmentBytes
+    );
+}
