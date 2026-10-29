@@ -617,7 +617,7 @@ async fn incorrect_output_never_gets_an_unqualified_optimization_verdict() {
 }
 
 #[tokio::test]
-async fn removed_hotspots_are_present_as_zero_after_and_missing_identity_is_rejected() {
+async fn absent_sample_units_remain_unavailable_and_missing_identity_is_rejected() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();
     let mut a = run("before", "/tmp", true);
@@ -641,7 +641,8 @@ async fn removed_hotspots_are_present_as_zero_after_and_missing_identity_is_reje
         .iter()
         .find(|r| r["function"] == "removedHotspot")
         .unwrap();
-    assert_eq!(removed["after"], 0.0);
+    assert_eq!(removed["after"], serde_json::Value::Null);
+    assert_eq!(removed["after_available"], false);
     b.source["fingerprint"] = serde_json::Value::Null;
     store.save_run(&b).unwrap();
     let result = Operations::new(store)

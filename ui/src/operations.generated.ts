@@ -380,6 +380,7 @@ export type ComparisonHotspot = {
   "basis": string;
   "before_available": boolean;
   "after_available": boolean;
+  "presence"?: "both_observed" | "before_only_observed" | "after_only_observed" | "unknown";
 };
 
 export type Comparison = {
@@ -398,6 +399,7 @@ export type Comparison = {
   "after": Array<string>;
 };
   "limitations": Array<string>;
+  "hotspot_selection"?: ComparisonHotspotSelection;
 };
 
 export type OperationFailure = {
@@ -413,6 +415,17 @@ export type ImportFormat = {
   "aliases": Array<string>;
   "requires": Array<string>;
   "requires_existing_recording": boolean;
+};
+
+export type ComparisonHotspotSelection = {
+  "weight_unit": string;
+  "limit_per_recording": number;
+  "before_available": boolean;
+  "after_available": boolean;
+  "before_total_functions": number;
+  "after_total_functions": number;
+  "before_truncated": boolean;
+  "after_truncated": boolean;
 };
 
 export type OperationInputs = {
@@ -511,6 +524,7 @@ export type OperationInputs = {
   "comparisons.create": {
   "before": string;
   "after": string;
+  "weight_unit"?: string;
 };
   "analyses.list": {
   "run_id"?: string;
@@ -781,11 +795,11 @@ export function isComparisonMetric(value: unknown): value is ComparisonMetric {
 }
 
 export function isComparisonHotspot(value: unknown): value is ComparisonHotspot {
-  return (isOutputObject(value) && Object.hasOwn(value, "function") && Object.hasOwn(value, "file") && Object.hasOwn(value, "module") && Object.hasOwn(value, "before") && Object.hasOwn(value, "after") && Object.hasOwn(value, "delta") && Object.hasOwn(value, "unit") && Object.hasOwn(value, "basis") && Object.hasOwn(value, "before_available") && Object.hasOwn(value, "after_available") && (typeof value["function"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["before"] === "number" && Number.isFinite(value["before"])) || (value["before"] === null)) && ((typeof value["after"] === "number" && Number.isFinite(value["after"])) || (value["after"] === null)) && ((typeof value["delta"] === "number" && Number.isFinite(value["delta"])) || (value["delta"] === null)) && (typeof value["unit"] === "string") && (typeof value["basis"] === "string") && (typeof value["before_available"] === "boolean") && (typeof value["after_available"] === "boolean"));
+  return (isOutputObject(value) && Object.hasOwn(value, "function") && Object.hasOwn(value, "file") && Object.hasOwn(value, "module") && Object.hasOwn(value, "before") && Object.hasOwn(value, "after") && Object.hasOwn(value, "delta") && Object.hasOwn(value, "unit") && Object.hasOwn(value, "basis") && Object.hasOwn(value, "before_available") && Object.hasOwn(value, "after_available") && (typeof value["function"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["before"] === "number" && Number.isFinite(value["before"])) || (value["before"] === null)) && ((typeof value["after"] === "number" && Number.isFinite(value["after"])) || (value["after"] === null)) && ((typeof value["delta"] === "number" && Number.isFinite(value["delta"])) || (value["delta"] === null)) && (typeof value["unit"] === "string") && (typeof value["basis"] === "string") && (typeof value["before_available"] === "boolean") && (typeof value["after_available"] === "boolean") && (!Object.hasOwn(value, "presence") || ((value["presence"] === "both_observed" || value["presence"] === "before_only_observed" || value["presence"] === "after_only_observed" || value["presence"] === "unknown") && typeof value["presence"] === "string")));
 }
 
 export function isComparison(value: unknown): value is Comparison {
-  return (isOutputObject(value) && Object.hasOwn(value, "before") && Object.hasOwn(value, "after") && Object.hasOwn(value, "comparable") && Object.hasOwn(value, "reasons") && Object.hasOwn(value, "metrics") && Object.hasOwn(value, "correctness") && Object.hasOwn(value, "hotspots") && Object.hasOwn(value, "sample_weight_units") && Object.hasOwn(value, "limitations") && isRun(value["before"]) && isRun(value["after"]) && (typeof value["comparable"] === "boolean") && (Array.isArray(value["reasons"]) && value["reasons"].every(item => (typeof item === "string"))) && (Array.isArray(value["metrics"]) && value["metrics"].every(item => isComparisonMetric(item))) && (isOutputObject(value["correctness"]) && Object.hasOwn(value["correctness"], "before") && Object.hasOwn(value["correctness"], "after") && true && true) && (Array.isArray(value["hotspots"]) && value["hotspots"].every(item => isComparisonHotspot(item))) && (isOutputObject(value["sample_weight_units"]) && Object.hasOwn(value["sample_weight_units"], "before") && Object.hasOwn(value["sample_weight_units"], "after") && (Array.isArray(value["sample_weight_units"]["before"]) && value["sample_weight_units"]["before"].every(item => (typeof item === "string"))) && (Array.isArray(value["sample_weight_units"]["after"]) && value["sample_weight_units"]["after"].every(item => (typeof item === "string")))) && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))));
+  return (isOutputObject(value) && Object.hasOwn(value, "before") && Object.hasOwn(value, "after") && Object.hasOwn(value, "comparable") && Object.hasOwn(value, "reasons") && Object.hasOwn(value, "metrics") && Object.hasOwn(value, "correctness") && Object.hasOwn(value, "hotspots") && Object.hasOwn(value, "sample_weight_units") && Object.hasOwn(value, "limitations") && isRun(value["before"]) && isRun(value["after"]) && (typeof value["comparable"] === "boolean") && (Array.isArray(value["reasons"]) && value["reasons"].every(item => (typeof item === "string"))) && (Array.isArray(value["metrics"]) && value["metrics"].every(item => isComparisonMetric(item))) && (isOutputObject(value["correctness"]) && Object.hasOwn(value["correctness"], "before") && Object.hasOwn(value["correctness"], "after") && true && true) && (Array.isArray(value["hotspots"]) && value["hotspots"].every(item => isComparisonHotspot(item))) && (isOutputObject(value["sample_weight_units"]) && Object.hasOwn(value["sample_weight_units"], "before") && Object.hasOwn(value["sample_weight_units"], "after") && (Array.isArray(value["sample_weight_units"]["before"]) && value["sample_weight_units"]["before"].every(item => (typeof item === "string"))) && (Array.isArray(value["sample_weight_units"]["after"]) && value["sample_weight_units"]["after"].every(item => (typeof item === "string")))) && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && (!Object.hasOwn(value, "hotspot_selection") || isComparisonHotspotSelection(value["hotspot_selection"])));
 }
 
 export function isOperationFailure(value: unknown): value is OperationFailure {
@@ -794,6 +808,10 @@ export function isOperationFailure(value: unknown): value is OperationFailure {
 
 export function isImportFormat(value: unknown): value is ImportFormat {
   return (isOutputObject(value) && Object.hasOwn(value, "format") && Object.hasOwn(value, "label") && Object.hasOwn(value, "description") && Object.hasOwn(value, "aliases") && Object.hasOwn(value, "requires") && Object.hasOwn(value, "requires_existing_recording") && (typeof value["format"] === "string" && [...value["format"]].length >= 1) && (typeof value["label"] === "string") && (typeof value["description"] === "string") && (Array.isArray(value["aliases"]) && value["aliases"].every(item => (typeof item === "string"))) && (Array.isArray(value["requires"]) && value["requires"].every(item => (typeof item === "string"))) && (typeof value["requires_existing_recording"] === "boolean") && Object.keys(value).every(key => ["format","label","description","aliases","requires","requires_existing_recording"].includes(key)));
+}
+
+export function isComparisonHotspotSelection(value: unknown): value is ComparisonHotspotSelection {
+  return (isOutputObject(value) && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "limit_per_recording") && Object.hasOwn(value, "before_available") && Object.hasOwn(value, "after_available") && Object.hasOwn(value, "before_total_functions") && Object.hasOwn(value, "after_total_functions") && Object.hasOwn(value, "before_truncated") && Object.hasOwn(value, "after_truncated") && (typeof value["weight_unit"] === "string") && (typeof value["limit_per_recording"] === "number" && Number.isInteger(value["limit_per_recording"]) && value["limit_per_recording"] >= 1) && (typeof value["before_available"] === "boolean") && (typeof value["after_available"] === "boolean") && (typeof value["before_total_functions"] === "number" && Number.isInteger(value["before_total_functions"]) && value["before_total_functions"] >= 0) && (typeof value["after_total_functions"] === "number" && Number.isInteger(value["after_total_functions"]) && value["after_total_functions"] >= 0) && (typeof value["before_truncated"] === "boolean") && (typeof value["after_truncated"] === "boolean") && Object.keys(value).every(key => ["weight_unit","limit_per_recording","before_available","after_available","before_total_functions","after_total_functions","before_truncated","after_truncated"].includes(key)));
 }
 
 // Every operation result is checked against its declared wire contract.

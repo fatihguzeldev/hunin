@@ -7,11 +7,13 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn elapsed(run: &Run) -> f64 {
-    run.finished_at_us
-        .unwrap_or(run.started_at_us)
-        .saturating_sub(run.started_at_us) as f64
-        / 1000.0
+fn elapsed(run: &Run) -> Option<f64> {
+    if run.runtime == "imported" {
+        return None;
+    }
+    run.finished_at_us?
+        .checked_sub(run.started_at_us)
+        .map(|duration| duration as f64 / 1000.0)
 }
 struct ResourceValue {
     value: f64,
@@ -19,6 +21,36 @@ struct ResourceValue {
     lifetimes: usize,
     minimum_points_per_lifetime: usize,
     identity_known: bool,
+}
+
+#[derive(Default)]
+struct SampleWeight {
+    observed: bool,
+    value: Option<f64>,
+}
+
+impl SampleWeight {
+    fn add(&mut self, value: Option<f64>) {
+        self.value = if self.observed {
+            self.value
+                .zip(value)
+                .map(|(before, next)| before + next)
+                .filter(|sum| sum.is_finite())
+        } else {
+            value
+        };
+        self.observed = true;
+    }
+
+    fn measured(&self, complete: bool) -> Option<f64> {
+        if self.observed {
+            self.value
+        } else if complete {
+            Some(0.0)
+        } else {
+            None
+        }
+    }
 }
 
 fn resource_value(
@@ -86,7 +118,12 @@ fn resource_value(
     })
 }
 
-pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
+pub fn compare(
+    store: &Store,
+    before: &str,
+    after: &str,
+    requested_unit: Option<&str>,
+) -> Result<Value> {
     let before = store.run(before)?;
     let after = store.run(after)?;
     let mut reasons = Vec::new();
@@ -146,10 +183,26 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
             reasons.push(different);
         }
     }
-    if before.source["supervised_execution_scope"] != after.source["supervised_execution_scope"] {
+    let supervised_before = before.source["supervised_elapsed_us"].as_f64();
+    let supervised_after = after.source["supervised_elapsed_us"].as_f64();
+    let supervised_scope_known = known(&before.source["supervised_execution_scope"])
+        && known(&after.source["supervised_execution_scope"]);
+    let supervised_scope_matches =
+        before.source["supervised_execution_scope"] == after.source["supervised_execution_scope"];
+    if (supervised_before.is_some() || supervised_after.is_some()) && !supervised_scope_known {
+        reasons.push("Supervised elapsed measurement scope is unavailable");
+    } else if !supervised_scope_matches {
         reasons.push("Supervised elapsed measurement scopes differ");
     }
-    let metric = |name: &str, unit: &str, scope: &str, basis: &str, a: f64, b: f64| json!({"name":name,"unit":unit,"scope":scope,"basis":basis,"before":a,"after":b,"delta":b-a,"percent_change":if a!=0.0 {Some((b-a)/a*100.0)}else{None}});
+    let metric = |name: &str,
+                  unit: &str,
+                  scope: &str,
+                  basis: &str,
+                  a: Option<f64>,
+                  b: Option<f64>| {
+        let pair = a.zip(b);
+        json!({"name":name,"unit":unit,"scope":scope,"basis":basis,"before":a,"after":b,"delta":pair.map(|(a,b)|b-a),"percent_change":pair.filter(|(a,_)|*a!=0.0).map(|(a,b)|(b-a)/a*100.0),"comparable":pair.is_some()})
+    };
     let mut metrics = vec![metric(
         "recording.elapsed",
         "milliseconds",
@@ -158,18 +211,38 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
         elapsed(&before),
         elapsed(&after),
     )];
-    if let (Some(x), Some(y)) = (
-        before.source["supervised_elapsed_us"].as_f64(),
-        after.source["supervised_elapsed_us"].as_f64(),
-    ) {
-        metrics.push(metric(
+    if metrics[0]["comparable"] == false {
+        metrics[0]["measurement_quality"] = json!("unavailable");
+        metrics[0]["diagnostic"] = json!(
+            "Recording completion timestamps are unavailable or inconsistent; an absent duration is not a measured zero."
+        );
+    }
+    if supervised_before.is_some() || supervised_after.is_some() {
+        let mut row = metric(
             "supervised.elapsed",
             "milliseconds",
-            before.source["supervised_execution_scope"].as_str().unwrap_or("unknown"),
+            before.source["supervised_execution_scope"]
+                .as_str()
+                .unwrap_or("unknown"),
             "supervised process spawn/wait including runtime or collector overhead; not isolated hot-function time",
-            x / 1000.0,
-            y / 1000.0,
-        ));
+            supervised_before.map(|value| value / 1000.0),
+            supervised_after.map(|value| value / 1000.0),
+        );
+        if !supervised_scope_known || !supervised_scope_matches {
+            row["comparable"] = json!(false);
+            row["delta"] = Value::Null;
+            row["percent_change"] = Value::Null;
+            row["measurement_quality"] = json!("unknown_scope");
+            row["diagnostic"] = json!(
+                "Supervised measurement scopes are missing or differ; their elapsed values cannot establish a shared duration comparison."
+            );
+        } else if row["comparable"] == false {
+            row["measurement_quality"] = json!("unavailable");
+            row["diagnostic"] = json!(
+                "Supervised elapsed measurement is unavailable for one recording; absence is not a measured zero."
+            );
+        }
+        metrics.push(row);
     }
     let a = store.records(&before.id)?;
     let b = store.records(&after.id)?;
@@ -191,31 +264,43 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
             "sum of last cumulative CPU observations per OS process lifetime; collector wrapper excluded; final cumulative values may be missed",
         ),
     ] {
-        if let (Some(x), Some(y)) = (
-            resource_value(&a, input, unit, cumulative),
-            resource_value(&b, input, unit, cumulative),
-        ) {
-            let sufficient = x.identity_known
-                && y.identity_known
-                && x.minimum_points_per_lifetime >= 2
-                && y.minimum_points_per_lifetime >= 2;
-            let mut row = metric(name, unit, scope, basis, x.value, y.value);
+        let x = resource_value(&a, input, unit, cumulative);
+        let y = resource_value(&b, input, unit, cumulative);
+        if x.is_some() || y.is_some() {
+            let sufficient = x.as_ref().zip(y.as_ref()).is_some_and(|(x, y)| {
+                x.identity_known
+                    && y.identity_known
+                    && x.minimum_points_per_lifetime >= 2
+                    && y.minimum_points_per_lifetime >= 2
+            });
+            let mut row = metric(
+                name,
+                unit,
+                scope,
+                basis,
+                x.as_ref().map(|v| v.value),
+                y.as_ref().map(|v| v.value),
+            );
             row["measurement_quality"] = json!(if sufficient {
                 "observed_partial"
+            } else if x.is_none() || y.is_none() {
+                "unavailable"
             } else {
                 "insufficient_observations"
             });
             row["comparable"] = json!(sufficient);
-            row["before_observations"] = json!(x.observations);
-            row["after_observations"] = json!(y.observations);
-            row["before_process_lifetimes"] = json!(x.lifetimes);
-            row["after_process_lifetimes"] = json!(y.lifetimes);
+            row["before_observations"] = json!(x.as_ref().map_or(0, |v| v.observations));
+            row["after_observations"] = json!(y.as_ref().map_or(0, |v| v.observations));
+            row["before_process_lifetimes"] = json!(x.as_ref().map_or(0, |v| v.lifetimes));
+            row["after_process_lifetimes"] = json!(y.as_ref().map_or(0, |v| v.lifetimes));
             if !sufficient {
                 row["delta"] = Value::Null;
                 row["percent_change"] = Value::Null;
-                row["diagnostic"] = json!(
+                row["diagnostic"] = json!(if x.is_none() || y.is_none() {
+                    "Process measurement is unavailable for one recording; absence is not a measured zero."
+                } else {
                     "Fewer than two distinct observations per process lifetime, or unknown lifetime identity; startup-only points do not establish CPU totals or memory peaks."
-                );
+                });
             }
             metrics.push(row);
         }
@@ -227,25 +312,50 @@ pub fn compare(store: &Store, before: &str, after: &str) -> Result<Value> {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>()
     };
-    if units(&a) != units(&b) {
+    let before_units = units(&a);
+    let after_units = units(&b);
+    if requested_unit.is_none() && before_units != after_units {
         reasons.push("Available sampled weight units differ or one recording has no samples");
     }
-    let ah = query::hotspots(&a, "", 1000);
-    let bh = query::hotspots(&b, ah["weight_unit"].as_str().unwrap_or("samples"), 1000);
-    let mut joined: BTreeMap<String, (Value, f64, f64)> = BTreeMap::new();
-    for (profile, is_after) in [(&ah, false), (&bh, true)] {
+    const HOTSPOT_LIMIT: usize = 1000;
+    let before_page = query::comparison_hotspots(&a, requested_unit.unwrap_or(""), HOTSPOT_LIMIT);
+    let unit = before_page.result["weight_unit"].as_str().unwrap();
+    let after_page = query::comparison_hotspots(&b, unit, HOTSPOT_LIMIT);
+    let before_available = before_units.contains(unit);
+    let after_available = after_units.contains(unit);
+    let before_truncated = before_page.total_functions > HOTSPOT_LIMIT;
+    let after_truncated = after_page.total_functions > HOTSPOT_LIMIT;
+    let before_complete = before_available && !before_truncated;
+    let after_complete = after_available && !after_truncated;
+    if requested_unit.is_some() && (!before_available || !after_available) {
+        reasons.push("Requested sampled weight unit is unavailable for one or both recordings");
+    }
+    let mut joined: BTreeMap<String, (Value, SampleWeight, SampleWeight)> = BTreeMap::new();
+    for (profile, is_after) in [(&before_page.result, false), (&after_page.result, true)] {
         for row in profile["hotspots"].as_array().unwrap() {
             let key = json!([row["function"], row["file"], row["module"]]).to_string();
-            let entry = joined.entry(key).or_insert((row.clone(), 0.0, 0.0));
+            let entry = joined.entry(key).or_insert_with(|| {
+                (
+                    row.clone(),
+                    SampleWeight::default(),
+                    SampleWeight::default(),
+                )
+            });
             if is_after {
-                entry.2 += row["self_weight"].as_f64().unwrap_or(0.0);
+                entry.2.add(row["self_weight"].as_f64());
             } else {
-                entry.1 += row["self_weight"].as_f64().unwrap_or(0.0);
+                entry.1.add(row["self_weight"].as_f64());
             }
         }
     }
-    let hotspots=joined.into_values().map(|(r,x,y)|json!({"function":r["function"],"file":r["file"],"module":r["module"],"before":x,"after":y,"delta":y-x,"unit":bh["weight_unit"],"basis":"profiler sample weight; not elapsed time or a speedup ratio","before_available":!units(&a).is_empty(),"after_available":!units(&b).is_empty()})).collect::<Vec<_>>();
+    let hotspots=joined.into_values().map(|(r,x,y)| {
+        let presence = if x.observed && y.observed {"both_observed"} else if x.observed && after_complete {"before_only_observed"} else if y.observed && before_complete {"after_only_observed"} else {"unknown"};
+        let before = x.measured(before_complete);
+        let after = y.measured(after_complete);
+        json!({"function":r["function"],"file":r["file"],"module":r["module"],"before":before,"after":after,"delta":before.zip(after).map(|(before,after)|after-before),"unit":unit,"basis":"profiler sample weight grouped by function/file/module across measured code versions; not elapsed time or a speedup ratio","before_available":before.is_some(),"after_available":after.is_some(),"presence":presence})
+    }).collect::<Vec<_>>();
+    let hotspot_selection = json!({"weight_unit":unit,"limit_per_recording":HOTSPOT_LIMIT,"before_available":before_available,"after_available":after_available,"before_total_functions":before_page.total_functions,"after_total_functions":after_page.total_functions,"before_truncated":before_truncated,"after_truncated":after_truncated});
     Ok(
-        json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"sample_weight_units":{"before":units(&a),"after":units(&b)},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred."]}),
+        json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"hotspot_selection":hotspot_selection,"sample_weight_units":{"before":before_units,"after":after_units},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred.","Hotspots group observed function/file/module names across measured code versions; this grouping does not establish semantic equivalence. A missing row outside a truncated rank window is unknown, not an unobserved function."]}),
     )
 }

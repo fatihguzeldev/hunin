@@ -179,6 +179,7 @@ impl Operations {
                 store,
                 params["before"].as_str().unwrap(),
                 params["after"].as_str().unwrap(),
+                params["weight_unit"].as_str(),
             ),
             "scenarios.list" => Ok(metadata_page(
                 "scenarios",

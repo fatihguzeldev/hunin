@@ -1321,6 +1321,15 @@
         },
         "after_available": {
           "type": "boolean"
+        },
+        "presence": {
+          "type": "string",
+          "enum": [
+            "both_observed",
+            "before_only_observed",
+            "after_only_observed",
+            "unknown"
+          ]
         }
       },
       "required": [
@@ -1397,6 +1406,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "hotspot_selection": {
+          "$ref": "#/$defs/ComparisonHotspotSelection"
         }
       },
       "required": [
@@ -1471,6 +1483,49 @@
         "aliases",
         "requires",
         "requires_existing_recording"
+      ],
+      "additionalProperties": false
+    },
+    "ComparisonHotspotSelection": {
+      "type": "object",
+      "properties": {
+        "weight_unit": {
+          "type": "string"
+        },
+        "limit_per_recording": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "before_available": {
+          "type": "boolean"
+        },
+        "after_available": {
+          "type": "boolean"
+        },
+        "before_total_functions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_total_functions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "before_truncated": {
+          "type": "boolean"
+        },
+        "after_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "weight_unit",
+        "limit_per_recording",
+        "before_available",
+        "after_available",
+        "before_total_functions",
+        "after_total_functions",
+        "before_truncated",
+        "after_truncated"
       ],
       "additionalProperties": false
     }

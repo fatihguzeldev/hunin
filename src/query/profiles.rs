@@ -42,7 +42,34 @@ pub fn summary(records: &[Value]) -> Value {
     json!({"sample_count":records.iter().filter(|r|r["kind"]=="sample").count(),"total_weight":total,"weight_unit":selected,"span_count":records.iter().filter(|r|r["kind"]=="span").count(),"metric_count":records.iter().filter(|r|r["kind"]=="metric").count(),"relation_count":records.iter().filter(|r|r["kind"]=="relation").count(),"diagnostics":if units.len()>1 {vec!["Multiple sample units exist; query each unit separately."]}else{vec![]}})
 }
 
+pub(crate) struct HotspotCoverage {
+    pub(crate) result: Value,
+    pub(crate) total_functions: usize,
+}
+
 pub fn hotspots(records: &[Value], requested_unit: &str, limit: usize) -> Value {
+    hotspot_page(records, requested_unit, limit, function_identity).result
+}
+
+/// Comparison deliberately groups symbols across measured code versions.
+/// Aggregate that identity before the rank limit so hidden versions do not
+/// produce partial symbol totals. The ordinary profile page keeps code IDs.
+pub(crate) fn comparison_hotspots(
+    records: &[Value],
+    requested_unit: &str,
+    limit: usize,
+) -> HotspotCoverage {
+    hotspot_page(records, requested_unit, limit, |frame| {
+        json!([frame["function"], frame["file"], frame["module"]]).to_string()
+    })
+}
+
+fn hotspot_page(
+    records: &[Value],
+    requested_unit: &str,
+    limit: usize,
+    identity: fn(&Value) -> String,
+) -> HotspotCoverage {
     let selected = unit(records, requested_unit);
     let mut functions: BTreeMap<String, Value> = BTreeMap::new();
     let mut total = 0.0;
@@ -57,7 +84,7 @@ pub fn hotspots(records: &[Value], requested_unit: &str, limit: usize) -> Value 
         };
         let mut inclusive = HashSet::new();
         for (index, frame) in stack.iter().enumerate() {
-            let key = function_identity(frame);
+            let key = identity(frame);
             let row=functions.entry(key.clone()).or_insert_with(||json!({"function":frame["function"],"file":frame["file"],"line":frame["line"],"module":frame["module"],"code_id":frame["code_id"],"source_position_basis":"first observed sampled position","self_weight":0.0,"inclusive_weight":0.0,"weight_unit":selected}));
             if inclusive.insert(key) {
                 row["inclusive_weight"] = json!(number(row, "inclusive_weight") + weight);
@@ -73,8 +100,12 @@ pub fn hotspots(records: &[Value], requested_unit: &str, limit: usize) -> Value 
             .total_cmp(&number(a, "self_weight"))
             .then_with(|| a["function"].as_str().cmp(&b["function"].as_str()))
     });
+    let total_functions = rows.len();
     rows.truncate(limit.min(1000));
-    json!({"hotspots":rows,"total_weight":total,"weight_unit":selected})
+    HotspotCoverage {
+        result: json!({"hotspots":rows,"total_weight":total,"weight_unit":selected}),
+        total_functions,
+    }
 }
 
 #[derive(Default)]

@@ -801,6 +801,10 @@
         "after": {
           "type": "string",
           "minLength": 1
+        },
+        "weight_unit": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": ["before", "after"],
