@@ -6,6 +6,14 @@ const RESPONSE_REFERENCE: &str = "https://hunin.dev/protocol/response-v1.schema.
 
 /// Bundle only reachable definitions so exported MCP output schemas work offline.
 pub(super) fn bundle(schema: &Value, definitions: &Map<String, Value>) -> Result<Value> {
+    if let Some(fields) = schema.as_object()
+        && fields.contains_key("$ref")
+        && fields.len() != 1
+    {
+        bail!(
+            "MCP output root references cannot have siblings; define the complete object in $defs"
+        );
+    }
     let mut schema = schema.clone();
     let mut pending = BTreeSet::new();
     localize(&mut schema, &mut pending)?;
@@ -78,4 +86,34 @@ fn localize(value: &mut Value, pending: &mut BTreeSet<String>) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundle;
+    use serde_json::json;
+
+    #[test]
+    fn root_reference_siblings_cannot_be_silently_discarded() {
+        let definitions = json!({"Example": {"type": "object"}});
+        for sibling in [
+            json!({"minProperties": 1}),
+            json!({"description": "retained annotation"}),
+        ] {
+            let mut schema = sibling;
+            schema["$ref"] = json!("#/$defs/Example");
+            let error = bundle(&schema, definitions.as_object().unwrap()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("root references cannot have siblings")
+            );
+        }
+        let schema = bundle(
+            &json!({"$ref": "#/$defs/Example"}),
+            definitions.as_object().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(schema["type"], "object");
+    }
 }
