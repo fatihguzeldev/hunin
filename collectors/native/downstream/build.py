@@ -12,6 +12,8 @@ import tarfile
 import tempfile
 import urllib.request
 
+from .checks import required_checks, run_checks
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((ROOT / "manifest.json").read_text())
 
@@ -143,10 +145,7 @@ def prepare_source(cache, archive, patches):
     return workspace / "source", workspace, identity
 
 
-def build(output, cache, archive=None, toolchain="stable", test_filters=()):
-    output = output.parent.resolve() / output.name
-    if output.is_symlink():
-        raise ValueError(f"Preserving existing native collector symlink: {output}")
+def prepare_inputs(cache, archive=None):
     cache.mkdir(parents=True, exist_ok=True)
     patches = [
         (path, path.read_bytes().replace(b"\r\n", b"\n"))
@@ -156,6 +155,13 @@ def build(output, cache, archive=None, toolchain="stable", test_filters=()):
         raise ValueError("Native collector extension patches are missing")
     archive = source_archive(cache, archive)
     source, workspace, identity = prepare_source(cache, archive, patches)
+    patch_sha256 = hashlib.sha256(
+        json.dumps(identity["patches"], sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return source, workspace, identity, patch_sha256
+
+
+def inspect_toolchain(toolchain):
     compiler = subprocess.check_output(
         ["rustc", f"+{toolchain}", "--version", "--verbose"], text=True, timeout=5
     ).strip()
@@ -169,10 +175,17 @@ def build(output, cache, archive=None, toolchain="stable", test_filters=()):
     )
     if not host:
         raise ValueError("Rust compiler did not report a native host target")
+    return compiler, host
+
+
+def build(output, cache, archive=None, toolchain="stable", test_filters=()):
+    output = output.parent.resolve() / output.name
+    if output.is_symlink():
+        raise ValueError(f"Preserving existing native collector symlink: {output}")
+    source, workspace, identity, patch_sha256 = prepare_inputs(cache, archive)
+    source_sha256 = tree_digest(source)
+    compiler, host = inspect_toolchain(toolchain)
     target = workspace / "target"
-    patch_sha256 = hashlib.sha256(
-        json.dumps(identity["patches"], sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
     environment = dict(
         os.environ, CARGO_TARGET_DIR=str(target), HUNIN_NATIVE_PATCH_SHA256=patch_sha256
     )
@@ -194,24 +207,12 @@ def build(output, cache, archive=None, toolchain="stable", test_filters=()):
         check=True,
         timeout=1800,
     )
-    for test_filter in test_filters:
-        subprocess.run(
-            [
-                "cargo",
-                f"+{toolchain}",
-                "test",
-                "--locked",
-                "--release",
-                "--target",
-                host,
-                "-p",
-                MANIFEST["cargo_package"],
-                test_filter,
-            ],
-            cwd=source,
-            env=environment,
-            check=True,
-            timeout=600,
+    source_checks = run_checks(
+        source, environment, toolchain, host, required_checks(host, test_filters)
+    )
+    if tree_digest(source) != source_sha256:
+        raise ValueError(
+            "Native collector source changed during build or source checks"
         )
     binary = target / host / "release" / ("samply.exe" if os.name == "nt" else "samply")
     if not binary.is_file():
@@ -258,6 +259,8 @@ def build(output, cache, archive=None, toolchain="stable", test_filters=()):
                 "version": MANIFEST["version"],
                 "extension": MANIFEST["extension"],
                 "patch_sha256": patch_sha256,
+                "source_sha256": source_sha256,
+                "source_checks": source_checks,
                 "rustc": compiler,
                 "target": host,
                 "binary_sha256": digest(output),
@@ -283,7 +286,7 @@ def main():
         "--test-filter",
         action="append",
         default=[],
-        help="Run a focused source test filter before publishing the collector",
+        help="Add a Samply source-test filter; required native regressions always run",
     )
     parser.add_argument("--github-env", action="store_true")
     args = parser.parse_args()

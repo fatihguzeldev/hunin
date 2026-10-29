@@ -26,7 +26,11 @@ impl CapturePlan {
             "environment": self.env.iter().map(|(key, value)| (key.clone(), normalize(value))).collect::<BTreeMap<_, _>>(),
         });
         if let Some(identity) = &self.collector_identity {
-            settings["collector_identity"] = identity.clone();
+            settings["collector_identity"] = if super::native::handles_runtime(&request.runtime) {
+                super::native::tool::settings_identity(identity)
+            } else {
+                identity.clone()
+            };
         }
         settings
     }
@@ -35,6 +39,43 @@ impl CapturePlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_source_check_receipts_do_not_change_sampling_settings() {
+        let request = CaptureRequest {
+            command: vec!["target".into()],
+            cwd: "/project".into(),
+            artifact_dir: "/capture/recording".into(),
+            run_id: "recording".into(),
+            runtime: "native".into(),
+            env: BTreeMap::new(),
+        };
+        let mut plan: CapturePlan = serde_json::from_value(json!({
+            "command": ["samply", "record", "target"],
+            "collector_identity": {
+                "name": "samply-hunin", "binary_sha256": "same-executable",
+                "provenance": {"identity":{"patches":[{"sha256":"same-patch"}]}}
+            },
+        }))
+        .unwrap();
+        let before = plan.settings(&request);
+        plan.collector_identity.as_mut().unwrap()["provenance"]["source_sha256"] =
+            json!("verified-source-tree");
+        plan.collector_identity.as_mut().unwrap()["provenance"]["source_checks"] =
+            json!([{"package":"samply-symbols","passed":1}]);
+        assert_eq!(plan.settings(&request), before);
+        assert_eq!(
+            plan.collector_identity.as_ref().unwrap()["provenance"]["source_checks"][0]["passed"],
+            1
+        );
+        plan.collector_identity.as_mut().unwrap()["provenance"]["identity"]["patches"][0]["sha256"] =
+            json!("changed-patch");
+        assert_ne!(plan.settings(&request), before);
+        plan.collector_identity.as_mut().unwrap()["provenance"]["identity"]["patches"][0]["sha256"] =
+            json!("same-patch");
+        plan.collector_identity.as_mut().unwrap()["binary_sha256"] = json!("changed-executable");
+        assert_ne!(plan.settings(&request), before);
+    }
 
     #[test]
     fn declared_session_tokens_preserve_deno_marker_without_mutating_launch_values() {

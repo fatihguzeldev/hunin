@@ -92,6 +92,20 @@ pub(crate) fn identity(binary: &Path, version: &str) -> Result<Value> {
     )
 }
 
+pub(crate) fn settings_identity(identity: &Value) -> Value {
+    let mut settings = identity.clone();
+    if let Some(provenance) = settings
+        .get_mut("provenance")
+        .and_then(Value::as_object_mut)
+    {
+        // Build verification evidence is retained on the recording. It does
+        // not change how the same collector executable samples its target.
+        provenance.remove("source_checks");
+        provenance.remove("source_sha256");
+    }
+    settings
+}
+
 fn output(command: &mut Command, timeout: Duration) -> Result<String> {
     let output = probe::output(command, None, timeout, 32 * 1024)?;
     ensure!(
