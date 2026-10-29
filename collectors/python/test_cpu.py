@@ -21,6 +21,36 @@ def read_observations(path):
 
 
 class CpuProgressTest(unittest.TestCase):
+    def test_capture_helpers_do_not_shadow_workload_modules(self):
+        for target in (["main.py"], ["-m", "main"], ["-c", "import main"]):
+            with (
+                self.subTest(target=target),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                work = Path(directory)
+                for name in ("entry", "cpu_clock"):
+                    (work / f"{name}.py").write_text(f"value = {name!r}\n")
+                (work / "main.py").write_text(
+                    "import entry, cpu_clock\n"
+                    "assert entry.value == 'entry'\n"
+                    "assert cpu_clock.value == 'cpu_clock'\n"
+                    "print('workload imports preserved')\n"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(HERE / "cpu.py"),
+                        str(work / "cpu.pythoncpu.jsonl"),
+                        "--",
+                        *target,
+                    ],
+                    cwd=work,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "workload imports preserved\n")
+
     def test_thread_end_counter_is_retained_without_stack_attribution(self):
         # Windows can observe a terminated cached thread handle between frame
         # discovery and its counter read. That raw counter has no stack or
