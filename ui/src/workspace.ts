@@ -183,7 +183,7 @@ export class Workspace {
     void this.reload();
   }
 
-  private async reload(select?: string): Promise<void> {
+  private async reload(select?: string, preserveView = false): Promise<void> {
     const generation = ++this.reloadEpoch;
     const navigation = this.epoch;
     try {
@@ -191,7 +191,7 @@ export class Workspace {
       if (generation !== this.reloadEpoch) return;
       this.runs = data.runs;
       this.nextCursor = data.next_cursor ?? undefined;
-      if (navigation !== this.epoch) {
+      if (preserveView || navigation !== this.epoch) {
         this.renderRail();
         return;
       }
@@ -384,9 +384,13 @@ export class Workspace {
       }
       if (this.tab === 'scenarios') {
         const view = await scenarios((id) => {
+          if (signal.aborted) {
+            void this.reload(undefined, true);
+            return;
+          }
           this.tab = 'overview';
           void this.reload(id);
-        });
+        }, signal);
         if (epoch === this.epoch) {
           this.content.replaceChildren(el('div', { class: 'view' }, view));
           document.title = 'Scenarios · Hunin';

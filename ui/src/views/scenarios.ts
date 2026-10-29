@@ -4,15 +4,22 @@ import { parseCommand } from '../command';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { workloadFields } from '../workload-fields';
 import { pagedList } from '../paged-list';
+import { collectionMode } from '../collection-mode';
 
 export async function scenarios(
   onRun: (id: string) => void,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<HTMLElement> {
   const list = pagedList<Scenario>({
     label: 'scenarios',
+    signal,
     nextLabel: 'More scenarios',
     load: async (cursor) => {
-      const page = await operation('scenarios.list', { cursor, limit: 25 });
+      const page = await operation(
+        'scenarios.list',
+        { cursor, limit: 25 },
+        signal,
+      );
       return { items: page.scenarios, next_cursor: page.next_cursor };
     },
     render: renderScenarios,
@@ -23,12 +30,12 @@ export async function scenarios(
     placeholder: 'e.g. renderer reference workload',
   });
   const command = el('textarea', { class: 'mono', required: true, rows: 2 });
-  command.value = '["node", "app.js"]';
+  command.placeholder = '["/path/to/program", "argument"]';
   const cwd = el('input', {
     required: true,
     placeholder: 'Absolute project directory',
   });
-  const runtime = el('input', { placeholder: 'Detect automatically' });
+  const mode = collectionMode(command, signal);
   const timeout = el('input', {
     type: 'number',
     min: 1,
@@ -52,9 +59,10 @@ export async function scenarios(
     el(
       'div',
       { class: 'toolbar' },
-      field('Runtime', runtime),
+      field('Collection mode', mode.select),
       field('Timeout · seconds', timeout),
     ),
+    mode.description,
     workload.element,
     submit,
   );
@@ -101,6 +109,7 @@ export async function scenarios(
             void operation('scenarios.run', { scenario_id: scenarioId })
               .then((data) => onRun(data.run.id))
               .catch((error) => {
+                if (signal.aborted) return;
                 feedback.replaceChildren(errorView(error, () => run.click()));
               })
               .finally(() => {
@@ -178,10 +187,11 @@ export async function scenarios(
         name: name.value,
         command: args,
         cwd: cwd.value,
-        runtime: runtime.value || undefined,
+        runtime: mode.value(),
         timeout_seconds: Number(timeout.value),
         ...options,
       });
+      if (signal.aborted) return;
       feedback.replaceChildren(
         el(
           'p',
@@ -191,6 +201,7 @@ export async function scenarios(
       );
       await list.refresh(true);
     } catch (error) {
+      if (signal.aborted) return;
       feedback.replaceChildren(
         errorView(error, () => {
           void save();
