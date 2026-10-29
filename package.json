@@ -1,0 +1,21 @@
+{
+  "name": "@hunin/development",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "scripts": {
+    "lint:js": "eslint .",
+    "format:js": "prettier --check .",
+    "typecheck:ui": "npm --prefix ui run check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "prettier": "3.8.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1"
+  }
+}
