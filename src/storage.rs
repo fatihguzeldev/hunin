@@ -187,12 +187,17 @@ impl Store {
     }
 
     pub fn runs(&self, limit: usize, offset: usize) -> Result<Vec<Run>> {
+        self.runs_page(limit.min(500), offset)
+    }
+
+    /// Internal pagination includes one sentinel beyond the public 500-run page.
+    pub(crate) fn runs_page(&self, limit: usize, offset: usize) -> Result<Vec<Run>> {
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         let values = metadata::read_page(
             &tx,
             "SELECT rowid FROM runs ORDER BY started_at_us DESC,id LIMIT ?1 OFFSET ?2",
-            params![limit.min(500), offset],
+            params![limit.min(501), offset],
             "SELECT manifest FROM runs WHERE rowid=?1",
         )?;
         tx.commit()?;

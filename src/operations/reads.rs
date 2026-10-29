@@ -20,7 +20,8 @@ pub(super) fn query(
     interest.check()?;
     let result = match name {
         "runs.list" => {
-            let mut runs = store.runs(limit + 1, cursor)?;
+            let limit = limit.min(500);
+            let mut runs = store.runs_page(limit + 1, cursor)?;
             let more = runs.len() > limit;
             runs.truncate(limit);
             json!({"runs":runs,"next_cursor":more.then(||(cursor+limit).to_string())})

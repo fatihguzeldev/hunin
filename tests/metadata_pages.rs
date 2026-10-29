@@ -222,3 +222,48 @@ fn document_page_order_matches_the_previous_sql_for_legacy_timestamp_types() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_full_run_page_reports_the_sentinel_and_keeps_the_next_record_reachable() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    // Use one fixture transaction; every manifest remains the ordinary Run wire.
+    let mut connection = rusqlite::Connection::open(root.path().join("hunin.sqlite")).unwrap();
+    let transaction = connection.transaction().unwrap();
+    for index in 0..501 {
+        let run = run(&format!("run-{index:03}"), index);
+        transaction
+            .execute(
+                "INSERT INTO runs(id,started_at_us,manifest) VALUES(?1,?2,?3)",
+                rusqlite::params![
+                    run.id,
+                    run.started_at_us,
+                    serde_json::to_string(&run).unwrap()
+                ],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+    assert_eq!(store.runs(501, 0).unwrap().len(), 500);
+    let operations = hunin::operations::Operations::new(store);
+    for requested in [500, 5000] {
+        let first = operations
+            .call("runs.list", json!({"limit":requested}))
+            .await
+            .unwrap();
+        assert_eq!(first["runs"].as_array().unwrap().len(), 500);
+        assert_eq!(first["runs"][0]["id"], "run-500");
+        assert_eq!(first["runs"][499]["id"], "run-001");
+        assert_eq!(first["next_cursor"], "500");
+        let last = operations
+            .call(
+                "runs.list",
+                json!({"limit":requested,"cursor":first["next_cursor"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(last["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(last["runs"][0]["id"], "run-000");
+        assert!(last["next_cursor"].is_null());
+    }
+}
