@@ -58,7 +58,7 @@ func Enabled() bool {
 }
 func LastError() error { writer.Lock(); defer writer.Unlock(); return writer.failure }
 func emit(ctx context.Context, kind string, fields map[string]any) string {
-	if runID == "" || directory == "" {
+	if !Enabled() {
 		return ""
 	}
 	token := CaptureContext(ctx)
@@ -115,13 +115,16 @@ func Flush() error {
 	return writer.failure
 }
 func CaptureContext(ctx context.Context) Propagation {
+	if !Enabled() {
+		return Propagation{}
+	}
 	if value, ok := ctx.Value(contextKey{}).(Propagation); ok {
 		return value
 	}
 	return Propagation{RunID: runID}
 }
 func AttachContext(ctx context.Context, token Propagation) context.Context {
-	if token.RunID != runID || runID == "" {
+	if !Enabled() || token.RunID != runID {
 		return ctx
 	}
 	return context.WithValue(ctx, contextKey{}, token)
@@ -143,7 +146,7 @@ type Span struct {
 // Start returns a child context explicitly; it remains correct when goroutines migrate.
 func Start(ctx context.Context, name string, attributes Attributes) (context.Context, *Span) {
 	span := &Span{ctx: ctx, name: name, attributes: attributesOrEmpty(attributes), started: time.Now()}
-	if runID != "" && directory != "" {
+	if Enabled() {
 		span.ID = identifier()
 	}
 	token := CaptureContext(ctx)
