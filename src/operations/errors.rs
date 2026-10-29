@@ -74,6 +74,8 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         json!({"scope":"normalization_input","dimension":"decoded_bytes","limit":budget.maximum,"observed":budget.observed})
     })).or_else(|| error.downcast_ref::<crate::recordings::ReanalysisSidecarLimit>().map(|budget| {
         json!({"scope":"normalization_replay","dimension":"sidecar_entries","limit":budget.maximum,"observed":budget.observed})
+    })).or_else(|| error.downcast_ref::<crate::importers::NormalizationOutputLimit>().map(|budget| {
+        json!({"scope":"normalization_output","dimension":budget.dimension.as_str(),"limit":budget.maximum,"observed":budget.observed})
     }));
     let capacity = error.downcast_ref::<crate::model::CapacityExceeded>();
     let code = match error.downcast_ref::<Failure>().map(|failure| failure.kind) {
