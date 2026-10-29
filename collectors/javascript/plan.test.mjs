@@ -40,6 +40,35 @@ test('capture planning runs when the installed collector is reached through a di
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('JavaScript runtime aliases and case preserve the selected Node executable', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-runtime-alias-'));
+  try {
+    const command = [process.execPath, '-e', 'console.log("selected-node")'];
+    for (const runtime of ['node', 'Node', 'NODEJS', 'javascript', 'TypeScript']) {
+      const capture = plan({ command, cwd: directory, artifact_dir: directory, run_id: 'alias', runtime });
+      assert.deepEqual(capture.command, command, runtime);
+      assert.equal(capture.runtime_version, process.version, runtime);
+      assert.match(capture.env.NODE_OPTIONS, /--cpu-prof/, runtime);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('capture planning probes the selected renamed executable without a fallback on PATH', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'hunin-selected-runtime-'));
+  try {
+    const selected = join(directory, process.platform === 'win32' ? 'selected-runtime.exe' : 'selected-runtime');
+    if (process.platform === 'win32') cpSync(process.execPath, selected);
+    else symlinkSync(process.execPath, selected);
+    const command = [selected, '-e', 'console.log("selected-node")'];
+    const capture = plan({ command, cwd: directory, artifact_dir: directory, run_id: 'selected', runtime: 'node', env: { PATH: directory } });
+    assert.deepEqual(capture.command, command);
+    assert.equal(capture.runtime_version, process.version);
+    const result = spawnSync(capture.command[0], capture.command.slice(1), { cwd: directory, env: { ...process.env, ...capture.env }, encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'selected-node\n');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('target environment composes with profiling and selects the requested runtime through PATH', () => {
   const directory = mkdtempSync(join(tmpdir(), 'hunin plan env '));
   try {

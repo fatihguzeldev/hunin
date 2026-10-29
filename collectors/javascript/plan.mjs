@@ -19,14 +19,14 @@ export function plan(request) {
   const targetEnv = request.env === undefined ? {} : request.env;
   if (!targetEnv || typeof targetEnv !== 'object' || Array.isArray(targetEnv) || Object.entries(targetEnv).some(([key, value]) => !key || /[=\0]/.test(key) || typeof value !== 'string' || value.includes('\0'))) throw Error('env must be an object of valid string environment overrides');
   const effectiveEnv = { ...process.env, ...targetEnv };
-  const runtime = request.runtime ?? basename(command[0]).replace(/\.exe$/i, '');
+  const requestedRuntime = (request.runtime ?? basename(command[0]).replace(/\.exe$/i, '')).toLowerCase();
+  const runtime = ['nodejs', 'javascript', 'typescript'].includes(requestedRuntime) ? 'node' : requestedRuntime;
   if (!['node', 'bun', 'deno'].includes(runtime)) throw Error(`unsupported JavaScript runtime: ${runtime}`);
   const directory = toolPath(resolve(artifact_dir));
   const project = toolPath(resolve(cwd));
   const executable = toolPath(command[0]);
   mkdirSync(directory, { recursive: true });
-  const probe = basename(command[0]).replace(/\.exe$/i, '') === runtime ? executable : runtime;
-  const result = spawnSync(probe, ['--version'], { cwd: project, env: effectiveEnv, encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(executable, ['--version'], { cwd: project, env: effectiveEnv, encoding: 'utf8', timeout: 10000 });
   if (result.status !== 0) throw Error(`cannot inspect ${runtime}: ${result.error?.message ?? result.stderr}`);
   const runtime_version = result.stdout.trim().split('\n')[0];
   const version = runtime_version.match(/(\d+)\.(\d+)/);
