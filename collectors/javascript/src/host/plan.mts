@@ -98,9 +98,18 @@ export function plan(request: CaptureRequest) {
       `cannot inspect ${runtime}: ${result.error?.message ?? result.stderr}`,
     );
   const runtime_version = result.stdout.trim().split('\n')[0];
-  const version = runtime_version.match(/(\d+)\.(\d+)/);
-  const major = Number(version?.[1]),
-    minor = Number(version?.[2]);
+  const suffix = '(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?';
+  const prefix = runtime === 'node' ? 'v' : runtime === 'deno' ? 'deno ' : '';
+  const details = runtime === 'deno' ? '(?: \\([^\\r\\n)]+\\))?' : '';
+  const version = runtime_version.match(
+    new RegExp(`^${prefix}(\\d+)\\.(\\d+)\\.(\\d+)${suffix}${details}$`),
+  );
+  const parts = version?.slice(1).map(Number);
+  if (!parts || !parts.every(Number.isSafeInteger))
+    throw Error(
+      `cannot parse ${runtime} version from selected executable ${executable}: ${JSON.stringify(runtime_version.slice(0, 160))}; expected ${runtime} --version output`,
+    );
+  const [major, minor] = parts;
   if (runtime === 'node' && major < 20)
     throw Error('Node 20 or newer is required');
   if (runtime === 'bun' && (major < 1 || (major === 1 && minor < 4)))

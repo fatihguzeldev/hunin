@@ -225,3 +225,55 @@ fn unavailable_selected_controller_is_not_replaced_with_a_global_node() {
         "target must not run when its selected controller is unavailable"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn unparseable_selected_node_version_stops_before_target_launch() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = tempfile::tempdir().unwrap();
+    let selected = project.path().join("selected-controller");
+    let marker = project.path().join("target-ran");
+    std::fs::write(
+        &selected,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then IFS= read -r version < selected-version.txt; printf '%s\\n' \"$version\"; exit 0; fi\nexec \"$HUNIN_TEST_NODE_CONTROLLER\" \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&selected, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let node = node();
+    for version in ["", "unavailable", "build 2026.10"] {
+        std::fs::write(
+            project.path().join("selected-version.txt"),
+            format!("{version}\n"),
+        )
+        .unwrap();
+        let (output, run) = record_without_global_node(
+            "node",
+            &selected,
+            &[
+                "-e".into(),
+                "require('node:fs').writeFileSync('target-ran','unexpected');".into(),
+            ],
+            project.path(),
+            "",
+            Some(("HUNIN_TEST_NODE_CONTROLLER", &node)),
+        );
+        assert!(!output.status.success(), "{run}");
+        assert!(run["exit_code"].is_null(), "{run}");
+        assert!(
+            run["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic.as_str().is_some_and(|message| {
+                        message.contains("cannot parse node version from selected executable")
+                    })
+                }),
+            "{run}"
+        );
+        assert!(
+            !marker.exists(),
+            "{version:?}: target ran without a verified runtime floor"
+        );
+    }
+}

@@ -9,6 +9,7 @@ import {
   symlinkSync,
   cpSync,
   mkdirSync,
+  chmodSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, toNamespacedPath, basename, resolve } from 'node:path';
@@ -174,6 +175,81 @@ test('capture planning probes the selected renamed executable without a fallback
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test(
+  'selected executable version output must establish the supported runtime floor',
+  { skip: process.platform === 'win32' },
+  () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hunin-selected-version-'));
+    try {
+      const selected = join(directory, 'selected-runtime');
+      writeFileSync(
+        selected,
+        '#!/bin/sh\nprintf \'%s\\n\' "$HUNIN_VERSION_TEST"\n',
+      );
+      chmodSync(selected, 0o755);
+      const request = {
+        command: [selected, '-e', 'console.log("target")'],
+        cwd: directory,
+        artifact_dir: directory,
+        run_id: 'selected-version',
+      };
+      for (const runtime of ['node', 'bun', 'deno']) {
+        for (const version of [
+          '',
+          'unavailable',
+          'build 2026.10',
+          'v22.16',
+          '999999999999999999999999.0.0',
+        ]) {
+          assert.throws(
+            () =>
+              plan({
+                ...request,
+                runtime,
+                env: { HUNIN_VERSION_TEST: version },
+              }),
+            /cannot parse .* version from selected executable/,
+            `${runtime}: ${JSON.stringify(version)}`,
+          );
+        }
+      }
+      for (const [runtime, version, diagnostic] of [
+        ['node', 'v19.9.0', /Node 20 or newer/],
+        ['bun', '1.3.99', /Bun 1.4 or newer/],
+        ['deno', 'deno 2.7.99 (stable, release, test)', /Deno 2.8 or newer/],
+      ] as const) {
+        assert.throws(
+          () =>
+            plan({
+              ...request,
+              runtime,
+              env: { HUNIN_VERSION_TEST: version },
+            }),
+          diagnostic,
+        );
+      }
+      for (const [runtime, version] of [
+        ['node', 'v20.0.0'],
+        ['node', 'v24.0.0-nightly20261029.1'],
+        ['bun', '1.4.0'],
+        ['bun', '1.4.4-canary.1+build'],
+        ['deno', 'deno 2.8.0'],
+        ['deno', 'deno 2.9.8 (stable, release, aarch64-apple-darwin)'],
+      ] as const) {
+        const capture = plan({
+          ...request,
+          runtime,
+          env: { HUNIN_VERSION_TEST: version },
+        });
+        assert.equal(capture.runtime_version, version);
+        assert.equal(capture.command[0], selected);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test('target environment composes with profiling and selects the requested runtime through PATH', () => {
   const directory = mkdtempSync(join(tmpdir(), 'hunin plan env '));
