@@ -60,7 +60,7 @@ fn permission() -> Value {
     }
     #[cfg(windows)]
     {
-        let Some(xperf) = crate::collection::native_tool::xperf_path() else {
+        let Some(xperf) = crate::collection::native::tool::xperf_path() else {
             return json!({"state":"native_prerequisite_missing","prerequisite":"xperf.exe","error":"Install Windows Performance Toolkit (WPT) from the Windows ADK; xperf.exe was absent from PATH and the standard ProgramFiles(x86) installation","setup_url":"https://learn.microsoft.com/en-us/windows-hardware/test/wpt/"});
         };
         return match checked(Command::new("whoami.exe").arg("/groups")) {
@@ -125,7 +125,7 @@ fn version_pair(runtime: &str, text: &str) -> Option<(u64, u64)> {
 
 fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
     let found = if runtime == "native" {
-        crate::collection::native_tool::resolve()
+        crate::collection::native::tool::resolve()
     } else {
         names.iter().find_map(|name| tool(name))
     };
@@ -238,10 +238,10 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             let sampler = if runtime == "native" {
                 found.clone()
             } else {
-                crate::collection::native_tool::resolve()
+                crate::collection::native::tool::resolve()
             };
             if let Some(sampler) = sampler {
-                if let Err(error) = crate::collection::native_tool::check(
+                if let Err(error) = crate::collection::native::tool::check(
                     &sampler,
                     if runtime == "native" {
                         version.as_deref()

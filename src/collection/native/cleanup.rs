@@ -4,11 +4,8 @@
 use serde_json::{Value, json};
 use std::{io::Read, path::Path, time::Duration};
 
-pub(super) async fn request_stop(directory: &Path, runtime: &str, pid: u32, birth: Option<&str>) {
-    if !matches!(
-        runtime.to_ascii_lowercase().as_str(),
-        "go" | "rust" | "c" | "cpp" | "c++" | "native"
-    ) {
+pub(crate) async fn request_stop(directory: &Path, runtime: &str, pid: u32, birth: Option<&str>) {
+    if !super::handles_runtime(runtime) {
         return;
     }
     let path = directory.join("cpu.samply.stop-request");
@@ -21,7 +18,7 @@ pub(super) async fn request_stop(directory: &Path, runtime: &str, pid: u32, birt
     let _ = wait(directory, pid, birth, Duration::from_secs(8)).await;
 }
 
-pub(super) async fn wait(
+pub(crate) async fn wait(
     directory: &Path,
     pid: u32,
     birth: Option<&str>,

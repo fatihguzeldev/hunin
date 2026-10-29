@@ -9,7 +9,7 @@ use std::{
 };
 
 pub(super) fn native(request: &CaptureRequest) -> Result<CapturePlan> {
-    let mut plan = super::native(request)?;
+    let mut plan = super::native::prepare(request)?;
     plan.runtime_version = native_runtime_version(request);
     Ok(plan)
 }

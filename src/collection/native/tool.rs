@@ -122,7 +122,7 @@ fn verify_receipt(binary: &Path, required: bool) -> Result<Option<Value>> {
     let receipt: Value =
         serde_json::from_slice(&bytes).context("invalid native collector provenance")?;
     let manifest: Value =
-        serde_json::from_str(include_str!("../../collectors/native/manifest.json"))?;
+        serde_json::from_str(include_str!("../../../collectors/native/manifest.json"))?;
     ensure!(
         receipt["schema_version"] == 1
             && receipt["version"] == manifest["version"]
@@ -185,7 +185,7 @@ mod tests {
         assert!(verify_receipt(&binary, true).is_err());
         assert!(verify_receipt(&binary, false).is_ok());
         let manifest: Value =
-            serde_json::from_str(include_str!("../../collectors/native/manifest.json")).unwrap();
+            serde_json::from_str(include_str!("../../../collectors/native/manifest.json")).unwrap();
         let mut receipt = json!({"schema_version":1,"version":manifest["version"],"identity":{"upstream":manifest["upstream"]},"extension":manifest["extension"],"binary_sha256":format!("{:x}",Sha256::digest(b"collector executable"))});
         let path = root.path().join("samply.provenance.json");
         fs::write(&path, receipt.to_string()).unwrap();

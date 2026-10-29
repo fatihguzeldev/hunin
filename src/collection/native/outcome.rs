@@ -37,7 +37,7 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-pub(super) fn read(directory: &Path, collector: &Path) -> Result<Value> {
+pub(crate) fn read(directory: &Path, collector: &Path) -> Result<Value> {
     let sidecar = directory.join("cpu.samply.lifetimes.json");
     ensure!(
         fs::metadata(&sidecar)?.len() <= 160 * 1024 * 1024,
@@ -114,7 +114,7 @@ pub(super) fn validate(outcome: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn unknown(reason: &str) -> Value {
+pub(crate) fn unknown(reason: &str) -> Value {
     json!({"state":"unknown","exit_code":null,"signal":null,"reason":reason,"source":"native target status unavailable; collector exit is a separate observation"})
 }
 

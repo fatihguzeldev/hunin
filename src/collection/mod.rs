@@ -3,11 +3,11 @@ mod deno_workers;
 mod finalization;
 mod go;
 mod javascript;
-pub(crate) mod native_tool;
+pub(crate) mod native;
 mod python;
 mod selection;
 mod settings;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 pub use finalization::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
     RawCaptureBundle, RawProfile, capture_artifacts,
@@ -68,7 +68,7 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
         CaptureAdapter::GoTestCpu => go::test(&canonical, false),
         CaptureAdapter::GoTrace => go::test(&canonical, true),
         CaptureAdapter::Native if canonical.runtime == "go" => go::native(&canonical),
-        CaptureAdapter::Native => native(&canonical),
+        CaptureAdapter::Native => native::prepare(&canonical),
     }
 }
 
@@ -91,38 +91,4 @@ pub(crate) fn profile_format(path: &Path) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn native(request: &CaptureRequest) -> Result<CapturePlan> {
-    let samply = native_tool::resolve().context("native/Go sampling requires Hunin's bundled samply0.13.1-hunin-native1; reinstall collector assets or set HUNIN_SAMPLY to a patched executable (an explicit override must be an existing file)")?;
-    let sampler_version = native_tool::check(&samply, None, std::time::Duration::from_secs(10))?;
-    let collector_identity = native_tool::identity(&samply, &sampler_version)?;
-    let mut command = vec![
-        samply.display().to_string(),
-        "record".into(),
-        "--save-only".into(),
-        "--unstable-presymbolicate".into(),
-        "--lifetime-output".into(),
-        request
-            .artifact_dir
-            .join("cpu.samply.lifetimes.json")
-            .display()
-            .to_string(),
-        "-o".into(),
-        request
-            .artifact_dir
-            .join("cpu.samply.json")
-            .display()
-            .to_string(),
-    ];
-    if cfg!(windows) {
-        command.push("--keep-etl".into());
-    }
-    command.push("--".into());
-    command.extend(request.command.clone());
-    Ok(CapturePlan { command, env:BTreeMap::new(), collector_identity:Some(collector_identity), session_identity:BTreeMap::new(),output:CaptureOutput::Profiles{format:("firefox").into()}, runtime_version: None, diagnostics:vec![
-        "Native symbols/source require debug information for the measured build".into(),
-        "Target runtime version is separate from collector identity. Go reports build information from the launched executable when a Go inspection tool is available; generic native executables and subprocess toolchain versions remain unknown.".into(),
-        "Linux perf permissions, Windows ETW elevation, and macOS signing restrictions are checked by samply at capture time".into(),
-        "OS samples do not imply Go goroutine/scheduler/GC tracing; import an enabled runtime pprof recording for that additional route".into()] })
 }

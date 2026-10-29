@@ -1,8 +1,5 @@
 mod correctness;
 mod identity;
-#[cfg(any(windows, test))]
-mod native_cleanup;
-mod native_outcome;
 pub(crate) mod ownership;
 pub(crate) use crate::host::process;
 mod process_identity;
@@ -10,7 +7,7 @@ mod resources;
 mod sdk;
 
 use crate::{
-    collection::{self, CaptureRequest},
+    collection::{self, CaptureRequest, native},
     model::{
         now_us,
         runs::{Run, RunStatus},
@@ -298,6 +295,7 @@ impl Engine {
         let pid = child.id().context("target process has no PID")?;
         #[cfg(windows)]
         let native_wrapper_birth = process_identity::birth(pid);
+        let native_collection = native::handles_runtime(&run.runtime);
         let collector_wrapper = plan.command[0] != capture.command[0]
             || matches!(run.runtime.as_str(), "go-test" | "go-trace");
         run.source["supervised_execution_started_at_us"] = json!(execution_started_at_us);
@@ -310,7 +308,7 @@ impl Engine {
         run.source["target_outcome"] = json!({"status":"running","supervised_pid":pid});
         if let Err(error) = self.store.save_run(&run) {
             #[cfg(windows)]
-            native_cleanup::request_stop(
+            native::request_stop(
                 &directory,
                 &run.runtime,
                 pid,
@@ -338,14 +336,14 @@ impl Engine {
                     // unexpected wrapper exit must give it cleanup time before
                     // the common force/drop path closes the remaining tree.
                     #[cfg(windows)]
-                    native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
+                    native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
                     break status?;
                 }
-                _=cancel.changed()=>{canceled=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
-                _=&mut timeout=>{timed_out=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
+                _=cancel.changed()=>{canceled=true;#[cfg(windows)] native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
+                _=&mut timeout=>{timed_out=true;#[cfg(windows)] native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}break status;}
                 rows=observations.recv(),if observations_open=>{if let Some(rows)=rows{metrics.extend(rows);}else{observations_open=false;}}
                 _=tick.tick()=>{
-                    if self.store.document("cancellations",&run.id).is_ok(){canceled=true;#[cfg(windows)] native_cleanup::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("persistent cancellation required forced process-tree cleanup after the graceful deadline".into());}break status;}
+                    if self.store.document("cancellations",&run.id).is_ok(){canceled=true;#[cfg(windows)] native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;let(status,forced)=tree.stop(&mut child,run.runtime!="none").await?;if forced{run.diagnostics.push("persistent cancellation required forced process-tree cleanup after the graceful deadline".into());}break status;}
                 }
             }
         };
@@ -362,11 +360,8 @@ impl Engine {
             metrics.extend(rows);
         }
         #[cfg(windows)]
-        if matches!(
-            run.runtime.to_ascii_lowercase().as_str(),
-            "go" | "rust" | "c" | "cpp" | "c++" | "native"
-        ) {
-            let cleanup = native_cleanup::wait(
+        if native_collection {
+            let cleanup = native::wait_for_cleanup(
                 &directory,
                 pid,
                 native_wrapper_birth.as_deref(),
@@ -386,15 +381,11 @@ impl Engine {
         } else {
             "includes runtime profiling and observer overhead; not an unprofiled speed measurement"
         });
-        let native_collection = matches!(
-            run.runtime.to_ascii_lowercase().as_str(),
-            "go" | "rust" | "c" | "cpp" | "c++" | "native"
-        );
         let target_outcome = if native_collection {
             let capture_directory = directory.clone();
             let collector = PathBuf::from(&plan.command[0]);
             let outcome = match tokio::task::spawn_blocking(move || {
-                native_outcome::read(&capture_directory, &collector)
+                native::read_target_outcome(&capture_directory, &collector)
             })
             .await
             {
@@ -406,7 +397,7 @@ impl Engine {
                         _ => unreachable!(),
                     };
                     run.diagnostics.push(format!("Native target wait status unavailable: {reason}; collector exit is not substituted for target exit"));
-                    native_outcome::unknown(&reason)
+                    native::unknown_target_outcome(&reason)
                 }
             };
             run.source["collector_outcome"] = json!({"state":if status.code().is_some(){"exited"}else{"terminated"},"exit_code":status.code(),"scope":"supervised native profiler process","exit_status_consistent_with_target":outcome["exit_code"].as_i64().map(|code|Some(code)==status.code().map(i64::from))});
