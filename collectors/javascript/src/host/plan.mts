@@ -97,7 +97,7 @@ export function plan(request: CaptureRequest) {
     throw Error(
       `cannot inspect ${runtime}: ${result.error?.message ?? result.stderr}`,
     );
-  const runtime_version = result.stdout.trim().split('\n')[0];
+  const runtime_version = result.stdout.trim().split('\n')[0].trim();
   const suffix = '(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?';
   const prefix = runtime === 'node' ? 'v' : runtime === 'deno' ? 'deno ' : '';
   const details = runtime === 'deno' ? '(?: \\([^\\r\\n)]+\\))?' : '';

@@ -236,13 +236,14 @@ test(
         ['bun', '1.4.4-canary.1+build'],
         ['deno', 'deno 2.8.0'],
         ['deno', 'deno 2.9.8 (stable, release, aarch64-apple-darwin)'],
+        ['deno', 'deno 2.9.8 (stable, release, test)\r\nv8 14.0.0\r\n'],
       ] as const) {
         const capture = plan({
           ...request,
           runtime,
           env: { HUNIN_VERSION_TEST: version },
         });
-        assert.equal(capture.runtime_version, version);
+        assert.equal(capture.runtime_version, version.split('\n')[0].trim());
         assert.equal(capture.command[0], selected);
       }
     } finally {

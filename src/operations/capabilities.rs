@@ -74,12 +74,53 @@ fn permission() -> Value {
     json!({"state":"target_permission_unverified","probe":"macOS task access/signing depends on the measured executable; discovery does not attach or request permission"})
 }
 
-fn version_pair(text: &str) -> Option<(u32, u32)> {
-    let mut numbers = text
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse().ok());
-    Some((numbers.next()?, numbers.next()?))
+fn version_pair(runtime: &str, text: &str) -> Option<(u64, u64)> {
+    let first = text.lines().next()?.trim();
+    let version = match runtime {
+        "node" => first.strip_prefix('v')?,
+        "bun" => first,
+        "deno" => first.strip_prefix("deno ")?,
+        _ => return None,
+    };
+    let version = if runtime == "deno"
+        && let Some((version, details)) = version.split_once(" (")
+    {
+        let details = details.strip_suffix(')')?;
+        if details.is_empty() || details.contains([')', '\r', '\n']) {
+            return None;
+        }
+        version
+    } else {
+        version
+    };
+    let valid_suffix = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    };
+    let version = if let Some((version, build)) = version.split_once('+') {
+        valid_suffix(build).then_some(version)?
+    } else {
+        version
+    };
+    let version = if let Some((version, prerelease)) = version.split_once('-') {
+        valid_suffix(prerelease).then_some(version)?
+    } else {
+        version
+    };
+    let number = |value: &str| -> Option<u64> {
+        if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let number = value.parse().ok()?;
+        (number <= 9_007_199_254_740_991).then_some(number)
+    };
+    let mut parts = version.split('.');
+    let major = number(parts.next()?)?;
+    let minor = number(parts.next()?)?;
+    number(parts.next()?)?;
+    parts.next().is_none().then_some((major, minor))
 }
 
 fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
@@ -149,14 +190,22 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                 "bun" => (1, 4),
                 _ => (2, 8),
             };
-            if version
-                .as_deref()
-                .and_then(version_pair)
-                .is_some_and(|v| v < required)
-            {
-                availability = "runtime_version_unsupported";
+            if let Some(version) = version.as_deref() {
+                match version_pair(runtime, version) {
+                    Some(value) if value < required => {
+                        availability = "runtime_version_unsupported";
+                    }
+                    Some(_) => {}
+                    None => {
+                        availability = "runtime_version_unrecognized";
+                        diagnostics.push(format!(
+                            "The selected {runtime} version output could not establish its supported version floor"
+                        ));
+                    }
+                }
             }
             if runtime == "node"
+                && availability == "prerequisites_ready"
                 && let Some(executable) = found.as_ref().filter(|_| version.is_some())
             {
                 match checked(Command::new(executable).args(["-p","process.allowedNodeEnvironmentFlags.has('--cpu-prof')&&process.allowedNodeEnvironmentFlags.has('--import')"])) {
@@ -293,6 +342,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn runtime_version_shapes_match_the_selected_capture_floor_contract() {
+        for (runtime, output, expected) in [
+            ("node", "v20.0.0", (20, 0)),
+            ("node", "v24.0.0-nightly20261029.1", (24, 0)),
+            ("bun", "1.4.0", (1, 4)),
+            ("bun", "1.4.4-canary.1+build", (1, 4)),
+            ("deno", "deno 2.8.0", (2, 8)),
+            (
+                "deno",
+                "deno 2.9.8 (stable, release, test)\r\nv8 14.0.0\r\n",
+                (2, 9),
+            ),
+        ] {
+            assert_eq!(version_pair(runtime, output), Some(expected), "{output}");
+        }
+        for runtime in ["node", "bun", "deno"] {
+            for output in ["", "unavailable", "build 2026.10", "v22.16"] {
+                assert!(
+                    version_pair(runtime, output).is_none(),
+                    "{runtime}: {output}"
+                );
+            }
+        }
+        for (runtime, output) in [
+            ("node", "v999999999999999999999999.0.0"),
+            ("bun", "999999999999999999999999.0.0"),
+            ("deno", "deno 999999999999999999999999.0.0"),
+        ] {
+            assert!(version_pair(runtime, output).is_none());
+        }
+    }
+
+    #[test]
     fn missing_default_probe_keeps_an_explicit_runtime_command_selectable() {
         let capability = runtime(
             "node",
@@ -304,6 +386,34 @@ mod tests {
         assert_eq!(capability["modes"][0]["selectable"], true);
         assert!(capability["modes"][0]["default_executable"].is_null());
         assert_eq!(capability["modes"][0]["recording_verified"], false);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unrecognized_runtime_version_does_not_claim_ready_prerequisites() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("unknown-version-runtime");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'unavailable\\n'; else printf 'true\\n'; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for family in ["node", "bun", "deno"] {
+            let capability = runtime(
+                family,
+                &[executable.to_str().unwrap()],
+                &json!({"state":"unknown"}),
+            );
+            assert_eq!(capability["version"], "unavailable");
+            assert_eq!(
+                capability["modes"][0]["availability"],
+                "runtime_version_unrecognized"
+            );
+            assert_eq!(capability["modes"][0]["selectable"], true);
+            assert_eq!(capability["modes"][0]["recording_verified"], false);
+        }
     }
 
     #[test]
