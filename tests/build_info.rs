@@ -54,6 +54,10 @@ fn build_info_uses_compiled_contracts_without_assets_or_store_access() {
             "native_manifest",
             include_bytes!("../collectors/native/manifest.json").as_slice(),
         ),
+        (
+            "runtime_inventory",
+            include_bytes!("../distribution/bundle/assets.json").as_slice(),
+        ),
     ] {
         assert_eq!(
             info["contracts"][name]["sha256"],

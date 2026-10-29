@@ -5,8 +5,8 @@ async fn record(mode: &str) -> (tempfile::TempDir, Store, Run) {
     let project = tempfile::tempdir().unwrap();
     let store = Store::open(&project.path().join("data")).unwrap();
     let engine = Engine::new(store.clone());
-    let workload =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sdk/javascript/test/completion.mjs");
+    let workload = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("sdk/javascript/dist/test/completion.mjs");
     let command = vec![
         "node".to_owned(),
         workload.display().to_string(),

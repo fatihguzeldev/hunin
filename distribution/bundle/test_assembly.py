@@ -14,17 +14,17 @@ else:
 
 
 RUNTIME_FILES = (
-    "collectors/javascript/plan.mjs",
-    "collectors/javascript/clock-preload.mjs",
-    "collectors/javascript/bun-preload.mjs",
-    "collectors/javascript/deno-workers.mjs",
-    "collectors/javascript/sources-preload.mjs",
-    "collectors/javascript/host/plan.mjs",
-    "collectors/javascript/agents/clock.mjs",
-    "collectors/javascript/agents/bun.mjs",
-    "collectors/javascript/agents/bun/manifest.mjs",
-    "collectors/javascript/agents/deno-workers.mjs",
-    "collectors/javascript/source/snapshots.mjs",
+    "collectors/javascript/dist/plan.mjs",
+    "collectors/javascript/dist/clock-preload.mjs",
+    "collectors/javascript/dist/bun-preload.mjs",
+    "collectors/javascript/dist/deno-workers.mjs",
+    "collectors/javascript/dist/sources-preload.mjs",
+    "collectors/javascript/dist/host/plan.mjs",
+    "collectors/javascript/dist/agents/clock.mjs",
+    "collectors/javascript/dist/agents/bun.mjs",
+    "collectors/javascript/dist/agents/bun/manifest.mjs",
+    "collectors/javascript/dist/agents/deno-workers.mjs",
+    "collectors/javascript/dist/source/snapshots.mjs",
     "collectors/python/capture.py",
     "collectors/python/cpu.py",
     "collectors/python/cpu_clock.py",
@@ -41,8 +41,8 @@ RUNTIME_FILES = (
     "collectors/python/hunin_capture/cpu_progress/clocks/windows.py",
     "collectors/python/hunin_capture/cpu_progress/clocks/macos.py",
     "collectors/python/hunin_capture/cpu_progress/clocks/linux.py",
-    "sdk/javascript/index.mjs",
-    "sdk/javascript/index.d.mts",
+    "sdk/javascript/dist/index.mjs",
+    "sdk/javascript/dist/index.d.mts",
     "sdk/javascript/package.json",
     "sdk/python/pyproject.toml",
     "sdk/python/hunin/__init__.py",
@@ -62,6 +62,7 @@ RUNTIME_FILES = (
     "install.py",
     "fetch_runtime.py",
     "runtime-assets.json",
+    "bundle-assets.json",
 )
 
 
@@ -120,6 +121,18 @@ class PackageTests(unittest.TestCase):
                     package.assemble(root, binary, output, "linux-x64")
                 self.assertEqual(path.read_bytes(), b"preserved accepted artifact")
 
+    def test_packaging_requires_the_executables_runtime_layout_binding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            old = self.product_info(binary)
+            old["contracts"].pop("runtime_inventory", None)
+            with (
+                patch.object(package, "probe_binary", return_value=old),
+                self.assertRaisesRegex(ValueError, "runtime inventory"),
+            ):
+                package.assemble(root, binary, root / "output", "linux-x64")
+
     def native_files(self, patch_names=("0001.patch",)):
         base = "collectors/native/"
         upstream = {"revision": "test-pin", "archive_sha256": "test-archive"}
@@ -177,6 +190,9 @@ class PackageTests(unittest.TestCase):
                 path = root / component["source_root"] / source
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(str(path.relative_to(root)))
+        (root / "bundle-assets.json").write_bytes(
+            (root / "distribution/bundle/assets.json").read_bytes()
+        )
         stock = root / "distribution/fetch_samply.py"
         stock.parent.mkdir(parents=True, exist_ok=True)
         stock.write_text("unrelated legacy helper")
@@ -274,14 +290,14 @@ class PackageTests(unittest.TestCase):
             root = Path(temporary)
             binary = self.source_tree(root)
             unshipped = (
-                "collectors/javascript/plan.test.mjs",
-                "collectors/javascript/test/plan.test.mjs",
+                "collectors/javascript/dist/plan.test.mjs",
+                "collectors/javascript/dist/test/plan.test.mjs",
                 "collectors/javascript/src/host/plan.mts",
                 "collectors/python/fixtures/raw.json",
                 "collectors/native/test_build.py",
                 "collectors/native/build.py",
                 "sdk/javascript/src/index.mts",
-                "sdk/javascript/sdk.test.mjs",
+                "sdk/javascript/dist/sdk.test.mjs",
                 "sdk/javascript/tsconfig.json",
                 "sdk/rust/tests/concurrency.rs",
                 "sdk/go/hunin_test.go",
@@ -328,8 +344,8 @@ class PackageTests(unittest.TestCase):
 
     def test_missing_emitted_runtime_asset_explains_which_build_is_required(self):
         for name in (
-            "collectors/javascript/agents/clock.mjs",
-            "sdk/javascript/index.d.mts",
+            "collectors/javascript/dist/agents/clock.mjs",
+            "sdk/javascript/dist/index.d.mts",
             "ui/dist/.vite/manifest.json",
         ):
             with self.subTest(asset=name), tempfile.TemporaryDirectory() as temporary:

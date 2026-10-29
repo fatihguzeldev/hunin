@@ -4,13 +4,13 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./index.d.mts",
-      "import": "./index.mjs"
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
     }
   },
   "files": [
-    "index.mjs",
-    "index.d.mts"
+    "dist/index.mjs",
+    "dist/index.d.mts"
   ],
   "engines": {
     "node": ">=20"
@@ -19,7 +19,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build",
-    "test": "npm run build && node --test sdk.test.mjs"
+    "test": "npm run build && node --test dist/sdk.test.mjs"
   },
   "license": "MIT"
 }

@@ -104,7 +104,9 @@ pub(super) fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
         runtime => bail!("unsupported JavaScript controller runtime: {runtime}"),
     }
     command
-        .arg(tool_path(&assets().join("collectors/javascript/plan.mjs")))
+        .arg(tool_path(
+            &assets().join("collectors/javascript/dist/plan.mjs"),
+        ))
         .env_remove("NODE_OPTIONS")
         .env_remove("BUN_OPTIONS");
     let inherited_options = ["NODE_OPTIONS", "BUN_OPTIONS"]

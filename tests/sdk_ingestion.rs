@@ -48,7 +48,7 @@ async fn actual_sdk_write_failure_preserves_target_behavior_and_rejects_unreadab
     let store = Store::open(data.path()).unwrap();
     let engine = Engine::new(store.clone());
     let workload = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("sdk/javascript/test/write-error.mjs");
+        .join("sdk/javascript/dist/test/write-error.mjs");
     let run = engine
         .start(
             serde_json::from_value(json!({
@@ -99,7 +99,7 @@ async fn sdk_error_formatters_preserve_target_exceptions_and_accept_valid_spools
             (
                 vec![
                     "node".to_owned(),
-                    root.join("sdk/javascript/test/callback-error.mjs")
+                    root.join("sdk/javascript/dist/test/callback-error.mjs")
                         .display()
                         .to_string(),
                 ],

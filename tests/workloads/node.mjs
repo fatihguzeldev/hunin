@@ -1,4 +1,4 @@
-import { withContext, withSpan, counter } from '../../sdk/javascript/index.mjs';
+import { withContext, withSpan, counter } from '../../sdk/javascript/dist/index.mjs';
 
 function hotLoop() {
   let checksum = 0;

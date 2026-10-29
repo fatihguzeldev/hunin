@@ -7,17 +7,17 @@
       "destination_root": "collectors/javascript",
       "build": "npm ci && npm run build:runtime",
       "files": {
-        "plan.mjs": "plan.mjs",
-        "clock-preload.mjs": "clock-preload.mjs",
-        "bun-preload.mjs": "bun-preload.mjs",
-        "deno-workers.mjs": "deno-workers.mjs",
-        "sources-preload.mjs": "sources-preload.mjs",
-        "host/plan.mjs": "host/plan.mjs",
-        "agents/clock.mjs": "agents/clock.mjs",
-        "agents/bun.mjs": "agents/bun.mjs",
-        "agents/bun/manifest.mjs": "agents/bun/manifest.mjs",
-        "agents/deno-workers.mjs": "agents/deno-workers.mjs",
-        "source/snapshots.mjs": "source/snapshots.mjs"
+        "dist/plan.mjs": "dist/plan.mjs",
+        "dist/clock-preload.mjs": "dist/clock-preload.mjs",
+        "dist/bun-preload.mjs": "dist/bun-preload.mjs",
+        "dist/deno-workers.mjs": "dist/deno-workers.mjs",
+        "dist/sources-preload.mjs": "dist/sources-preload.mjs",
+        "dist/host/plan.mjs": "dist/host/plan.mjs",
+        "dist/agents/clock.mjs": "dist/agents/clock.mjs",
+        "dist/agents/bun.mjs": "dist/agents/bun.mjs",
+        "dist/agents/bun/manifest.mjs": "dist/agents/bun/manifest.mjs",
+        "dist/agents/deno-workers.mjs": "dist/agents/deno-workers.mjs",
+        "dist/source/snapshots.mjs": "dist/source/snapshots.mjs"
       }
     },
     {
@@ -46,7 +46,9 @@
       "name": "vmprof-decoder",
       "source_root": "src/importers/vmprof",
       "destination_root": "collectors/python",
-      "files": { "decode.py": "decode.py" }
+      "files": {
+        "decode.py": "decode.py"
+      }
     },
     {
       "name": "native-collector",
@@ -79,8 +81,8 @@
       "destination_root": "sdk/javascript",
       "build": "npm ci && npm run build:sdk",
       "files": {
-        "index.mjs": "index.mjs",
-        "index.d.mts": "index.d.mts",
+        "dist/index.mjs": "dist/index.mjs",
+        "dist/index.d.mts": "dist/index.d.mts",
         "package.json": "package.json"
       }
     },
@@ -108,7 +110,10 @@
       "name": "go-sdk",
       "source_root": "sdk/go",
       "destination_root": "sdk/go",
-      "files": { "go.mod": "go.mod", "hunin.go": "hunin.go" }
+      "files": {
+        "go.mod": "go.mod",
+        "hunin.go": "hunin.go"
+      }
     },
     {
       "name": "c-sdk",
@@ -124,7 +129,9 @@
       "name": "cpp-sdk",
       "source_root": "sdk/cpp",
       "destination_root": "sdk/cpp",
-      "files": { "include/hunin.hpp": "include/hunin.hpp" }
+      "files": {
+        "include/hunin.hpp": "include/hunin.hpp"
+      }
     },
     {
       "name": "protocol",
@@ -140,7 +147,9 @@
       "name": "installation",
       "source_root": "distribution/installation",
       "destination_root": ".",
-      "files": { "install.py": "bundle.py" }
+      "files": {
+        "install.py": "bundle.py"
+      }
     },
     {
       "name": "runtime-provisioning",
@@ -156,9 +165,20 @@
       "source_root": "ui/dist",
       "destination_root": "ui",
       "build": "npm --prefix ui ci && npm --prefix ui run build",
-      "files": { "index.html": "index.html", "hunin.svg": "hunin.svg" },
+      "files": {
+        "index.html": "index.html",
+        "hunin.svg": "hunin.svg"
+      },
       "vite_manifest": ".vite/manifest.json",
       "entry": "index.html"
+    },
+    {
+      "name": "runtime-layout-contract",
+      "source_root": "distribution/bundle",
+      "destination_root": ".",
+      "files": {
+        "bundle-assets.json": "assets.json"
+      }
     }
   ]
 }

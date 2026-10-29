@@ -15,7 +15,7 @@
 !/ui/**/*.json
 !/sdk/
 !/sdk/javascript/
-!/sdk/javascript/*.mjs
+!/sdk/javascript/dist/**
 !/sdk/javascript/*.ts
 !/sdk/javascript/*.json
 !/sdk/javascript/src/
@@ -41,10 +41,8 @@
 /ui/dist/**
 /ui/.tools/**
 /ui/src/*.generated.ts
-/collectors/javascript/**/*.mjs
-/sdk/javascript/*.mjs
-/sdk/javascript/*.d.mts
-/sdk/javascript/test/**
+/collectors/javascript/dist/**
+/sdk/javascript/dist/**
 /sdk/conformance/javascript.mjs
 /distribution/**/fixtures/**
 **/package-lock.json

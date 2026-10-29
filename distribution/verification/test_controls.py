@@ -75,7 +75,7 @@ class InstalledControlTests(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as temporary:
             installed = Path(temporary) / "installed bundle %20"
-            preload = installed / "collectors/javascript/clock-preload.mjs"
+            preload = installed / "collectors/javascript/dist/clock-preload.mjs"
             preload.parent.mkdir(parents=True)
             preload.write_text("// installed control")
             self.assertTrue(

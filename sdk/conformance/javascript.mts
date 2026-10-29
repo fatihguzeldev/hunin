@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import * as h from '../javascript/index.mjs';
+import * as h from '../javascript/dist/index.mjs';
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

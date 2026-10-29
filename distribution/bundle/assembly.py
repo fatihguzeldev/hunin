@@ -131,6 +131,7 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
         files.__getitem__,
         target=target,
         require_target=True,
+        require_runtime_inventory=True,
     )
     manifest = {
         "schema_version": 1,

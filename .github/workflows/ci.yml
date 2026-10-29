@@ -147,7 +147,7 @@ jobs:
         run: cargo +stable test --locked --all
       - name: JavaScript SDK tests
         if: always()
-        run: node --test sdk/javascript/sdk.test.mjs
+        run: node --test sdk/javascript/dist/sdk.test.mjs
       - name: Python SDK tests
         if: always()
         run: python -m unittest discover -s sdk/python
@@ -245,7 +245,7 @@ jobs:
         if: always() && steps.bun.outcome == 'success'
         env:
           HUNIN_SDK_TEST_RUNTIME: ${{ env.HUNIN_TEST_BUN }}
-        run: node --test sdk/javascript/sdk.test.mjs
+        run: node --test sdk/javascript/dist/sdk.test.mjs
       - name: Verify Bun SDK bridge into canonical storage
         if: always() && steps.bun.outcome == 'success'
         run: cargo +stable test --locked --test sdk_contract bun_runtime_sdk_conforms -- --ignored --exact --nocapture
@@ -267,7 +267,7 @@ jobs:
         env:
           HUNIN_SDK_TEST_RUNTIME: ${{ env.HUNIN_TEST_DENO }}
           HUNIN_SDK_TEST_DENO: '1'
-        run: node --test sdk/javascript/sdk.test.mjs
+        run: node --test sdk/javascript/dist/sdk.test.mjs
       - name: Verify Deno SDK bridge into canonical storage
         if: always() && steps.deno.outcome == 'success'
         run: cargo +stable test --locked --test sdk_contract deno_runtime_sdk_conforms -- --ignored --exact --nocapture
@@ -279,7 +279,7 @@ jobs:
         run: cargo +stable test --locked --test javascript_controllers selected_deno_ -- --ignored
       - name: Verify installed JavaScript runtime worker collection
         if: always() && steps.build.outcome == 'success'
-        run: node --test collectors/javascript/plan.test.mjs
+        run: node --test collectors/javascript/dist/plan.test.mjs
       - name: Install checksum-pinned PyPy
         id: pypy
         if: always() && steps.build.outcome == 'success'

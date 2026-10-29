@@ -19,6 +19,7 @@ CONTRACT_FILES = {
     "responses": "protocol/response.schema.json",
     "operations": "protocol/operations.json",
     "native_manifest": "collectors/native/manifest.json",
+    "runtime_inventory": "bundle-assets.json",
 }
 PROBE_OUTPUT_LIMIT = 64 * 1024
 
@@ -39,7 +40,15 @@ def compiled_platform(target):
     return platform_name
 
 
-def check_product(info, version, files, read, target=None, require_target=False):
+def check_product(
+    info,
+    version,
+    files,
+    read,
+    target=None,
+    require_target=False,
+    require_runtime_inventory=False,
+):
     """Validate declared executable contracts against already-hashed files."""
     try:
         if (
@@ -71,6 +80,13 @@ def check_product(info, version, files, read, target=None, require_target=False)
         if type(maximum) is not int or maximum < 0:
             raise ValueError("Invalid product storage contract")
         for name, path in CONTRACT_FILES.items():
+            if name == "runtime_inventory" and name not in info["contracts"]:
+                if require_runtime_inventory:
+                    raise ValueError(
+                        "Product has no runtime inventory binding; rebuild the binary before packaging"
+                    )
+                # Historical installed versions keep their declared contracts.
+                continue
             contract = info["contracts"][name]
             if contract["sha256"] != files[path]["sha256"]:
                 raise ValueError(

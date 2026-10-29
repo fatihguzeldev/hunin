@@ -115,7 +115,7 @@ def verify(archive, output):
             output / "installed" / f"{manifest['version']}-{manifest['platform']}"
         )
         binary = installed / ("hunin.exe" if os.name == "nt" else "hunin")
-        sdk = (installed / "sdk/javascript/index.mjs").as_uri()
+        sdk = (installed / "sdk/javascript/dist/index.mjs").as_uri()
         source = work / "main.mjs"
         source.write_text(
             "import {withContext,withSpan,counter,flush} from "

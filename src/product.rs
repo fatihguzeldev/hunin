@@ -32,6 +32,7 @@ pub fn build_info() -> Value {
             "responses":contract(include_bytes!("../protocol/response.schema.json"),true),
             "operations":contract(include_bytes!("../protocol/operations.json"),false),
             "native_manifest":native,
+            "runtime_inventory":contract(include_bytes!("../distribution/bundle/assets.json"),false),
         },
         "storage":{"maximum_schema_version":crate::storage::SCHEMA_VERSION},
     })
