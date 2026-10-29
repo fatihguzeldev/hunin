@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Record one native call with both automatic CPU samples and the installed C SDK."""
+
 import argparse
 import hashlib
 import json
@@ -11,11 +12,25 @@ import subprocess
 
 def execute(command, work):
     environment = dict(os.environ)
-    for variable in ("HUNIN_SAMPLY", "HUNIN_ASSETS_DIR", "HUNIN_UI_DIR", "HUNIN_DATA_DIR"):
+    for variable in (
+        "HUNIN_SAMPLY",
+        "HUNIN_ASSETS_DIR",
+        "HUNIN_UI_DIR",
+        "HUNIN_DATA_DIR",
+    ):
         environment.pop(variable, None)
-    result = subprocess.run([str(value) for value in command], cwd=work, env=environment, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(
+        [str(value) for value in command],
+        cwd=work,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
     if result.returncode:
-        raise RuntimeError(f"Command failed ({result.returncode}): {command}\n{result.stdout}\n{result.stderr}")
+        raise RuntimeError(
+            f"Command failed ({result.returncode}): {command}\n{result.stdout}\n{result.stderr}"
+        )
     return result.stdout
 
 
@@ -23,7 +38,10 @@ def paged_records(call, operation, params, keys):
     cursor = None
     seen = set()
     while True:
-        page = call(operation, {**params, "limit": 100, **({"cursor": cursor} if cursor else {})})
+        page = call(
+            operation,
+            {**params, "limit": 100, **({"cursor": cursor} if cursor else {})},
+        )
         for key in keys:
             yield from page.get(key, [])
         cursor = page.get("next_cursor")
@@ -43,7 +61,7 @@ def verify(installed, output):
         binary = installed / ("hunin.exe" if os.name == "nt" else "hunin")
         source = output / "source"
         source.mkdir()
-        (source / "main.c").write_text(r'''#include "hunin.h"
+        (source / "main.c").write_text(r"""#include "hunin.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -74,60 +92,155 @@ int main(void) {
   printf("native SDK control ok\n");
   return 0;
 }
-''')
+""")
         sdk = (installed / "sdk/c").as_posix().replace('"', '\\"')
-        (source / "CMakeLists.txt").write_text('cmake_minimum_required(VERSION 3.16)\nproject(hunin_installed_native_control C)\n'
-                                              f'add_subdirectory("{sdk}" hunin-sdk)\nadd_executable(native-control main.c)\n'
-                                              'target_link_libraries(native-control PRIVATE hunin_sdk)\nset_property(TARGET native-control PROPERTY C_STANDARD 11)\n')
+        (source / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.16)\nproject(hunin_installed_native_control C)\n"
+            f'add_subdirectory("{sdk}" hunin-sdk)\nadd_executable(native-control main.c)\n'
+            "target_link_libraries(native-control PRIVATE hunin_sdk)\nset_property(TARGET native-control PROPERTY C_STANDARD 11)\n"
+        )
         build = output / "build"
         cmake = os.environ.get("HUNIN_TEST_CMAKE", "cmake")
-        execute([cmake, "-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=RelWithDebInfo"], output)
+        execute(
+            [cmake, "-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=RelWithDebInfo"],
+            output,
+        )
         execute([cmake, "--build", build, "--config", "RelWithDebInfo"], output)
-        candidates = list(build.rglob("native-control.exe" if os.name == "nt" else "native-control"))
+        candidates = list(
+            build.rglob("native-control.exe" if os.name == "nt" else "native-control")
+        )
         if len(candidates) != 1:
-            raise RuntimeError(f"No unique installed SDK control executable: {candidates}")
+            raise RuntimeError(
+                f"No unique installed SDK control executable: {candidates}"
+            )
         target = candidates[0]
         data = output / "recordings"
-        expected = b"native SDK control ok\r\n" if os.name == "nt" else b"native SDK control ok\n"
-        recording = json.loads(execute([binary, "--data-dir", data, "run", "--runtime", "native", "--cwd", source, "--timeout", "30",
-                                        "--expected-stdout-sha256", hashlib.sha256(expected).hexdigest(), "--", target], output))
+        expected = (
+            b"native SDK control ok\r\n"
+            if os.name == "nt"
+            else b"native SDK control ok\n"
+        )
+        recording = json.loads(
+            execute(
+                [
+                    binary,
+                    "--data-dir",
+                    data,
+                    "run",
+                    "--runtime",
+                    "native",
+                    "--cwd",
+                    source,
+                    "--timeout",
+                    "30",
+                    "--expected-stdout-sha256",
+                    hashlib.sha256(expected).hexdigest(),
+                    "--",
+                    target,
+                ],
+                output,
+            )
+        )
         run = recording["run"]
-        collector_command = run["source"].get("collector_settings", {}).get("command", [])
-        if (not collector_command or not Path(collector_command[0]).resolve().is_relative_to(installed.resolve())
-                or "--lifetime-output" not in collector_command):
-            raise RuntimeError("Installed native recording did not use its bundled lifetime collector")
-        if run["status"] != "completed" or run["correctness"]["passed"] is not True or recording["summary"]["sample_count"] == 0:
-            raise RuntimeError(f"Installed native control did not complete with an automatic profile: {recording}")
+        collector_command = (
+            run["source"].get("collector_settings", {}).get("command", [])
+        )
+        if (
+            not collector_command
+            or not Path(collector_command[0])
+            .resolve()
+            .is_relative_to(installed.resolve())
+            or "--lifetime-output" not in collector_command
+        ):
+            raise RuntimeError(
+                "Installed native recording did not use its bundled lifetime collector"
+            )
+        if (
+            run["status"] != "completed"
+            or run["correctness"]["passed"] is not True
+            or recording["summary"]["sample_count"] == 0
+        ):
+            raise RuntimeError(
+                f"Installed native control did not complete with an automatic profile: {recording}"
+            )
+
         def call(operation, params):
-            return json.loads(execute([binary, "--data-dir", data, "call", operation, json.dumps(params)], output))
+            return json.loads(
+                execute(
+                    [binary, "--data-dir", data, "call", operation, json.dumps(params)],
+                    output,
+                )
+            )
+
         hotspots = call("profiles.hotspots", {"run_id": run["id"], "limit": 1000})
-        hot = next((row for row in hotspots["hotspots"] if "installedNativeHotspot" in row["function"]), None)
+        hot = next(
+            (
+                row
+                for row in hotspots["hotspots"]
+                if "installedNativeHotspot" in row["function"]
+            ),
+            None,
+        )
         if not hot:
-            raise RuntimeError("Installed native profile does not contain its known C function")
-        contexts = paged_records(call, "contexts.query", {"run_id": run["id"]}, ("contexts",))
-        context = next((row for row in contexts if row.get("name") == "installed native context"), None)
-        spans = paged_records(call, "timeline.query", {"run_id": run["id"], "kind": "span", "alignment": "all"}, ("records", "unaligned_records"))
-        span = next((row for row in spans if row.get("name") == "installed native work"), None)
+            raise RuntimeError(
+                "Installed native profile does not contain its known C function"
+            )
+        contexts = paged_records(
+            call, "contexts.query", {"run_id": run["id"]}, ("contexts",)
+        )
+        context = next(
+            (row for row in contexts if row.get("name") == "installed native context"),
+            None,
+        )
+        spans = paged_records(
+            call,
+            "timeline.query",
+            {"run_id": run["id"], "kind": "span", "alignment": "all"},
+            ("records", "unaligned_records"),
+        )
+        span = next(
+            (row for row in spans if row.get("name") == "installed native work"), None
+        )
         if not context or not span or span.get("context_id") != context["id"]:
-            raise RuntimeError("Native SDK context and span did not join the automatic recording")
-        evidence = call("evidence.get", {"run_id": run["id"], "ids": [context["id"], span["id"]]})
+            raise RuntimeError(
+                "Native SDK context and span did not join the automatic recording"
+            )
+        evidence = call(
+            "evidence.get", {"run_id": run["id"], "ids": [context["id"], span["id"]]}
+        )
         if len(evidence["records"]) != 2:
-            raise RuntimeError("Native context/span evidence did not survive query resolution")
-        artifacts = paged_records(call, "artifacts.list", {"run_id": run["id"]}, ("artifacts",))
+            raise RuntimeError(
+                "Native context/span evidence did not survive query resolution"
+            )
+        artifacts = paged_records(
+            call, "artifacts.list", {"run_id": run["id"]}, ("artifacts",)
+        )
         if not any(row["format"] == "hunin-jsonl" for row in artifacts):
             raise RuntimeError("Native SDK raw evidence was not retained")
-        reopened = json.loads(execute([binary, "--data-dir", data, "inspect", run["id"]], output))
+        reopened = json.loads(
+            execute([binary, "--data-dir", data, "inspect", run["id"]], output)
+        )
         if reopened["summary"] != recording["summary"]:
             raise RuntimeError("Combined native/SDK recording changed after reopening")
-        result = {"host": platform.platform(), "architecture": platform.machine(), "platform": manifest["platform"], "run_id": run["id"],
-                  "summary": recording["summary"], "hotspot": hot, "context_id": context["id"], "span_id": span["id"],
-                  "known_control": "The retained C source calls the sampled native function inside its explicit SDK span.",
-                  "limitation": "This control does not infer general per-context CPU ownership or map unrelated thread-ID namespaces."}
+        result = {
+            "host": platform.platform(),
+            "architecture": platform.machine(),
+            "platform": manifest["platform"],
+            "run_id": run["id"],
+            "summary": recording["summary"],
+            "hotspot": hot,
+            "context_id": context["id"],
+            "span_id": span["id"],
+            "known_control": "The retained C source calls the sampled native function inside its explicit SDK span.",
+            "limitation": "This control does not infer general per-context CPU ownership or map unrelated thread-ID namespaces.",
+        }
         (output / "evidence.json").write_text(json.dumps(result, indent=2))
         (output / "run.json").write_text(json.dumps(recording, indent=2))
         return result
     except BaseException as error:
-        (output / "failure.json").write_text(json.dumps({"host": platform.platform(), "error": str(error)}, indent=2))
+        (output / "failure.json").write_text(
+            json.dumps({"host": platform.platform(), "error": str(error)}, indent=2)
+        )
         raise
 
 
