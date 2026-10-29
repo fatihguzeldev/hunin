@@ -1,5 +1,7 @@
 import {
   isHttpFailure,
+  isOperationFailure,
+  type OperationFailure,
   isHttpSuccess,
   validateOperationOutput,
   type OperationInputs,
@@ -29,6 +31,7 @@ export type Operations = {
 };
 
 export class ApiError extends Error {
+  readonly operationFailure?: OperationFailure;
   constructor(
     public code: string,
     message: string,
@@ -36,6 +39,13 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
+    if (
+      details &&
+      typeof details === 'object' &&
+      'operation_error' in details &&
+      isOperationFailure(details.operation_error)
+    )
+      this.operationFailure = details.operation_error;
   }
 }
 

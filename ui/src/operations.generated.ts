@@ -83,6 +83,9 @@ export type McpToolFailure = {
   "text": string;
 }>;
   "isError": true;
+  "_meta"?: {
+  "hunin/operation-error"?: OperationFailure;
+};
 };
 
 export type CapabilityMode = {
@@ -394,6 +397,12 @@ export type Comparison = {
   "limitations": Array<string>;
 };
 
+export type OperationFailure = {
+  "code": "unknown_operation" | "invalid_parameters" | "conflict" | "operation_failed";
+  "operation": string;
+  "message": string;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -623,7 +632,7 @@ export function isReanalysisResult(value: unknown): value is ReanalysisResult {
 }
 
 export function isOperationError(value: unknown): value is OperationError {
-  return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "message") && (typeof value["code"] === "string") && (typeof value["message"] === "string") && (!Object.hasOwn(value, "details") || true));
+  return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "message") && (typeof value["code"] === "string") && (typeof value["message"] === "string") && (!Object.hasOwn(value, "details") || ((!isOutputObject(value["details"]) || (isOutputObject(value["details"]) && (!Object.hasOwn(value["details"], "operation_error") || isOperationFailure(value["details"]["operation_error"])))))));
 }
 
 export function isHttpSuccess(value: unknown): value is HttpSuccess {
@@ -639,7 +648,7 @@ export function isMcpToolSuccess(value: unknown): value is McpToolSuccess {
 }
 
 export function isMcpToolFailure(value: unknown): value is McpToolFailure {
-  return (isOutputObject(value) && Object.hasOwn(value, "content") && Object.hasOwn(value, "isError") && (Array.isArray(value["content"]) && value["content"].every(item => (isOutputObject(item) && Object.hasOwn(item, "type") && Object.hasOwn(item, "text") && (item["type"] === "text") && (typeof item["text"] === "string")))) && (value["isError"] === true));
+  return (isOutputObject(value) && Object.hasOwn(value, "content") && Object.hasOwn(value, "isError") && (Array.isArray(value["content"]) && value["content"].every(item => (isOutputObject(item) && Object.hasOwn(item, "type") && Object.hasOwn(item, "text") && (item["type"] === "text") && (typeof item["text"] === "string")))) && (value["isError"] === true) && (!Object.hasOwn(value, "_meta") || (isOutputObject(value["_meta"]) && (!Object.hasOwn(value["_meta"], "hunin/operation-error") || isOperationFailure(value["_meta"]["hunin/operation-error"])))));
 }
 
 export function isCapabilityMode(value: unknown): value is CapabilityMode {
@@ -764,6 +773,10 @@ export function isComparisonHotspot(value: unknown): value is ComparisonHotspot 
 
 export function isComparison(value: unknown): value is Comparison {
   return (isOutputObject(value) && Object.hasOwn(value, "before") && Object.hasOwn(value, "after") && Object.hasOwn(value, "comparable") && Object.hasOwn(value, "reasons") && Object.hasOwn(value, "metrics") && Object.hasOwn(value, "correctness") && Object.hasOwn(value, "hotspots") && Object.hasOwn(value, "sample_weight_units") && Object.hasOwn(value, "limitations") && isRun(value["before"]) && isRun(value["after"]) && (typeof value["comparable"] === "boolean") && (Array.isArray(value["reasons"]) && value["reasons"].every(item => (typeof item === "string"))) && (Array.isArray(value["metrics"]) && value["metrics"].every(item => isComparisonMetric(item))) && (isOutputObject(value["correctness"]) && Object.hasOwn(value["correctness"], "before") && Object.hasOwn(value["correctness"], "after") && true && true) && (Array.isArray(value["hotspots"]) && value["hotspots"].every(item => isComparisonHotspot(item))) && (isOutputObject(value["sample_weight_units"]) && Object.hasOwn(value["sample_weight_units"], "before") && Object.hasOwn(value["sample_weight_units"], "after") && (Array.isArray(value["sample_weight_units"]["before"]) && value["sample_weight_units"]["before"].every(item => (typeof item === "string"))) && (Array.isArray(value["sample_weight_units"]["after"]) && value["sample_weight_units"]["after"].every(item => (typeof item === "string")))) && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))));
+}
+
+export function isOperationFailure(value: unknown): value is OperationFailure {
+  return (isOutputObject(value) && Object.hasOwn(value, "code") && Object.hasOwn(value, "operation") && Object.hasOwn(value, "message") && ((value["code"] === "unknown_operation" || value["code"] === "invalid_parameters" || value["code"] === "conflict" || value["code"] === "operation_failed") && typeof value["code"] === "string") && (typeof value["operation"] === "string") && (typeof value["message"] === "string") && Object.keys(value).every(key => ["code","operation","message"].includes(key)));
 }
 
 // Every operation result is checked against its declared wire contract.

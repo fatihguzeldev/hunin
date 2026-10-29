@@ -192,7 +192,14 @@
         "message": {
           "type": "string"
         },
-        "details": {}
+        "details": {
+          "description": "Legacy arbitrary JSON remains legal. When supplied, operation_error carries a checked typed-origin failure without request parameters.",
+          "properties": {
+            "operation_error": {
+              "$ref": "#/$defs/OperationFailure"
+            }
+          }
+        }
       },
       "required": ["code", "message"]
     },
@@ -257,6 +264,14 @@
         },
         "isError": {
           "const": true
+        },
+        "_meta": {
+          "type": "object",
+          "properties": {
+            "hunin/operation-error": {
+              "$ref": "#/$defs/OperationFailure"
+            }
+          }
         }
       },
       "required": ["content", "isError"]
@@ -1378,6 +1393,29 @@
         "sample_weight_units",
         "limitations"
       ]
+    },
+    "OperationFailure": {
+      "type": "object",
+      "description": "Machine-readable operation failure from a typed origin. Legacy transport messages remain unchanged; generic operation_failed is the fallback for uncategorized failures.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "unknown_operation",
+            "invalid_parameters",
+            "conflict",
+            "operation_failed"
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["code", "operation", "message"],
+      "additionalProperties": false
     }
   }
 }
