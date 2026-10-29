@@ -101,7 +101,7 @@ impl Operations {
                     .read(|_| Ok(capabilities::discover()))
                     .await
             }
-            "runs.list" | "runs.metadata" | "contexts.query" | "evidence.get"
+            "runs.list" | "runs.metadata" | "runs.removal" | "contexts.query" | "evidence.get"
             | "artifacts.list" | "artifacts.read" | "source.read" | "scenarios.list"
             | "analyses.list" => {
                 let store = store.clone();
@@ -126,18 +126,14 @@ impl Operations {
             ),
             "runs.cancel" => Ok(json!({"run":self.engine.cancel(id()?).await?})),
             "runs.remove" => {
-                if store
-                    .documents("analysis-results")?
-                    .iter()
-                    .any(|r| r["run_id"] == id().unwrap() && r["status"] == "running")
-                {
-                    return Err(errors::Failure::conflict(
-                        "cancel active analyzer executions before removing this recording",
-                    )
-                    .into());
-                }
-                store.remove_run(id()?)?;
-                Ok(json!({"removed":true}))
+                let store = store.clone();
+                let run_id = id()?.to_owned();
+                self.aggregate_work
+                    .run(move || {
+                        store.remove_run(&run_id)?;
+                        Ok(json!({"removed":true}))
+                    })
+                    .await
             }
             "profiles.hotspots" | "profiles.tree" | "timeline.query" | "resources.query" => {
                 let store = store.clone();

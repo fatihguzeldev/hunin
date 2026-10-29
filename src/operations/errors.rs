@@ -75,6 +75,7 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         Some(Kind::ReadAbandoned) => "request_abandoned",
         Some(Kind::ReadDeadline) => "request_deadline_exceeded",
         None if capacity.is_some() => "capacity_exceeded",
+        None if error.is::<crate::storage::ActiveAnalysisRemoval>() => "conflict",
         None if budget.is_some() => "work_budget_exceeded",
         None => "operation_failed",
     };

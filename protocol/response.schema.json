@@ -1848,6 +1848,17 @@
       },
       "required": ["run"],
       "additionalProperties": false
+    },
+    "RunRemoval": {
+      "type": "object",
+      "properties": {
+        "receipt": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
+      },
+      "required": ["receipt"],
+      "additionalProperties": false
     }
   }
 }

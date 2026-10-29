@@ -20,6 +20,7 @@ mod bootstrap;
 pub use bootstrap::SCHEMA_VERSION;
 mod inspection;
 mod maintenance;
+pub(crate) use maintenance::ActiveAnalysisRemoval;
 mod observations;
 pub use inspection::{
     InspectionArea, InspectionFinding, InspectionLimit, InspectionLimits, InspectionPathKind,
@@ -319,8 +320,7 @@ impl Store {
         let existing = selected.keys().cloned().collect();
         ingestion::validate_ids(run_id, records, existing)?;
         let proposed = ingestion::links(records);
-        let mut dependencies =
-            publication::validate_relations(&proposed, &selected)?;
+        let mut dependencies = publication::validate_relations(&proposed, &selected)?;
         if let Some(metadata) = metadata {
             dependencies.extend(metadata.declared_inputs()?);
         }

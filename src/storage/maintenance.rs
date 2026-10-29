@@ -14,6 +14,15 @@ const CANDIDATE_LIMIT: usize = 4096;
 const PATH_LIMIT: usize = 1024;
 const RECEIPT_BYTE_LIMIT: usize = 1024 * 1024;
 
+#[derive(Debug)]
+pub(crate) struct ActiveAnalysisRemoval;
+impl std::fmt::Display for ActiveAnalysisRemoval {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("cancel active analyzer executions before removing this recording")
+    }
+}
+impl std::error::Error for ActiveAnalysisRemoval {}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
@@ -112,8 +121,9 @@ impl Store {
             run.status != RunStatus::Running,
             "cancel a running recording before removing it"
         );
-        ensure!(tx.query_row("SELECT COUNT(*) FROM documents WHERE owner_run_id=?1 AND json_extract(payload,'$.status')='running'", [run_id], |r| r.get::<_,u64>(0))? == 0,
-            "cancel active analyzer executions before removing this recording");
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM documents WHERE owner_run_id=?1 AND json_extract(payload,'$.status')='running')", [run_id], |r| r.get::<_,bool>(0))? {
+            return Err(ActiveAnalysisRemoval.into());
+        }
         let hashes = tx
             .prepare(
                 "SELECT DISTINCT sha256 FROM artifacts WHERE run_id=?1 ORDER BY sha256 LIMIT ?2",

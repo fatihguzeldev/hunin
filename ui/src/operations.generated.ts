@@ -483,6 +483,10 @@ export type RunMetadata = {
   "result_identity_diagnostic"?: string;
 };
 
+export type RunRemoval = {
+  "receipt": Record<string, unknown> | null;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -519,6 +523,9 @@ export type OperationInputs = {
   "run_id": string;
 };
   "runs.remove": {
+  "run_id": string;
+};
+  "runs.removal": {
   "run_id": string;
 };
   "profiles.hotspots": {
@@ -656,6 +663,7 @@ export type OperationOutputs = {
   "runs.remove": {
   "removed": true;
 };
+  "runs.removal": RunRemoval;
   "profiles.hotspots": ProfileHotspots;
   "profiles.tree": ProfileTree;
   "timeline.query": Timeline;
@@ -896,6 +904,10 @@ export function isRunMetadata(value: unknown): value is RunMetadata {
   return (isOutputObject(value) && Object.hasOwn(value, "run") && isRun(value["run"]) && (!Object.hasOwn(value, "result_identity") || (typeof value["result_identity"] === "string")) && (!Object.hasOwn(value, "result_identity_diagnostic") || (typeof value["result_identity_diagnostic"] === "string")) && Object.keys(value).every(key => ["run","result_identity","result_identity_diagnostic"].includes(key)));
 }
 
+export function isRunRemoval(value: unknown): value is RunRemoval {
+  return (isOutputObject(value) && Object.hasOwn(value, "receipt") && ((isOutputObject(value["receipt"])) || (value["receipt"] === null)) && Object.keys(value).every(key => ["receipt"].includes(key)));
+}
+
 // Every operation result is checked against its declared wire contract.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
@@ -922,6 +934,9 @@ export function validateOperationOutput(name: string, value: unknown): void {
       break;
     case "runs.remove":
       if (!(isOutputObject(value) && Object.hasOwn(value, "removed") && (value["removed"] === true))) throw new Error("Hunin returned an invalid runs.remove result.");
+      break;
+    case "runs.removal":
+      if (!isRunRemoval(value)) throw new Error("Hunin returned an invalid runs.removal result.");
       break;
     case "profiles.hotspots":
       if (!isProfileHotspots(value)) throw new Error("Hunin returned an invalid profiles.hotspots result.");

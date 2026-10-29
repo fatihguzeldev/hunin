@@ -43,6 +43,7 @@ pub(super) fn query(
                 Err(error) => return Err(error),
             }
         }
+        "runs.removal" => json!({"receipt":store.removal_receipt(id()?)?}),
         "contexts.query" => {
             let interest = interest.clone();
             let mut selected = store
