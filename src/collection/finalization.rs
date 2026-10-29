@@ -97,6 +97,15 @@ impl CapturePlan {
 
     pub fn finalize(&self, request: &CaptureRequest) -> Result<RawCaptureBundle> {
         let artifacts = capture_artifacts(&request.artifact_dir)?;
+        self.finalize_inventory(request, artifacts)
+    }
+
+    /// Finalize exactly the inventory already selected and retained by the host.
+    pub(crate) fn finalize_inventory(
+        &self,
+        request: &CaptureRequest,
+        artifacts: Vec<CaptureArtifact>,
+    ) -> Result<RawCaptureBundle> {
         let files = artifacts
             .iter()
             .map(|artifact| artifact.path.clone())
@@ -189,7 +198,11 @@ pub fn capture_artifacts(directory: &Path) -> Result<Vec<CaptureArtifact>> {
     let mut files = Vec::new();
     walk_files(directory, &mut files)?;
     files.sort();
-    Ok(files
+    Ok(artifacts_from_paths(files))
+}
+
+pub(crate) fn artifacts_from_paths(files: Vec<PathBuf>) -> Vec<CaptureArtifact> {
+    files
         .into_iter()
         .map(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
@@ -213,7 +226,7 @@ pub fn capture_artifacts(directory: &Path) -> Result<Vec<CaptureArtifact>> {
                 .to_owned();
             CaptureArtifact { path, format }
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -269,6 +282,25 @@ mod tests {
         assert!(bundle.completion.expected_producers.is_none());
         assert!(bundle.completion.observed_producers.is_none());
         assert!(!bundle.completion.limitations.is_empty());
+    }
+
+    #[test]
+    fn supplied_retained_inventory_is_not_silently_rescanned() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path().join("cpu.cpuprofile");
+        fs::write(&profile, b"opaque profiler bytes").unwrap();
+        let selected = capture_artifacts(directory.path()).unwrap();
+        fs::write(
+            directory.path().join("later.cpuprofile"),
+            b"unretained later bytes",
+        )
+        .unwrap();
+        let bundle = plan(json!({"kind":"profiles", "format":"v8-cpuprofile"}))
+            .finalize_inventory(&request(directory.path()), selected)
+            .unwrap();
+        assert_eq!(bundle.profiles.len(), 1);
+        assert_eq!(bundle.profiles[0].path, profile);
+        assert_eq!(bundle.artifacts.len(), 1);
     }
 
     #[test]

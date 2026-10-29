@@ -21,6 +21,16 @@ async fn node_profile_delivery_keeps_unenumerated_producers_unknown() {
     assert_eq!(run.status, "completed", "{:?}", run.diagnostics);
     assert_eq!(run.source["collection_completion"]["state"], "complete");
     assert_eq!(
+        run.source["raw_retention"]["name"],
+        "capture-raw-retention-v1"
+    );
+    assert_eq!(run.source["raw_retention"]["complete"], true);
+    assert_eq!(run.source["raw_retention"]["inventory_complete"], true);
+    assert_eq!(
+        run.source["raw_retention"]["source_read_bytes"],
+        run.source["raw_retention"]["retained_bytes"]
+    );
+    assert_eq!(
         run.source["collection_completion"]["scope"],
         "declared_profile_artifacts"
     );

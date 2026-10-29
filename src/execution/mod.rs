@@ -8,6 +8,7 @@ pub(crate) mod ownership;
 pub(crate) use crate::host::process;
 mod process_identity;
 mod resources;
+mod retention;
 mod sdk;
 
 use crate::{

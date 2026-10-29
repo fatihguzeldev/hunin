@@ -6,6 +6,7 @@ mod python;
 mod selection;
 mod settings;
 use anyhow::{Result, bail};
+pub(crate) use finalization::artifacts_from_paths;
 pub use finalization::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
     RawCaptureBundle, RawProfile, capture_artifacts,

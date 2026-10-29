@@ -1,6 +1,7 @@
 //! Synchronous correctness, raw retention, normalization and SDK publication.
 use super::{
-    CaptureRequest, Engine, Run, RunStatus, collection, correctness, native, resources, sdk,
+    CaptureRequest, Engine, Run, RunStatus, collection, correctness, native, resources, retention,
+    sdk,
 };
 use crate::model::now_us;
 use anyhow::Result;
@@ -21,10 +22,21 @@ pub(super) struct Capture {
 impl Engine {
     pub(super) fn finish(
         &self,
+        run: Run,
+        target: Target,
+        capture: Capture,
+        metrics: resources::Retention,
+    ) -> Result<()> {
+        self.finish_with_raw_limits(run, target, capture, metrics, retention::Limits::default())
+    }
+
+    fn finish_with_raw_limits(
+        &self,
         mut run: Run,
         target: Target,
         capture: Capture,
         metrics: resources::Retention,
+        raw_limits: retention::Limits,
     ) -> Result<()> {
         let Capture {
             request: capture,
@@ -33,7 +45,6 @@ impl Engine {
         } = capture;
         let directory = capture.artifact_dir.clone();
         let stdout = directory.join("stdout.txt");
-        let stderr = directory.join("stderr.txt");
         let native_collection = native::handles_runtime(&run.runtime);
         let (metrics, retention) = metrics.finish();
         if retention.truncated {
@@ -96,31 +107,47 @@ impl Engine {
             run.diagnostics
                 .push("recording timeout; target process group terminated".into());
         }
-        self.store.add_artifact(&run.id, &stdout, "stdout")?;
-        self.store.add_artifact(&run.id, &stderr, "stderr")?;
-        preserve_capture(&self.store, &run.id, &directory)?;
+        let preserved = retention::preserve(&self.store, &run.id, &directory, raw_limits);
+        run.source["raw_retention"] = serde_json::to_value(&preserved.report)?;
+        let mut raw_finalizing = run.clone();
+        raw_finalizing.status = RunStatus::Running;
+        raw_finalizing.finished_at_us = None;
+        self.store.save_run(&raw_finalizing)?;
         if !metrics.is_empty() {
             self.store
                 .accept(&run.id, "process-resources-v1", &metrics)?;
         }
+        if !preserved.report.complete {
+            run.diagnostics.push("Raw capture retention is incomplete; retention did not remove original capture files, and complete earlier artifact references remain available. Automatic profile normalization and SDK ingestion were skipped; see raw_retention".into());
+            run.source["collection_status"] = json!("failed");
+            run.source["sdk_ingestion"] = json!({"status":"skipped","reason":"raw_retention_incomplete","completion":"unknown","loss":"unknown"});
+            if run.status == RunStatus::Completed {
+                run.status = RunStatus::Failed;
+            }
+            run.finished_at_us = Some(now_us());
+            self.store.save_run(&run)?;
+            return Ok(());
+        }
         if run.runtime != "none" {
-            let profiles = plan.finalize(&capture).and_then(|mut bundle| {
-                if let Some(diagnostic) = &collector_start_failure {
-                    bundle.completion.state = collection::CompletionState::Incomplete;
-                    bundle.completion.diagnostics.push(diagnostic.clone());
-                }
-                run.source["collection_completion"] = serde_json::to_value(&bundle.completion)?;
-                bundle.completion.ensure_complete()?;
-                // Preserve the previous all-decode-before-publication behavior.
-                // Raw retention above also survives incomplete or invalid profiles.
-                bundle
-                    .profiles
-                    .iter()
-                    .map(|profile| {
-                        crate::importers::import(&profile.path, &profile.format, &run.id)
-                    })
-                    .collect::<Result<Vec<_>>>()
-            });
+            let profiles = plan
+                .finalize_inventory(&capture, preserved.artifacts)
+                .and_then(|mut bundle| {
+                    if let Some(diagnostic) = &collector_start_failure {
+                        bundle.completion.state = collection::CompletionState::Incomplete;
+                        bundle.completion.diagnostics.push(diagnostic.clone());
+                    }
+                    run.source["collection_completion"] = serde_json::to_value(&bundle.completion)?;
+                    bundle.completion.ensure_complete()?;
+                    // Preserve the previous all-decode-before-publication behavior.
+                    // Raw retention above also survives incomplete or invalid profiles.
+                    bundle
+                        .profiles
+                        .iter()
+                        .map(|profile| {
+                            crate::importers::import(&profile.path, &profile.format, &run.id)
+                        })
+                        .collect::<Result<Vec<_>>>()
+                });
             match profiles {
                 Ok(profiles) => {
                     for profile in profiles {
@@ -163,13 +190,5 @@ impl Engine {
     }
 }
 
-fn preserve_capture(
-    store: &crate::storage::Store,
-    run_id: &str,
-    path: &std::path::Path,
-) -> Result<()> {
-    for artifact in collection::capture_artifacts(path)? {
-        store.add_artifact(run_id, &artifact.path, &artifact.format)?;
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod tests;

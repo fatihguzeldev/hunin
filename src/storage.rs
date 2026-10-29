@@ -15,6 +15,7 @@ use std::{
 };
 
 mod artifacts;
+pub(crate) use artifacts::ArtifactByteLimit;
 mod bootstrap;
 pub use bootstrap::SCHEMA_VERSION;
 mod inspection;

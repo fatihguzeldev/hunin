@@ -8,6 +8,118 @@ fn store(directory: &Path) -> Store {
 }
 
 #[test]
+fn controlled_staging_publishes_exact_bytes_and_refuses_a_grown_input() {
+    let root = tempfile::tempdir().unwrap();
+    let inputs = tempfile::tempdir().unwrap();
+    let store = store(root.path());
+    let path = inputs.path().join("raw.bin");
+    fs::write(&path, b"exact").unwrap();
+    let mut read = 0;
+    let artifact = store
+        .add_artifact_controlled("raw-budget", &path, "raw", 5, &mut read, || Ok(()))
+        .unwrap();
+    assert_eq!(read, 5);
+    assert_eq!(
+        fs::read(store.artifact_path("raw-budget", &artifact.id).unwrap()).unwrap(),
+        b"exact"
+    );
+    let mut grew = false;
+    let error = store
+        .add_artifact_controlled("raw-budget", &path, "raw", 5, &mut read, || {
+            let staged = fs::read_dir(root.path().join("artifacts"))?
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(".pending-"));
+            if !grew && staged {
+                fs::write(&path, vec![7; 1000])?;
+                grew = true;
+            }
+            Ok(())
+        })
+        .expect_err("grown source must not publish a prefix");
+    assert!(error.to_string().contains("byte limit"), "{error:#}");
+    assert_eq!(read, 11, "exact source plus grown limit+one sentinel");
+    assert_eq!(store.artifacts("raw-budget").unwrap().len(), 1);
+    assert!(
+        !fs::read_dir(root.path().join("artifacts"))
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".pending-"))
+    );
+}
+
+#[test]
+fn checkpoint_failure_after_a_real_chunk_cleans_partial_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let inputs = tempfile::tempdir().unwrap();
+    let store = store(root.path());
+    let path = inputs.path().join("raw.bin");
+    fs::write(&path, vec![9; 150_000]).unwrap();
+    let mut read = 0;
+    let mut saw_partial = false;
+    let error = store
+        .add_artifact_controlled("raw-budget", &path, "raw", 200_000, &mut read, || {
+            let partial = fs::read_dir(root.path().join("artifacts"))?
+                .filter_map(Result::ok)
+                .any(|entry| entry.metadata().is_ok_and(|metadata| metadata.len() > 0));
+            if partial {
+                saw_partial = true;
+                bail!("controlled deadline elapsed");
+            }
+            Ok(())
+        })
+        .expect_err("deadline checkpoint must prevent reference publication");
+    assert!(saw_partial);
+    assert!(error.to_string().contains("deadline"));
+    assert!(read > 0 && read < 150_000);
+    assert!(store.artifacts("raw-budget").unwrap().is_empty());
+    assert_eq!(
+        fs::read_dir(root.path().join("artifacts")).unwrap().count(),
+        0
+    );
+    assert_eq!(fs::metadata(path).unwrap().len(), 150_000);
+}
+
+#[test]
+fn controlled_staging_refuses_static_nonregular_sources_before_reading() {
+    let root = tempfile::tempdir().unwrap();
+    let inputs = tempfile::tempdir().unwrap();
+    let store = store(root.path());
+    let mut read = 0;
+    assert!(
+        store
+            .add_artifact_controlled(
+                "raw-budget",
+                inputs.path(),
+                "raw",
+                100,
+                &mut read,
+                || Ok(())
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("regular file")
+    );
+    assert_eq!(read, 0);
+    #[cfg(unix)]
+    {
+        let file = inputs.path().join("file");
+        fs::write(&file, b"bytes").unwrap();
+        let alias = inputs.path().join("alias");
+        std::os::unix::fs::symlink(file, &alias).unwrap();
+        assert!(
+            store
+                .add_artifact_controlled("raw-budget", &alias, "raw", 100, &mut read, || Ok(()))
+                .is_err()
+        );
+        assert_eq!(read, 0);
+    }
+    assert!(store.artifacts("raw-budget").unwrap().is_empty());
+}
+
+#[test]
 fn artifact_path_refuses_corrupt_retained_digest_metadata() {
     let root = tempfile::tempdir().unwrap();
     let store = store(root.path());
