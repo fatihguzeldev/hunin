@@ -29,6 +29,11 @@ fn validate_transport(name: &str, result: &Value) {
 fn published_output_schemas_resolve_without_external_files_or_network() {
     for operation in catalog() {
         if let Some(schema) = operation.get("outputSchema") {
+            assert_eq!(
+                schema["type"], "object",
+                "{} must satisfy the negotiated MCP Tool outputSchema shape",
+                operation["name"]
+            );
             jsonschema::validator_for(schema)
                 .unwrap_or_else(|error| panic!("{}: {error}", operation["name"]));
         }

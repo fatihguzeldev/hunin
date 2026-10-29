@@ -32,6 +32,18 @@ pub(super) fn bundle(schema: &Value, definitions: &Map<String, Value>) -> Result
         localize(&mut definition, &mut pending)?;
         included.insert(name, definition);
     }
+    if schema.get("type").is_none() {
+        let root = schema["$ref"]
+            .as_str()
+            .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            .and_then(|name| included.get(name));
+        if let Some(root) = root.filter(|root| root["type"] == "object") {
+            schema = root.clone();
+        }
+    }
+    if schema["type"] != "object" {
+        bail!("MCP operation output schemas must declare an object root");
+    }
     if !included.is_empty() {
         schema["$defs"] = Value::Object(included);
     }
