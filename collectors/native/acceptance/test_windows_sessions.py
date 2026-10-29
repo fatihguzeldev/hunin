@@ -1,15 +1,11 @@
 import copy
-import importlib.util
 import json
 from pathlib import Path, PureWindowsPath
 import unittest
 
-HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location(
-    "windows_sessions", HERE / "verify_windows_sessions.py"
-)
-sessions = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sessions)
+from . import windows_sessions as sessions
+
+HERE = Path(__file__).resolve().parents[1]
 
 
 class WindowsSessionEvidenceTests(unittest.TestCase):
