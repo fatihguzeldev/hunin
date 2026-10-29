@@ -31,6 +31,8 @@ fn build_info_uses_compiled_contracts_without_assets_or_store_access() {
     assert_eq!(info["schema_version"], 1);
     assert_eq!(info["app"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(info["app"]["source_revision"], Value::Null);
+    assert_eq!(info["app"]["target"]["os"], std::env::consts::OS);
+    assert_eq!(info["app"]["target"]["arch"], std::env::consts::ARCH);
     assert_eq!(
         info["storage"]["maximum_schema_version"],
         hunin::storage::SCHEMA_VERSION

@@ -22,6 +22,7 @@ pub fn build_info() -> Value {
         "app":{
             "name":env!("CARGO_PKG_NAME"),
             "version":env!("CARGO_PKG_VERSION"),
+            "target":{"os":std::env::consts::OS,"arch":std::env::consts::ARCH},
             // The checkout used by a later packager cannot establish which
             // source revision produced these executable bytes.
             "source_revision":null,
