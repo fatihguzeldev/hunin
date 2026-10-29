@@ -50,7 +50,7 @@ fn permission() -> Value {
             };
             return json!({"state":"basic_permission_observed","probe":"inactive self-process perf software CPU counter; complete samply recording remains unverified"});
         }
-        return json!({"state":"permission_unavailable","error":std::io::Error::last_os_error().to_string(),"perf_event_paranoid":std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid").ok().map(|s|s.trim().to_owned())});
+        json!({"state":"permission_unavailable","error":std::io::Error::last_os_error().to_string(),"perf_event_paranoid":std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid").ok().map(|s|s.trim().to_owned())})
     }
     #[cfg(windows)]
     {
