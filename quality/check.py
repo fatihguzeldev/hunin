@@ -25,6 +25,7 @@ SUFFIXES = {
 EVIDENCE_SOURCES = (
     "src/importers/fixtures/",
     "src/collection/fixtures/",
+    "src/collection/go/tests/fixtures/",
     "collectors/python/fixtures/",
     "collectors/native/fixtures/",
     "tests/workloads/",
@@ -41,6 +42,7 @@ def inventory(group):
         name
         for name in files
         if Path(name).suffix in SUFFIXES[group]
+        and (ROOT / name).is_file()
         and not name.startswith(EVIDENCE_SOURCES)
         and not name.endswith(".generated.ts")
     ]
@@ -112,7 +114,7 @@ def check(group):
         formatted = run(["gofmt", "-l", *files], capture=True)
         print(formatted.stdout, end="")
         results = [formatted.returncode or bool(formatted.stdout.strip())]
-        for module in ("sdk/go", "collectors/go/fixtures"):
+        for module in ("sdk/go", "src/collection/go/tests/fixtures"):
             results.append(run(["go", "vet", "./..."], ROOT / module).returncode)
         results.append(
             run(["go", "vet", "../conformance/go.go"], ROOT / "sdk/go").returncode
