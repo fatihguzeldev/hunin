@@ -43,5 +43,5 @@ export function runStatusTone(status: string): string {
     canceled: 'warn',
     running: 'warn',
   };
-  return tones[status] ?? '';
+  return Object.hasOwn(tones, status) ? tones[status] : '';
 }

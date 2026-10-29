@@ -313,6 +313,9 @@ test('run presentation reads known metadata safely without changing retained val
   );
   assert.equal(runStatusTone('completed'), 'good');
   assert.equal(runStatusTone('archived-by-extension'), '');
+  for (const status of ['constructor', '__proto__', 'toString']) {
+    assert.equal(runStatusTone(status), '');
+  }
 });
 
 test('transport rejects malformed error fields instead of manufacturing an ApiError', async () => {
