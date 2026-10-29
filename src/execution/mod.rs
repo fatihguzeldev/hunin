@@ -79,11 +79,22 @@ impl Engine {
     /// its clones. Separate Engines are independent; this is not a memory or
     /// cross-process/store quota.
     pub fn with_admission_limit(store: Store, maximum_in_flight: usize) -> Result<Self> {
+        Self::initialize(store, maximum_in_flight, false)
+    }
+
+    pub(crate) fn try_new(store: Store) -> Result<Self> {
+        Self::initialize(store, 4, true)
+    }
+
+    fn initialize(store: Store, maximum_in_flight: usize, strict_recovery: bool) -> Result<Self> {
         anyhow::ensure!(
             maximum_in_flight > 0 && maximum_in_flight <= Semaphore::MAX_PERMITS,
             "recording admission limit must be positive and supported by the semaphore"
         );
         if let Err(error) = ownership::recover_abandoned(&store) {
+            if strict_recovery {
+                return Err(error.context("recording owner recovery failed"));
+            }
             eprintln!("recording owner recovery failed: {error:#}");
         }
         Ok(Self {

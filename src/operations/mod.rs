@@ -19,6 +19,16 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::OnceLock};
 
+/// Project a typed operation failure without changing a transport's default output.
+pub fn describe_failure(operation: &str, error: &anyhow::Error) -> Value {
+    errors::operation_failure(operation, error)
+}
+
+/// Transport-owned parameter decoding shares the operation validation origin.
+pub fn invalid_parameters_error(message: impl std::fmt::Display) -> anyhow::Error {
+    errors::Failure::invalid_parameters(message).into()
+}
+
 #[derive(Clone)]
 pub struct Operations {
     pub engine: Engine,
@@ -50,8 +60,16 @@ pub fn catalog() -> &'static Vec<Value> {
 
 impl Operations {
     pub fn new(store: Store) -> Self {
+        Self::from_engine(Engine::new(store))
+    }
+    /// Return startup recovery failures to machine transports instead of logging.
+    pub fn try_new(store: Store) -> Result<Self> {
+        Engine::try_new(store).map(Self::from_engine)
+    }
+    fn from_engine(engine: Engine) -> Self {
+        let store = engine.store().clone();
         Self {
-            engine: Engine::new(store.clone()),
+            engine,
             analyses: crate::analysis::Engine::new(store),
             aggregate_work: workers::WorkPool::new("operations_family_aggregation", 2),
             metadata_work: workers::WorkPool::new("operations_family_metadata", 8),

@@ -58,6 +58,9 @@ enum Command {
         run_id: Option<String>,
     },
     Call {
+        /// Emit one shared operation error JSON object to stderr on failure.
+        #[arg(long)]
+        json_errors: bool,
         operation: String,
         #[arg(default_value = "{}")]
         params: String,
@@ -82,6 +85,28 @@ fn parse_environment(value: &str) -> std::result::Result<(String, String), Strin
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let machine_operation = match &cli.command {
+        Command::Call {
+            operation,
+            json_errors: true,
+            ..
+        } => Some(operation.clone()),
+        _ => None,
+    };
+    match run_cli(cli, machine_operation.is_some()).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(operation) = machine_operation {
+                let failure = hunin::operations::describe_failure(&operation, &error);
+                eprintln!("{}", serde_json::to_string(&failure)?);
+                std::process::exit(1);
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
     if matches!(cli.command, Command::BuildInfo) {
         println!(
             "{}",
@@ -94,7 +119,12 @@ async fn main() -> Result<()> {
             .unwrap_or_else(std::env::temp_dir)
             .join("hunin")
     });
-    let operations = Operations::new(Store::open(&root)?);
+    let store = Store::open(&root)?;
+    let operations = if machine_errors {
+        Operations::try_new(store)?
+    } else {
+        Operations::new(store)
+    };
     let value = match cli.command {
         Command::BuildInfo => unreachable!("build-info returns before opening a store"),
         Command::Capabilities => operations.call("capabilities", json!({})).await?,
@@ -155,14 +185,21 @@ async fn main() -> Result<()> {
             }
             operations.call("recordings.import", params).await?
         }
-        Command::Call { operation, params } => {
-            let mut result = operations
-                .call(
-                    &operation,
-                    serde_json::from_str::<Value>(&params)
-                        .context("parameters must be a JSON object")?,
-                )
-                .await?;
+        Command::Call {
+            operation,
+            params,
+            json_errors,
+        } => {
+            let parameters = serde_json::from_str::<Value>(&params)
+                .map_err(|error| {
+                    if json_errors {
+                        hunin::operations::invalid_parameters_error(error)
+                    } else {
+                        anyhow::Error::new(error)
+                    }
+                })
+                .context("parameters must be a JSON object")?;
+            let mut result = operations.call(&operation, parameters).await?;
             if matches!(operation.as_str(), "runs.start" | "scenarios.run")
                 && result["run"]["status"] == "running"
             {
