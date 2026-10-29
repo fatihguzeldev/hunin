@@ -105,28 +105,42 @@ impl Engine {
                 engine.store.document("analysis-results", &query_id)
             })
             .await?;
-            if document["status"] != "running" {
+            if let Some(document) = self.wait_iteration(id, document).await? {
                 return Ok(document);
-            }
-            if !self.active.lock().await.contains_key(id) {
-                if document["owner"]["pid"].as_u64() == Some(std::process::id() as u64)
-                    && document["owner"]["instance_id"] == self.owner.instance_id
-                {
-                    bail!(
-                        "analysis task ended without a terminal result; inspect retained evidence"
-                    );
-                }
-                if document["deadline_us"]
-                    .as_u64()
-                    .is_none_or(|deadline| now_us() > deadline.saturating_add(10_000_000))
-                {
-                    bail!(
-                        "foreign analysis owner is live or unresolved but its bounded wait expired; inspect or request cancellation through that service"
-                    );
-                }
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+    async fn wait_iteration(&self, id: &str, document: Value) -> Result<Option<Value>> {
+        if document["status"] != "running" {
+            return Ok(Some(document));
+        }
+        if !self.active.lock().await.contains_key(id) {
+            // Completion commits its terminal document before removing local
+            // ownership. The first read may precede that commit, so absence
+            // must be followed by a fresh authoritative read before deciding
+            // that an owned task disappeared without a terminal result.
+            let store = self.store.clone();
+            let query_id = id.to_owned();
+            let document = blocking(move || store.document("analysis-results", &query_id)).await?;
+            if document["status"] != "running" {
+                return Ok(Some(document));
+            }
+            if document["owner"]["pid"].as_u64() == Some(std::process::id() as u64)
+                && document["owner"]["instance_id"] == self.owner.instance_id
+            {
+                bail!("analysis task ended without a terminal result; inspect retained evidence");
+            }
+            if document["deadline_us"]
+                .as_u64()
+                .is_none_or(|deadline| now_us() > deadline.saturating_add(10_000_000))
+            {
+                bail!(
+                    "foreign analysis owner is live or unresolved but its bounded wait expired; inspect or request cancellation through that service"
+                );
+            }
+        }
+        Ok(None)
     }
     pub async fn shutdown(&self) -> Result<()> {
         self.closing
@@ -156,3 +170,7 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;
