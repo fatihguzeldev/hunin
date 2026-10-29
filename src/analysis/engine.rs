@@ -66,7 +66,7 @@ impl Engine {
         let check = control.clone();
         let source = blocking(move || {
             check.check()?;
-            let source = package::verify(&package)?;
+            let source = package::verify(&package, || check.check())?;
             check.check()?;
             Ok(source)
         })
@@ -145,7 +145,7 @@ impl Engine {
         let check = control.clone();
         let verified = blocking(move || {
             check.check()?;
-            let source = package::verify(&package)?;
+            let source = package::verify(&package, || check.check())?;
             check.check()?;
             Ok(source)
         })
@@ -280,7 +280,18 @@ fn validate_output(
     control: &process::Control,
 ) -> Result<Vec<Value>> {
     control.check()?;
-    let text = fs::read_to_string(output).context("analyzer output must be UTF-8 JSONL")?;
+    let bytes =
+        super::files::read(output, process::OUTPUT_LIMIT, || control.check()).map_err(|error| {
+            if error
+                .downcast_ref::<super::files::ByteLimitExceeded>()
+                .is_some()
+            {
+                error.context("analyzer output exceeds the 16 MiB output limit")
+            } else {
+                error
+            }
+        })?;
+    let text = String::from_utf8(bytes).context("analyzer output must be UTF-8 JSONL")?;
     control.check()?;
     let inputs = &input.record_ids;
     let mut records = Vec::new();
@@ -319,4 +330,37 @@ fn validate_output(
     }
     control.check()?;
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_validation_checks_actual_capture_bytes_before_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("stdout.jsonl");
+        fs::File::create(&output)
+            .unwrap()
+            .set_len(process::OUTPUT_LIMIT + 1)
+            .unwrap();
+        let (_sender, cancellation) = watch::channel(false);
+        let control = process::Control::new(
+            cancellation,
+            Instant::now() + std::time::Duration::from_secs(30),
+        );
+        let input = Input {
+            bytes: vec![],
+            fingerprint: String::new(),
+            run_id: "fixture".into(),
+            result_ids: vec![],
+            record_ids: Default::default(),
+        };
+        let error = validate_output(&json!({}), &input, &output, &control).unwrap_err();
+        assert!(format!("{error:#}").contains("16 MiB"));
+        assert_eq!(
+            fs::metadata(output).unwrap().len(),
+            process::OUTPUT_LIMIT + 1
+        );
+    }
 }

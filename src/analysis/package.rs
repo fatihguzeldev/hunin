@@ -1,3 +1,4 @@
+use super::files;
 use crate::storage::Store;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -10,6 +11,27 @@ use std::{
 
 const MAX_FILES: usize = 2000;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn source_read_error(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<files::ByteLimitExceeded>().is_some() {
+        error.context(
+            "analyzer package exceeds the 64 MiB source limit; declare only required files",
+        )
+    } else {
+        error
+    }
+}
+
+fn source_file(source: &Path, path: &str) -> Result<PathBuf> {
+    relative(Path::new(path))?;
+    let target = source.join(path);
+    if !target.canonicalize()?.starts_with(source)
+        || fs::symlink_metadata(&target)?.file_type().is_symlink()
+    {
+        bail!("managed analyzer package changed; register its new version before reuse: {path}");
+    }
+    Ok(target)
+}
 
 pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -114,11 +136,8 @@ fn collect(
         if files.len() >= MAX_FILES {
             bail!("analyzer package exceeds {MAX_FILES} files; declare only the required files");
         }
-        *total += metadata.len();
-        if *total > MAX_BYTES {
-            bail!("analyzer package exceeds 64 MiB; declare only the required files");
-        }
-        let bytes = fs::read(&full)?;
+        let bytes = files::read(&full, MAX_BYTES - *total, || Ok(())).map_err(source_read_error)?;
+        *total += bytes.len() as u64;
         let target = destination.join(relative);
         fs::create_dir_all(target.parent().context("package file has no parent")?)?;
         fs::write(&target, &bytes)?;
@@ -166,7 +185,7 @@ pub fn register(store: &Store, params: &Value) -> Result<Value> {
         .context("declared applicability requirements are required")?;
     super::applicability::validate_declaration(required)?;
     let original_executable = executable(&command[0], &cwd)?;
-    let executable_sha256 = digest(&fs::read(&original_executable)?);
+    let executable_sha256 = files::hash(&original_executable, || Ok(()))?;
     let executable_is_packaged = original_executable.starts_with(&cwd);
     for (index, argument) in command.iter_mut().enumerate() {
         let path = PathBuf::from(&*argument);
@@ -232,22 +251,31 @@ pub fn register(store: &Store, params: &Value) -> Result<Value> {
     }
     result
 }
-pub fn verify(analysis: &Value) -> Result<PathBuf> {
+pub(super) fn verify(
+    analysis: &Value,
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    checkpoint()?;
     let source = PathBuf::from(
         analysis["package_dir"]
             .as_str()
             .context("managed package path missing")?,
     )
     .join("source");
-    for (path, identity) in analysis["files"]
+    let entries = analysis["files"]
         .as_object()
-        .context("package file manifest missing")?
-    {
-        let target = source.join(path);
-        if !target.canonicalize()?.starts_with(&source)
-            || fs::symlink_metadata(&target)?.file_type().is_symlink()
-            || digest(&fs::read(&target)?) != identity["sha256"]
-        {
+        .context("package file manifest missing")?;
+    if entries.len() > MAX_FILES {
+        bail!("analyzer package exceeds {MAX_FILES} files");
+    }
+    let mut total = 0;
+    for (path, identity) in entries {
+        checkpoint()?;
+        let target = source_file(&source, path)?;
+        let (sha256, bytes) = files::hash_bounded(&target, MAX_BYTES - total, &mut checkpoint)
+            .map_err(source_read_error)?;
+        total += bytes;
+        if sha256 != identity["sha256"] {
             bail!(
                 "managed analyzer package changed; register its new version before reuse: {path}"
             );
@@ -261,11 +289,13 @@ pub fn verify(analysis: &Value) -> Result<PathBuf> {
     } else {
         PathBuf::from(program)
     };
-    if digest(&fs::read(program).context("analyzer executable prerequisite unavailable")?)
+    if files::hash(&program, &mut checkpoint)
+        .context("analyzer executable prerequisite unavailable")?
         != analysis["executable"]["sha256"]
     {
         bail!("analyzer executable version changed; register against the new runtime before reuse");
     }
+    checkpoint()?;
     Ok(source)
 }
 
@@ -277,19 +307,92 @@ pub(super) fn copy_workspace(
 ) -> Result<()> {
     checkpoint()?;
     fs::create_dir_all(workspace)?;
-    for (path, identity) in analysis["files"]
+    let entries = analysis["files"]
         .as_object()
-        .context("package file manifest missing")?
-    {
+        .context("package file manifest missing")?;
+    if entries.len() > MAX_FILES {
+        bail!("analyzer package exceeds {MAX_FILES} files");
+    }
+    let mut total = 0;
+    for (path, identity) in entries {
         checkpoint()?;
-        let bytes = fs::read(source.join(path))?;
-        if digest(&bytes) != identity["sha256"] {
-            bail!("managed package changed while preparing execution");
-        }
+        let source = source_file(source, path)?;
         let destination = workspace.join(path);
         fs::create_dir_all(destination.parent().unwrap())?;
-        fs::write(&destination, bytes)?;
-        fs::set_permissions(destination, fs::metadata(source.join(path))?.permissions())?;
+        let (sha256, bytes) =
+            files::copy(&source, &destination, MAX_BYTES - total, &mut checkpoint)
+                .map_err(source_read_error)?;
+        total += bytes;
+        if sha256 != identity["sha256"] {
+            bail!("managed package changed while preparing execution");
+        }
+        fs::set_permissions(destination, fs::metadata(&source)?.permissions())?;
     }
+    checkpoint()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_package() -> (tempfile::TempDir, Value, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = directory.path().canonicalize().unwrap();
+        let source = managed.join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("analyze.py"), b"print('legacy bytes')\n").unwrap();
+        let executable = managed.join("external-tool");
+        fs::write(&executable, b"external runtime identity").unwrap();
+        // Size was not authoritative in older manifests; SHA remains enough.
+        let analysis = json!({
+            "package_dir":managed,
+            "files":{"analyze.py":{"sha256":digest(b"print('legacy bytes')\n")}},
+            "executable":{"path":executable,"sha256":digest(b"external runtime identity"),"packaged":false},
+        });
+        (directory, analysis, source)
+    }
+
+    #[test]
+    fn legacy_manifest_without_sizes_keeps_exact_verification_and_workspace_bytes() {
+        let (directory, analysis, source) = legacy_package();
+        assert_eq!(verify(&analysis, || Ok(())).unwrap(), source);
+        let workspace = directory.path().join("workspace");
+        copy_workspace(&analysis, &source, &workspace, || Ok(())).unwrap();
+        assert_eq!(
+            fs::read(workspace.join("analyze.py")).unwrap(),
+            b"print('legacy bytes')\n"
+        );
+    }
+
+    #[test]
+    fn old_manifest_cannot_bypass_the_existing_actual_source_byte_limit() {
+        let (_directory, analysis, source) = legacy_package();
+        // A sparse file tests the boundary without a large read or allocation.
+        fs::File::create(source.join("analyze.py"))
+            .unwrap()
+            .set_len(MAX_BYTES + 1)
+            .unwrap();
+        let error = verify(&analysis, || Ok(())).unwrap_err();
+        assert!(format!("{error:#}").contains("64 MiB"));
+        let copy = tempfile::tempdir().unwrap();
+        let error = copy_workspace(&analysis, &source, copy.path(), || Ok(())).unwrap_err();
+        assert!(format!("{error:#}").contains("64 MiB"));
+        assert_eq!(
+            fs::metadata(copy.path().join("analyze.py")).unwrap().len(),
+            0
+        );
+    }
+
+    #[test]
+    fn old_manifest_cannot_bypass_the_existing_source_file_count_limit() {
+        let (_directory, mut analysis, _) = legacy_package();
+        analysis["files"] = Value::Object(
+            (0..=MAX_FILES)
+                .map(|index| (format!("file-{index}"), json!({"sha256":"unused"})))
+                .collect(),
+        );
+        let error = verify(&analysis, || Ok(())).unwrap_err();
+        assert!(error.to_string().contains("2000 files"));
+    }
 }

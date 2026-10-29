@@ -144,7 +144,7 @@ pub async fn prepare(
             check.check()?;
             let executable = super::package::executable(&program, &source)?;
             let identity =
-                json!({"path":executable,"sha256":super::package::digest(&fs::read(&executable)?)});
+                json!({"path":executable,"sha256":super::files::hash(&executable, || check.check())?});
             check.check()?;
             Ok(identity)
         })

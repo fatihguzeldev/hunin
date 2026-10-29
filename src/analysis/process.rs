@@ -14,7 +14,7 @@ use tokio::{
     time::Instant,
 };
 
-const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+pub(super) const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 
 pub(super) use crate::host::tool_path;
 

@@ -106,7 +106,7 @@ impl Engine {
         self.check_preparation(Some(request.deadline))?;
         let analysis = self.store.document("analyses", &request.analysis_id)?;
         let phase = Instant::now();
-        package::verify(&analysis)?;
+        package::verify(&analysis, || self.check_preparation(Some(request.deadline)))?;
         let mut timings =
             json!({"initial_package_verification":phase.elapsed().as_micros() as u64});
         self.check_preparation(Some(request.deadline))?;

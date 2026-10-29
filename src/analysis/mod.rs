@@ -1,6 +1,7 @@
 mod applicability;
 mod dependencies;
 mod engine;
+mod files;
 mod input;
 mod lifecycle;
 mod package;
