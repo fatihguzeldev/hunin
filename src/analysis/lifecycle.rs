@@ -1,52 +1,28 @@
-use super::{Engine, blocking};
+use super::{Engine, blocking, retention};
 use crate::{execution::ownership::is_proven_absent, model::now_us};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{
-    fs,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 impl Engine {
-    pub(super) fn retain(&self, document: &mut Value, directory: &Path) -> Result<()> {
-        fs::write(
-            directory.join("attempt.json"),
-            serde_json::to_vec_pretty(document)?,
-        )?;
-        let mut artifacts = Vec::new();
-        for file in fs::read_dir(directory)? {
-            let path = file?.path();
-            if !fs::symlink_metadata(&path)?.is_file() {
-                continue;
-            }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if ![
-                "input.json",
-                "stdout.jsonl",
-                "stderr.txt",
-                "dependencies.json",
-                "attempt.json",
-            ]
-            .contains(&name)
-                && !(name.starts_with("setup-")
-                    && (name.ends_with(".stdout") || name.ends_with(".stderr")))
-            {
-                continue;
-            }
-            let format = if name == "input.json" {
-                "analysis-input"
-            } else {
-                "analysis-output"
-            };
-            artifacts.push(serde_json::to_value(self.store.add_artifact(
-                document["run_id"].as_str().unwrap(),
-                &path,
-                format,
-            )?)?);
-        }
-        document["raw_artifacts"] = json!(artifacts);
-        Ok(())
+    fn retain_recovered(&self, document: &mut Value, directory: &Path) -> Result<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        retention::retain(
+            &self.store,
+            document,
+            directory,
+            retention::Limits::default(),
+            || {
+                anyhow::ensure!(
+                    std::time::Instant::now() < deadline,
+                    "analysis recovery evidence retention timed out"
+                );
+                Ok(())
+            },
+        )
     }
     pub fn recover(&self) -> Result<usize> {
         let mut count = 0;
@@ -63,10 +39,10 @@ impl Engine {
             row["status"] = json!("interrupted");
             row["finished_at_us"] = json!(now_us());
             row["diagnostics"] = json!([
-                "Analyzer interrupted: its owning process is proven absent or its OS process lifetime changed. Partial evidence was retained; no stale PID was signaled and no output was accepted."
+                "Analyzer interrupted: its owning process is proven absent or its OS process lifetime changed. No stale PID was signaled, no output was accepted, and recovery did not remove the original execution directory. Any raw retention failure is reported separately."
             ]);
             if let Some(directory) = row["execution_dir"].as_str().map(PathBuf::from)
-                && let Err(error) = self.retain(&mut row, &directory)
+                && let Err(error) = self.retain_recovered(&mut row, &directory)
             {
                 row["diagnostics"]
                     .as_array_mut()
