@@ -61,11 +61,9 @@ fn execute_pair(arguments: &[OsString], directory: &Path, enabled: bool) {
     std::thread::spawn(move || {
         let mut sent = false;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !sent {
-                if let Some((_, token)) = line.split_once("HUNIN_TOKEN ") {
-                    let _ = sender.send(Some(token.to_owned()));
-                    sent = true;
-                }
+            if !sent && let Some((_, token)) = line.split_once("HUNIN_TOKEN ") {
+                let _ = sender.send(Some(token.to_owned()));
+                sent = true;
             }
             // Drain the remaining harness/target output while the parent waits.
         }

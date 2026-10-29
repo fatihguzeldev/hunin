@@ -126,9 +126,8 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                 diagnostics.push("Standard library route; CPU gaps above100ms and capture latency above10ms remain unattributed. GIL-holding native calls, native-only threads and undiscovered short-lived threads limit coverage. No vmprof installation is required.".into());
             } else {
                 mechanism = "vmprof-cpu-timer";
-                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
-                    if let Err(error)=checked(Command::new(executable).args(["-c","import vmprof,importlib.metadata as m;assert tuple(map(int,m.version('vmprof').split('.')[:2]))==(0,6);print(m.version('vmprof'))"])) {availability="dependency_missing_or_incompatible";diagnostics.push(format!("Selected interpreter requires vmprof0.6.x: {error:#}"));}
-                }
+                if let Some(executable) = found.as_ref().filter(|_| version.is_some())
+                    && let Err(error)=checked(Command::new(executable).args(["-c","import vmprof,importlib.metadata as m;assert tuple(map(int,m.version('vmprof').split('.')[:2]))==(0,6);print(m.version('vmprof'))"])) {availability="dependency_missing_or_incompatible";diagnostics.push(format!("Selected interpreter requires vmprof0.6.x: {error:#}"));}
                 diagnostics.push("CPU-clock samples remain outside an epoch timeline unless a verified mapping exists. The selected interpreter is never replaced.".into());
             }
         }
@@ -152,14 +151,14 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
                     "Node.js is required for the JavaScript collection control adapter".into(),
                 );
             }
-            if runtime == "node" {
-                if let Some(executable) = found.as_ref().filter(|_| version.is_some()) {
-                    match checked(Command::new(executable).args(["-p","process.allowedNodeEnvironmentFlags.has('--cpu-prof')&&process.allowedNodeEnvironmentFlags.has('--import')"])) {
+            if runtime == "node"
+                && let Some(executable) = found.as_ref().filter(|_| version.is_some())
+            {
+                match checked(Command::new(executable).args(["-p","process.allowedNodeEnvironmentFlags.has('--cpu-prof')&&process.allowedNodeEnvironmentFlags.has('--import')"])) {
                         Ok(answer) if answer=="true"=>{},
                         Ok(_)=>{availability="runtime_flags_unsupported";diagnostics.push("This Node runtime cannot accept the required CPU profiler/preload flags in NODE_OPTIONS".into());},
                         Err(error)=>{availability="runtime_flag_probe_failed";diagnostics.push(format!("{error:#}"));}
                     }
-                }
             }
             diagnostics.push("Version/flag prerequisites are checked; discovery does not record the target or its workers. Explicit Deno permission denial can leave CPU samples unaligned.".into());
         }
@@ -187,20 +186,22 @@ fn runtime(runtime: &str, names: &[&str], permissions: &Value) -> Value {
             } else {
                 tool("samply")
             };
-            if sampler.is_none() {
+            if let Some(sampler) = sampler {
+                if let Err(error) = crate::collection::native_tool::check(
+                    &sampler,
+                    if runtime == "native" {
+                        version.as_deref()
+                    } else {
+                        None
+                    },
+                    std::time::Duration::from_secs(2),
+                ) {
+                    availability = "native_lifetime_extension_missing_or_unverified";
+                    diagnostics.push(format!("{error:#}"));
+                }
+            } else {
                 availability = "native_lifetime_collector_missing";
                 diagnostics.push("Install Hunin's bundled samply0.13.1-hunin-native1 collector; stock samply lacks the required native module lifetime extension.".into());
-            } else if let Err(error) = crate::collection::native_tool::check(
-                sampler.as_ref().unwrap(),
-                if runtime == "native" {
-                    version.as_deref()
-                } else {
-                    None
-                },
-                std::time::Duration::from_secs(2),
-            ) {
-                availability = "native_lifetime_extension_missing_or_unverified";
-                diagnostics.push(format!("{error:#}"));
             }
             if availability == "prerequisites_ready"
                 && !matches!(

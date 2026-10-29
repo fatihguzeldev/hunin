@@ -148,15 +148,14 @@ pub fn tree_page(records: &[Value], params: &Value) -> Value {
         .iter()
         .filter(|r| r["kind"] == "sample" && r["weight_unit"] == selected)
     {
-        if let Some(stack) = record["stack"].as_array() {
-            if stack.len() >= path.len()
-                && path
-                    .iter()
-                    .zip(stack)
-                    .all(|(id, frame)| id.as_str() == Some(frame_id(frame).as_str()))
-            {
-                tree.add(&stack[path.len()..], number(record, "weight"), 128);
-            }
+        if let Some(stack) = record["stack"].as_array()
+            && stack.len() >= path.len()
+            && path
+                .iter()
+                .zip(stack)
+                .all(|(id, frame)| id.as_str() == Some(frame_id(frame).as_str()))
+        {
+            tree.add(&stack[path.len()..], number(record, "weight"), 128);
         }
     }
     let total = tree.total;

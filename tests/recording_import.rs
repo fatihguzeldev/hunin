@@ -69,7 +69,7 @@ fn import_completion_preserves_latest_execution_manifest_and_accepted_records() 
     store.save_run(&finalized).unwrap();
     let event = json!({"schema_version":1,"kind":"event","id":"imported-event","run_id":stale.id,"producer_id":"import","pid":123,"tid":"main","timestamp_us":2,"name":"control","basis":"observed"});
     store
-        .accept(&stale.id, "accepted-import", &[event.clone()])
+        .accept(&stale.id, "accepted-import", std::slice::from_ref(&event))
         .unwrap();
     let merged = store
         .finish_recording_import(&stale.id, &["import diagnostic".into()], false)

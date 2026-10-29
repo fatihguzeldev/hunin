@@ -303,18 +303,18 @@ impl Store {
                 dependencies.insert(id);
             }
         }
-        if let Some((_, _, value)) = document {
-            if let Some(inputs) = value.get("input_result_sets") {
-                for id in inputs
-                    .as_array()
-                    .context("input_result_sets must be an array")?
-                {
-                    dependencies.insert(
-                        id.as_str()
-                            .context("input result identity must be a string")?
-                            .to_owned(),
-                    );
-                }
+        if let Some((_, _, value)) = document
+            && let Some(inputs) = value.get("input_result_sets")
+        {
+            for id in inputs
+                .as_array()
+                .context("input_result_sets must be an array")?
+            {
+                dependencies.insert(
+                    id.as_str()
+                        .context("input result identity must be a string")?
+                        .to_owned(),
+                );
             }
         }
         for id in &dependencies {

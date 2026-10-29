@@ -55,10 +55,10 @@ pub fn validate_ownership(records: &[Value], existing: &HashMap<String, Value>) 
     );
     for record in records {
         for (field, kind) in [("parent_id", "span"), ("context_id", "context")] {
-            if let Some(id) = record[field].as_str() {
-                if all.get(id).is_none_or(|r| r["kind"] != kind) {
-                    bail!("{field} must reference a {kind}: {id}");
-                }
+            if let Some(id) = record[field].as_str()
+                && all.get(id).is_none_or(|r| r["kind"] != kind)
+            {
+                bail!("{field} must reference a {kind}: {id}");
             }
         }
         for field in ["parent_id", "context_id"] {

@@ -37,7 +37,11 @@ fn accepted_inputs_are_atomic_idempotent_and_survive_reopening() {
             .is_err()
     );
     assert!(store.records("run-1").unwrap().is_empty());
-    assert!(store.accept("run-1", "input-a", &[a.clone()]).unwrap());
+    assert!(
+        store
+            .accept("run-1", "input-a", std::slice::from_ref(&a))
+            .unwrap()
+    );
     assert!(!store.accept("run-1", "input-a", &[a]).unwrap());
     drop(store);
     let reopened = Store::open(root.path()).unwrap();
