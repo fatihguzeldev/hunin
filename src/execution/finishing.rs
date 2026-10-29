@@ -176,7 +176,7 @@ impl Engine {
                 run.status = RunStatus::Failed;
             }
         }
-        let sdk = sdk::ingest(&self.store, &run.id, &directory.join("sdk"));
+        let sdk = sdk::ingest_controlled(&self.store, &run.id, &directory.join("sdk"), None);
         if let Some(diagnostic) = sdk.rejection() {
             run.diagnostics.push(diagnostic.to_owned());
             if run.status == RunStatus::Completed {

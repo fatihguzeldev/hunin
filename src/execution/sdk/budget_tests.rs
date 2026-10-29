@@ -182,3 +182,179 @@ fn exact_limits_and_legacy_final_json_without_lf_remain_accepted() {
         assert_eq!(store.records("sdk-budget").unwrap().len(), 1);
     }
 }
+
+#[test]
+fn expired_shared_deadline_rejects_before_decode_without_publishing_or_changing_correctness() {
+    for empty in [false, true] {
+        let (_temporary, store, directory) = fixture();
+        let mut run = store.run("sdk-budget").unwrap();
+        run.correctness = json!({"passed":true,"validation":"exit_code_only"});
+        store.save_run(&run).unwrap();
+        if !empty {
+            fs::write(directory.join("a.jsonl"), row("not-published")).unwrap();
+        }
+        let value = serde_json::to_value(ingest_controlled(
+            &store,
+            "sdk-budget",
+            &directory,
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1)),
+        ))
+        .unwrap();
+        assert_budget_rejection(&value, &store);
+        assert_eq!(
+            value["evidence"]["spool_snapshot"]["inventory_retained"],
+            false
+        );
+        assert!(store.artifacts("sdk-budget").unwrap().is_empty());
+        assert_eq!(
+            store.run("sdk-budget").unwrap().correctness,
+            run.correctness
+        );
+        if !empty {
+            assert_eq!(
+                fs::read_to_string(directory.join("a.jsonl")).unwrap(),
+                row("not-published")
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_retention_file_and_aggregate_caps_preserve_originals_without_accepting_a_prefix() {
+    for per_file in [true, false] {
+        let (_temporary, store, directory) = fixture();
+        let first = row("a");
+        let second = row("b");
+        fs::write(directory.join("a.jsonl"), &first).unwrap();
+        fs::write(directory.join("b.jsonl"), &second).unwrap();
+        let raw = RawRetention {
+            maximum_file_bytes: if per_file {
+                first.len() as u64 - 1
+            } else {
+                1024 * 1024
+            },
+            maximum_read_bytes: if per_file {
+                1024 * 1024
+            } else {
+                (first.len() + second.len()) as u64 - 1
+            },
+            read_bytes: 0,
+        };
+        let value = serde_json::to_value(ingest_with_policy(
+            &store,
+            "sdk-budget",
+            &directory,
+            SpoolBudget::default(),
+            raw,
+            None,
+        ))
+        .unwrap();
+        assert_budget_rejection(&value, &store);
+        assert_eq!(
+            value["evidence"]["spool_snapshot"]["inventory_retained"],
+            false
+        );
+        assert_eq!(
+            value["evidence"]["raw_retention"]["read_bytes"],
+            if per_file { 0 } else { first.len() }
+        );
+        assert_eq!(
+            store.artifacts("sdk-budget").unwrap().len(),
+            if per_file { 0 } else { 1 }
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join("a.jsonl")).unwrap(),
+            first
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join("b.jsonl")).unwrap(),
+            second
+        );
+        assert!(
+            fs::read_dir(store.root().join("artifacts"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".pending-"))
+        );
+    }
+}
+
+#[test]
+fn exact_raw_retention_cap_preserves_legacy_final_json_without_lf() {
+    let (_temporary, store, directory) = fixture();
+    let bytes = row("exact-raw");
+    fs::write(directory.join("a.jsonl"), &bytes).unwrap();
+    let raw = RawRetention {
+        maximum_file_bytes: bytes.len() as u64,
+        maximum_read_bytes: bytes.len() as u64,
+        read_bytes: 0,
+    };
+    let value = serde_json::to_value(ingest_with_policy(
+        &store,
+        "sdk-budget",
+        &directory,
+        SpoolBudget::default(),
+        raw,
+        None,
+    ))
+    .unwrap();
+    assert_eq!(value["status"], "accepted", "{value}");
+    assert_eq!(
+        value["evidence"]["raw_retention"]["read_bytes"],
+        bytes.len()
+    );
+    assert_eq!(value["evidence"]["completion"], "unknown");
+    assert_eq!(value["evidence"]["loss"], "unknown");
+    assert_eq!(store.records("sdk-budget").unwrap().len(), 1);
+}
+
+#[test]
+fn decoded_sdk_rows_are_not_published_after_an_expired_deadline() {
+    let (_temporary, store, directory) = fixture();
+    let bytes = row("decoded");
+    fs::write(directory.join("a.jsonl"), &bytes).unwrap();
+    let mut evidence = SpoolEvidence::default();
+    let records = read(
+        &store,
+        "sdk-budget",
+        &directory,
+        &mut evidence.spool_snapshot,
+        &mut evidence.budget,
+        &mut evidence.raw_retention,
+        None,
+    )
+    .unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(store.records("sdk-budget").unwrap().is_empty());
+    // The natural decode/publication boundary receives an already-expired
+    // shared deadline; no scheduler sleep or environment hook is required.
+    let status = publish_records(
+        &store,
+        "sdk-budget",
+        &records,
+        &mut evidence,
+        Some(Instant::now() - std::time::Duration::from_millis(1)),
+    );
+    let value = serde_json::to_value(IngestionOutcome { status, evidence }).unwrap();
+    assert_eq!(value["status"], "rejected");
+    assert_eq!(value["stage"], "acceptance");
+    assert_eq!(
+        value["evidence"]["spool_snapshot"]["inventory_retained"],
+        true
+    );
+    assert!(store.records("sdk-budget").unwrap().is_empty());
+    assert!(
+        store
+            .selected_result_id("sdk-budget", "sdk-spool-v1")
+            .unwrap()
+            .is_none()
+    );
+    let artifact = store.artifacts("sdk-budget").unwrap().pop().unwrap();
+    assert_eq!(
+        fs::read_to_string(store.artifact_path("sdk-budget", &artifact.id).unwrap()).unwrap(),
+        bytes
+    );
+}
