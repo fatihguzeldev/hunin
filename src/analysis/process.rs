@@ -104,7 +104,7 @@ pub async fn execute(
     command
         .env_remove("HUNIN_RUN_ID")
         .env_remove("HUNIN_RECORD_DIR");
-    let (mut child, mut tree) = crate::execution::process::spawn(&mut command).await?;
+    let (mut child, mut tree) = crate::host::process::spawn(&mut command).await?;
     let total = control.bytes.clone();
     let (sender, mut receiver) = mpsc::channel(2);
     let _signal_guard = sender.clone();

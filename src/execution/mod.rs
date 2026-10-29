@@ -4,7 +4,7 @@ mod identity;
 mod native_cleanup;
 mod native_outcome;
 pub(crate) mod ownership;
-pub(crate) mod process;
+pub(crate) use crate::host::process;
 mod process_identity;
 mod resources;
 mod sdk;

@@ -21,7 +21,7 @@ pub(crate) fn output(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let (mut child, mut tree) = crate::execution::process::spawn_std(command)?;
+    let (mut child, mut tree) = super::process::spawn_std(command)?;
     let started = Instant::now();
     let (sender, receiver) = mpsc::channel();
     for (kind, mut pipe) in [

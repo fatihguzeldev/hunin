@@ -3,7 +3,7 @@ mod deno_workers;
 mod finalization;
 mod javascript;
 pub(crate) mod native_tool;
-pub(crate) mod probe;
+pub(crate) use crate::host::probe;
 mod python;
 mod selection;
 mod settings;
