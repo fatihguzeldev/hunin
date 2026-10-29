@@ -47,6 +47,8 @@ pub struct ImportedProfile {
     pub source_snapshots: Vec<SourceSnapshot>,
     pub binary_snapshots: Vec<BinarySnapshot>,
     pub native_image_context: Option<Value>,
+    /// Actual offline decoder identity and resolved execution paths, not capture identity.
+    pub decoder_provenance: Option<Value>,
 }
 
 pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile> {
@@ -149,6 +151,14 @@ fn import_inner(
         digest.update(b"native-image-identifiers-v1\0");
         digest.update(serde_json::to_vec(&images.fingerprint())?);
     }
+    let vmprof = (format == "vmprof")
+        .then(|| vmprof::read(path))
+        .transpose()?;
+    let decoder_provenance = vmprof.as_ref().map(|decoded| decoded.provenance.clone());
+    if let Some(provenance) = &decoder_provenance {
+        digest.update(b"external-decoder-identity-v1\0");
+        digest.update(serde_json::to_vec(&provenance["identity"])?);
+    }
     let key = format!("{:x}", digest.finalize());
     let scripts = if matches!(format, "v8" | "v8-cpuprofile" | "cpuprofile") {
         Some(javascript_sources::Scripts::load(path)?)
@@ -177,7 +187,7 @@ fn import_inner(
         "pprof" | "go-pprof" => pprof::decode(&raw, run_id, &key)?,
         "python-cpu-progress" => python_cpu::decode(path, run_id, &key)?,
         "go-trace" => go_trace::decode(path, run_id, &key)?,
-        "vmprof" => vmprof::decode(path, run_id, &key)?,
+        "vmprof" => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
         "hunin-jsonl" | "jsonl" => {
             let mut records = Vec::new();
             for (line, text) in std::str::from_utf8(&raw)?.lines().enumerate() {
@@ -224,6 +234,7 @@ fn import_inner(
             .unwrap_or_default(),
         binary_snapshots,
         native_image_context,
+        decoder_provenance,
     })
 }
 

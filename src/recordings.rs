@@ -68,7 +68,23 @@ pub(crate) fn publish(
         sources.push(json!({"uri":source.uri,"artifact_id":artifact.id,"sha256":source.sha256,"provenance":source.provenance}));
     }
     let id = format!("{run_id}:{}", raw.sha256);
-    let document = json!({"run_id":run_id,"raw":raw,"sidecars":sidecars,"native_context_artifact_id":context.map(|a|a.id),"source_snapshots":sources,"normalization_fingerprint":profile.input_fingerprint,"status":"accepted"});
+    let decoder = profile
+        .decoder_provenance
+        .as_ref()
+        .map(|value| {
+            store.add_artifact_bytes(
+                run_id,
+                "decoder-provenance.json",
+                "decoder-provenance",
+                &serde_json::to_vec(&json!({
+                    "normalization_fingerprint":profile.input_fingerprint,
+                    "raw_sha256":profile.raw_sha256,
+                    "decoder":value,
+                }))?,
+            )
+        })
+        .transpose()?;
+    let document = json!({"run_id":run_id,"raw":raw,"sidecars":sidecars,"native_context_artifact_id":context.map(|a|a.id),"source_snapshots":sources,"normalization_fingerprint":profile.input_fingerprint,"decoder_provenance_artifact_id":decoder.map(|a|a.id),"decoder_identity":profile.decoder_provenance.as_ref().map(|value|&value["identity"]),"status":"accepted"});
     let accepted = store.publish_result(PublicationRequest {
         run_id,
         source_key: &format!("import-v1:{}", raw.sha256),
@@ -126,7 +142,7 @@ pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Resul
             &directory,
         )?;
     }
-    let profile = if let Some(id) = inputs["native_context_artifact_id"].as_str() {
+    let mut profile = if let Some(id) = inputs["native_context_artifact_id"].as_str() {
         crate::importers::import_with_native_context(
             &path,
             &raw.format,
@@ -136,6 +152,9 @@ pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Resul
     } else {
         crate::importers::import(&path, &raw.format, run_id)?
     };
+    if raw.format == "vmprof" && inputs["decoder_identity"].is_null() {
+        profile.diagnostics.push("Legacy normalization has no decoder identity; this reanalysis uses the current identified decoder and cannot establish the historical decoder environment.".into());
+    }
     publish(store, run_id, profile)
 }
 
