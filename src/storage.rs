@@ -16,8 +16,13 @@ use std::{
 
 mod artifacts;
 mod bootstrap;
+mod inspection;
 mod maintenance;
 mod observations;
+pub use inspection::{
+    InspectionArea, InspectionFinding, InspectionLimit, InspectionLimits, InspectionPathKind,
+    InspectionScan, InspectionScanStatus, StorageInspection, WorkspaceMetadataReference,
+};
 pub(crate) use observations::RecordReadLimit;
 pub use observations::RecordsSnapshot;
 
