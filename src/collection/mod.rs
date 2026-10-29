@@ -2,6 +2,8 @@ pub use crate::importers::ImportedProfile;
 mod deno_workers;
 pub(crate) mod native_tool;
 pub(crate) mod probe;
+mod selection;
+pub use selection::{CaptureAdapter, RuntimeRegistration, registered_runtimes, select_runtime};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,25 +40,18 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
     if request.command.is_empty() {
         bail!("a target command is required");
     }
-    fs::create_dir_all(&request.artifact_dir)?;
-    let runtime = request.runtime.to_lowercase();
-    match runtime.as_str() {
-        "node" | "nodejs" | "bun" | "deno" | "javascript" | "typescript" => javascript(request),
-        "python" | "python3" | "cpython" | "pypy" | "pypy3" => {
-            if cfg!(windows) {
-                python_cpu(request)
-            } else {
-                python(request)
-            }
-        }
-        "python-cpu" => python_cpu(request),
-        "graalpy" | "graalpython" => graal(request),
-        "go-test" => go_test(request, false),
-        "go-trace" => go_test(request, true),
-        "go" | "rust" | "c" | "cpp" | "c++" | "native" => native(request),
-        other => bail!(
-            "unsupported runtime {other}; choose node, bun, deno, cpython, pypy, graalpy, go, rust, c or cpp"
-        ),
+    let selected = select_runtime(&request.runtime)?;
+    let mut canonical = request.clone();
+    canonical.runtime = selected.id.into();
+    fs::create_dir_all(&canonical.artifact_dir)?;
+    match selected.adapter {
+        CaptureAdapter::JavaScript => javascript(&canonical),
+        CaptureAdapter::PythonVmprof => python(&canonical),
+        CaptureAdapter::PythonCpuProgress => python_cpu(&canonical),
+        CaptureAdapter::GraalCpuSampler => graal(&canonical),
+        CaptureAdapter::GoTestCpu => go_test(&canonical, false),
+        CaptureAdapter::GoTrace => go_test(&canonical, true),
+        CaptureAdapter::Native => native(&canonical),
     }
 }
 
