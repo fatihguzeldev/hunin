@@ -36,6 +36,14 @@ class RequiredSourceChecksTest(unittest.TestCase):
             selected = checks.required_checks(target)
             self.assertEqual(selected[0].package, "samply-symbols")
             self.assertFalse(any("windows" in check.filter for check in selected))
+        for target in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"):
+            clocks = [
+                check
+                for check in checks.required_checks(target)
+                if check.filter == "linux::profiler::hunin_clock_tests"
+            ]
+            self.assertEqual(len(clocks), 1)
+            self.assertEqual(clocks[0].expected_passed, 2)
 
     def test_zero_passing_or_merely_ignored_tests_cannot_pass_a_required_guard(self):
         for stdout in (

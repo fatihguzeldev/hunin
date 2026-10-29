@@ -1,0 +1,161 @@
+--- a/samply/src/linux/profiler.rs
++++ b/samply/src/linux/profiler.rs
+@@ -368,6 +368,100 @@
+     Some(level)
+ }
+ 
++/// CLOCK_MONOTONIC is also the clock selected for the live perf events.
++/// Bracket the wall-clock read instead of treating machine uptime as profile time.
++struct HuninClockReference {
++    before_raw: u64,
++    epoch: SystemTime,
++    after_raw: u64,
++}
++
++impl HuninClockReference {
++    fn capture() -> Self {
++        let before_raw = Self::monotonic_raw();
++        let epoch = SystemTime::now();
++        let after_raw = Self::monotonic_raw();
++        Self {
++            before_raw,
++            epoch,
++            after_raw,
++        }
++    }
++
++    fn monotonic_raw() -> u64 {
++        let mut value = libc::timespec {
++            tv_sec: 0,
++            tv_nsec: 0,
++        };
++        let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) };
++        assert_eq!(result, 0, "Could not read the Linux perf clock reference");
++        u64::try_from(value.tv_sec).expect("negative monotonic seconds") * 1_000_000_000
++            + u64::try_from(value.tv_nsec).expect("negative monotonic nanoseconds")
++    }
++
++    fn reference_raw(&self) -> u64 {
++        self.before_raw
++            + self
++                .after_raw
++                .checked_sub(self.before_raw)
++                .expect("monotonic clock moved backwards")
++                / 2
++    }
++}
++
++#[cfg(test)]
++mod hunin_clock_tests {
++    use super::*;
++    use crate::shared::timestamp_converter::TimestampConverter;
++    use std::time::UNIX_EPOCH;
++
++    #[test]
++    fn bracketed_uptime_reference_projects_elapsed_time_instead_of_uptime() {
++        let clock = HuninClockReference {
++            before_raw: 443_191_000_000,
++            epoch: UNIX_EPOCH + Duration::from_secs(1_793_300_440),
++            after_raw: 443_191_000_200,
++        };
++        let converter = TimestampConverter {
++            reference_raw: clock.reference_raw(),
++            raw_to_ns_factor: 1,
++        };
++        assert_eq!(clock.reference_raw(), 443_191_000_100);
++        let elapsed = converter.convert_time(clock.reference_raw() + 2_000_000);
++        assert_eq!(
++            serde_json::to_value(elapsed).unwrap(),
++            serde_json::json!(2.0)
++        );
++        let epoch_ms = serde_json::to_value(ReferenceTimestamp::from_system_time(clock.epoch))
++            .unwrap()
++            .as_f64()
++            .unwrap();
++        assert_eq!(epoch_ms + 2.0, 1_793_300_440_002.0);
++    }
++
++    #[test]
++    fn actual_reference_pair_overlaps_a_fresh_measured_clock_bracket() {
++        let reference = HuninClockReference::capture();
++        let probe = HuninClockReference::capture();
++        assert!(reference.before_raw > 0);
++        assert!(reference.before_raw <= reference.reference_raw());
++        assert!(reference.reference_raw() <= reference.after_raw);
++        let reference_epoch = reference
++            .epoch
++            .duration_since(UNIX_EPOCH)
++            .unwrap()
++            .as_nanos() as i128;
++        let probe_epoch = probe.epoch.duration_since(UNIX_EPOCH).unwrap().as_nanos() as i128;
++        let observed_delta = probe_epoch - reference_epoch;
++        let lower = probe.before_raw as i128 - reference.after_raw as i128;
++        let upper = probe.after_raw as i128 - reference.before_raw as i128;
++        assert!(
++            (lower..=upper).contains(&observed_delta),
++            "epoch delta {observed_delta} outside measured monotonic bracket [{lower}, {upper}]"
++        );
++    }
++}
++
+ fn make_converter(
+     interval: Duration,
+     profile_creation_props: ProfileCreationProps,
+@@ -378,7 +472,8 @@
+         1_000_000 // 1 million nano seconds = 1 milli second
+     };
+ 
+-    let first_sample_time = 0;
++    let clock = HuninClockReference::capture();
++    let first_sample_time = clock.reference_raw();
+ 
+     let endian = if cfg!(target_endian = "little") {
+         Endianness::LittleEndian
+@@ -400,7 +495,7 @@
+         framehop::UnwinderNative<MmapRangeOrVec, framehop::MayAllocateDuringUnwind>,
+     >::new(
+         &profile_creation_props,
+-        ReferenceTimestamp::from_system_time(SystemTime::now()),
++        ReferenceTimestamp::from_system_time(clock.epoch),
+         profile_creation_props.profile_name(),
+         HashMap::new(),
+         machine_info.as_ref().map(|info| info.release.as_str()),
+@@ -412,6 +507,11 @@
+         interpretation,
+         None,
+         false,
++    );
++    converter.hunin_record_clock_reference(
++        ReferenceTimestamp::from_system_time(clock.epoch),
++        clock.before_raw,
++        clock.after_raw,
+     );
+     if let Ok(os_release) = os_release::OsRelease::new() {
+         converter.set_os_name(&os_release.pretty_name);
+--- a/samply/src/linux_shared/converter.rs
++++ b/samply/src/linux_shared/converter.rs
+@@ -277,6 +277,24 @@
+             should_emit_jit_markers: profile_creation_props.should_emit_jit_markers,
+             should_emit_cswitch_markers: profile_creation_props.should_emit_cswitch_markers,
+         }
++    }
++
++    pub fn hunin_record_clock_reference(
++        &mut self,
++        epoch: ReferenceTimestamp,
++        before_raw: u64,
++        after_raw: u64,
++    ) {
++        self.profile.hunin_record(serde_json::json!({
++            "kind": "clock_reference",
++            "basis": "bracketed_clock_read",
++            "clock": "linux_clock_monotonic",
++            "clock_reference_raw": self.timestamp_converter.reference_raw.to_string(),
++            "raw_to_ns_factor": self.timestamp_converter.raw_to_ns_factor,
++            "monotonic_before_raw": before_raw.to_string(),
++            "monotonic_after_raw": after_raw.to_string(),
++            "epoch_reference_ms": epoch,
++        }));
+     }
+ 
+     pub fn hunin_observe_maps(&mut self, now: u64) {

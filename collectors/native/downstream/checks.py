@@ -49,6 +49,12 @@ def required_checks(target, extra_filters=()):
                 SourceCheck("samply", "mac::process_launcher"),
             ]
         )
+    elif "linux" in target:
+        checks.append(
+            SourceCheck(
+                "samply", "linux::profiler::hunin_clock_tests", expected_passed=2
+            )
+        )
     checks.extend(SourceCheck("samply", value) for value in extra_filters)
     selected = {}
     for check in checks:

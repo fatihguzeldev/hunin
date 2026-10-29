@@ -8,6 +8,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from .clock import verify_linux_epoch_windows
+
 HERE = Path(__file__).resolve().parents[1]
 
 
@@ -138,6 +140,23 @@ def verify(binary, output, sampler=None):
             "phase_b" in r["attributes"]["module"] for r in sequential
         ] == [False, True, False], phases
         assert len({r["id"] for r in phases}) == len(phases) >= 5, phases
+        capture = data / "captures" / run["id"]
+        sidecar = json.loads((capture / "cpu.samply.lifetimes.json").read_text())
+        epoch_alignment = None
+        if sidecar["collector"]["os"] == "linux":
+            markers = [
+                json.loads(line)
+                for line in (capture / "stdout.txt").read_text().splitlines()
+                if line.strip()
+            ]
+            epoch_alignment = verify_linux_epoch_windows(
+                sidecar, run, markers, sequential
+            )
+            alignment_receipt = json.dumps(epoch_alignment, indent=2).encode()
+            assert len(alignment_receipt) <= 8192, (
+                "Clock alignment receipt exceeds 8 KiB"
+            )
+            (output / "clock-alignment.json").write_bytes(alignment_receipt)
         assert all(r["attributes"]["evidence_complete"] for r in phases), phases
         assert tuple(
             sequential[0]["attributes"]["library"].get(field)
@@ -229,6 +248,7 @@ def verify(binary, output, sampler=None):
             "simultaneous_overlap_us": overlap,
             "thread_instances": len(threads),
             "offline_replay": replay,
+            "linux_epoch_alignment": epoch_alignment,
             "limitation": "Snapshot transitions have observation windows; loads entirely between snapshots remain unobserved.",
         }
         (output / "evidence.json").write_text(json.dumps(proof, indent=2))
