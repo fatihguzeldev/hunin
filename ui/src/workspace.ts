@@ -6,7 +6,12 @@ import {
 } from './investigation';
 import { AnalysisWatch } from './analysis-watch';
 import { runSource } from './run';
-import { operation, type Run, type Summary, type Operations } from './api';
+import { operation, type Run, type Summary } from './api';
+import {
+  recordingDetails,
+  recordingMetadata,
+  queryFailureMessage,
+} from './recording-details';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
 import { recordDialog } from './recording';
@@ -20,7 +25,7 @@ import { scenarios } from './views/scenarios';
 
 export type ViewContext = {
   run: Run;
-  summary: Summary;
+  summary?: Summary;
   runs: Run[];
   investigation: Investigation;
   signal: AbortSignal;
@@ -456,9 +461,7 @@ export class Workspace {
     if (this.selected) this.investigations.persist(this.selected);
   }
 
-  private async render(
-    snapshot?: Operations['runs.get']['output'],
-  ): Promise<void> {
+  private async render(): Promise<void> {
     const epoch = ++this.epoch;
     this.renderController?.abort();
     const controller = new AbortController();
@@ -501,10 +504,7 @@ export class Workspace {
         );
         return;
       }
-      const details =
-        snapshot?.run.id === this.selected
-          ? snapshot
-          : await operation('runs.get', { run_id: this.selected }, signal);
+      const details = await recordingDetails(this.selected, signal);
       if (epoch !== this.epoch || signal.aborted) return;
       const { run, summary, result_identity } = details;
       const invalidation =
@@ -541,6 +541,22 @@ export class Workspace {
             ),
           ]
         : [];
+      if (!summary)
+        notices.push(
+          el(
+            'p',
+            { class: 'notice', role: 'alert' },
+            `Recording aggregate unavailable: ${queryFailureMessage(details.summaryError)}. Counts remain unknown; other recording views query their own data.`,
+          ),
+        );
+      if (details.result_identity_diagnostic)
+        notices.push(
+          el(
+            'p',
+            { class: 'notice', role: 'status' },
+            `Selected result identity is unconfirmed: ${details.result_identity_diagnostic}`,
+          ),
+        );
       const message = this.messages.get(run.id);
       if (message) {
         this.messages.delete(run.id);
@@ -619,37 +635,47 @@ export class Workspace {
         }
       } else {
         const renderer = this.views[this.tab] ?? this.views.overview;
-        const body = await renderer.render({
-          run,
-          summary,
-          runs: this.runs,
-          source,
-          investigation,
-          signal,
-          persist: (mode = 'replace') => {
-            if (!signal.aborted) this.writeLocation(mode);
-          },
-          followAttempt: (id) => {
-            if (
-              this.analysisWatch.track(run.id, id) &&
-              this.attemptRunId === run.id
-            ) {
-              this.updateAttemptNotice(run.id);
-              this.scheduleAttemptCheck();
-            }
-          },
-          refresh: (message) => {
-            if (message) this.messages.set(run.id, message);
-            if (this.selected === run.id) void this.render();
-          },
-        });
-        if (epoch !== this.epoch || signal.aborted) return;
-        view.replaceChildren(body);
-        if (this.returningFromSource) {
-          view.focus();
-          this.returningFromSource = false;
+        try {
+          const body = await renderer.render({
+            run,
+            summary,
+            runs: this.runs,
+            source,
+            investigation,
+            signal,
+            persist: (mode = 'replace') => {
+              if (!signal.aborted) this.writeLocation(mode);
+            },
+            followAttempt: (id) => {
+              if (
+                this.analysisWatch.track(run.id, id) &&
+                this.attemptRunId === run.id
+              ) {
+                this.updateAttemptNotice(run.id);
+                this.scheduleAttemptCheck();
+              }
+            },
+            refresh: (message) => {
+              if (message) this.messages.set(run.id, message);
+              if (this.selected === run.id) void this.render();
+            },
+          });
+          if (epoch !== this.epoch || signal.aborted) return;
+          view.replaceChildren(body);
+          if (this.returningFromSource) {
+            view.focus();
+            this.returningFromSource = false;
+          }
+        } catch (error) {
+          if (epoch === this.epoch && !signal.aborted)
+            view.replaceChildren(
+              errorView(error, () => {
+                void this.render();
+              }),
+            );
         }
       }
+      if (epoch !== this.epoch || signal.aborted) return;
       document.title = `${run.name} · Hunin`;
       if (run.status === 'running') this.pollStatus(run.id, epoch, signal);
     } catch (error) {
@@ -790,7 +816,7 @@ export class Workspace {
 
   private pollStatus(id: string, epoch: number, signal: AbortSignal): void {
     this.poll = setTimeout(() => {
-      void operation('runs.get', { run_id: id }, signal)
+      void recordingMetadata(id, signal)
         .then((details) => {
           if (epoch !== this.epoch || signal.aborted) return;
           const { run, result_identity } = details;
@@ -804,7 +830,7 @@ export class Workspace {
           );
           if (invalidation) {
             this.pendingInvalidation = invalidation;
-            void this.render(details);
+            void this.render();
           } else if (run.status === 'running') {
             this.content.firstElementChild?.replaceWith(this.header(run));
             this.pollStatus(id, epoch, signal);

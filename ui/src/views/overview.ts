@@ -1,7 +1,8 @@
 import { weight, weightShare } from '../profile-weight';
 import { runCorrectness, runStatusTone } from '../run';
-import { operation, type Run, type Summary } from '../api';
+import { operation, type Operations, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
+import { queryFailureMessage } from '../recording-details';
 import { duration, numeric } from '../format';
 import { hasInspectableSource } from '../source-path';
 
@@ -21,19 +22,25 @@ function stat(label: string, value: string, note: string): HTMLElement {
 
 export async function overview(
   run: Run,
-  summary: Summary,
+  summary: Summary | undefined,
   source: (file: string, line?: number | null, codeId?: string | null) => void,
   signal?: AbortSignal,
 ): Promise<HTMLElement> {
   const correctness = runCorrectness(run);
-  const data = await operation(
-    'profiles.hotspots',
-    {
-      run_id: run.id,
-      limit: 25,
-    },
-    signal,
-  );
+  let data: Operations['profiles.hotspots']['output'] | undefined;
+  let hotspotError: unknown;
+  try {
+    data = await operation(
+      'profiles.hotspots',
+      {
+        run_id: run.id,
+        limit: 25,
+      },
+      signal,
+    );
+  } catch (error) {
+    hotspotError = error;
+  }
   signal?.throwIfAborted();
   const body = el('div', { class: 'stack' });
   const imported = run.runtime === 'imported';
@@ -57,17 +64,19 @@ export async function overview(
       ),
       stat(
         'Sampled profile',
-        weight(data.total_weight, data.weight_unit),
-        `${numeric(summary.sample_count)} stack samples`,
+        data ? weight(data.total_weight, data.weight_unit) : 'Unavailable',
+        summary
+          ? `${numeric(summary.sample_count)} stack samples`
+          : 'Stack sample count unavailable',
       ),
       stat(
         'Recorded spans',
-        numeric(summary.span_count),
+        summary ? numeric(summary.span_count) : 'Unavailable',
         'inspect each interval’s basis',
       ),
       stat(
         'Relationships',
-        numeric(summary.relation_count),
+        summary ? numeric(summary.relation_count) : 'Unavailable',
         'recorded evidence',
       ),
     ),
@@ -116,8 +125,33 @@ export async function overview(
         ),
       ),
     );
+  else
+    body.append(
+      el(
+        'p',
+        { class: 'metric-note' },
+        'Correctness is unknown; this recording has no retained correctness result.',
+      ),
+    );
+  body.append(
+    el(
+      'details',
+      { class: 'panel' },
+      el(
+        'summary',
+        { class: 'panel-body' },
+        'Recorded source and runtime metadata',
+      ),
+      el(
+        'p',
+        { class: 'panel-body metric-note' },
+        'Retained metadata is available independently of aggregate queries. Source identity and build verification keep their recorded basis.',
+      ),
+      el('pre', { class: 'panel-body' }, JSON.stringify(run.source, null, 2)),
+    ),
+  );
   const rows = el('tbody');
-  for (const item of data.hotspots) {
+  for (const item of data?.hotspots ?? []) {
     const name = hasInspectableSource(item.file, item.code_id)
       ? el(
           'button',
@@ -130,7 +164,7 @@ export async function overview(
         source(item.file!, item.line, item.code_id ?? undefined),
       );
     const bar = el('span');
-    bar.style.width = `${weightShare(item.self_weight, data.total_weight) ?? 0}%`;
+    bar.style.width = `${weightShare(item.self_weight, data?.total_weight ?? null) ?? 0}%`;
     rows.append(
       el(
         'tr',
@@ -171,7 +205,15 @@ export async function overview(
       el('small', {}, 'Top 25 · self weight'),
     ),
   );
-  if (data.hotspots.length)
+  if (!data)
+    panel.append(
+      el(
+        'p',
+        { class: 'panel-body notice', role: 'alert' },
+        `Hot functions unavailable: ${queryFailureMessage(hotspotError)}`,
+      ),
+    );
+  else if (data.hotspots.length)
     panel.append(
       el(
         'div',
@@ -209,7 +251,7 @@ export async function overview(
       'Stack weights describe sampled execution. Inclusive weights include descendants and must not be added together.',
     ),
   );
-  const diagnostics = [...run.diagnostics, ...summary.diagnostics];
+  const diagnostics = [...run.diagnostics, ...(summary?.diagnostics ?? [])];
   if (diagnostics.length)
     body.append(
       el(
