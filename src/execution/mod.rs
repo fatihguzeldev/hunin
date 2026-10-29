@@ -7,6 +7,7 @@ pub(crate) mod ownership;
 pub(crate) mod process;
 mod process_identity;
 mod resources;
+mod sdk;
 
 use crate::{
     collection::{self, CaptureRequest},
@@ -18,7 +19,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -513,26 +514,14 @@ impl Engine {
                 run.status = RunStatus::Failed;
             }
         }
-        let mut sdk = Vec::new();
-        for entry in fs::read_dir(directory.join("sdk"))? {
-            let path = entry?.path();
-            if path.extension().is_some_and(|e| e == "jsonl") {
-                self.store.add_artifact(&run.id, &path, "hunin-jsonl")?;
-                for line in std::io::BufRead::lines(std::io::BufReader::new(fs::File::open(path)?))
-                {
-                    let line = line?;
-                    if !line.trim().is_empty() {
-                        sdk.push(serde_json::from_str::<Value>(&line)?);
-                    }
-                }
+        let sdk = sdk::ingest(&self.store, &run.id, &directory.join("sdk"));
+        if let Some(diagnostic) = sdk.rejection() {
+            run.diagnostics.push(diagnostic.to_owned());
+            if run.status == RunStatus::Completed {
+                run.status = RunStatus::Failed;
             }
         }
-        if !sdk.is_empty() {
-            if let Err(error) = self.store.accept(&run.id, "sdk-spool-v1", &sdk) {
-                run.diagnostics
-                    .push(format!("SDK result set rejected atomically: {error:#}"));
-            }
-        }
+        run.source["sdk_ingestion"] = serde_json::to_value(sdk)?;
         run.finished_at_us = Some(now_us());
         self.store.save_run(&run)?;
         Ok(())
