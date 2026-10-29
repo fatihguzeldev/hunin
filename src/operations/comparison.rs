@@ -58,7 +58,8 @@ fn resource_value(
     name: &str,
     unit: &str,
     cumulative: bool,
-) -> Option<ResourceValue> {
+    work: &mut query::WorkBudget,
+) -> Result<Option<ResourceValue>> {
     let mut lifetimes: BTreeMap<String, (f64, BTreeSet<u64>)> = BTreeMap::new();
     let mut identity_known = true;
     for row in rows.iter().filter(|r| {
@@ -68,6 +69,7 @@ fn resource_value(
             && r["scope"] == "process"
             && r["attributes"]["process_role"] != "collector"
     }) {
+        work.check()?;
         if cumulative && row["attributes"]["temporality"] != "cumulative" {
             continue;
         }
@@ -86,18 +88,24 @@ fn resource_value(
             identity_known = false;
             json!(["unknown lifetime", row["pid"], row["producer_id"]]).to_string()
         };
+        if !lifetimes.contains_key(&lifetime) {
+            work.entry()?;
+        }
         let entry = lifetimes
             .entry(lifetime)
             .or_insert((value, BTreeSet::new()));
         entry.0 = entry.0.max(value);
-        if let Some(timestamp) = row["timestamp_us"].as_u64() {
+        if let Some(timestamp) = row["timestamp_us"].as_u64()
+            && !entry.1.contains(&timestamp)
+        {
+            work.entry()?;
             entry.1.insert(timestamp);
         }
     }
     if lifetimes.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(ResourceValue {
+    Ok(Some(ResourceValue {
         value: if cumulative {
             lifetimes.values().map(|(value, _)| value).sum()
         } else {
@@ -115,7 +123,7 @@ fn resource_value(
             .min()
             .unwrap(),
         identity_known,
-    })
+    }))
 }
 
 pub fn compare(
@@ -279,8 +287,8 @@ pub fn compare(
         ),
     ] {
         work.check()?;
-        let x = resource_value(&a, input, unit, cumulative);
-        let y = resource_value(&b, input, unit, cumulative);
+        let x = resource_value(&a, input, unit, cumulative, &mut work)?;
+        let y = resource_value(&b, input, unit, cumulative, &mut work)?;
         work.check()?;
         if x.is_some() || y.is_some() {
             let sufficient = x.as_ref().zip(y.as_ref()).is_some_and(|(x, y)| {
@@ -380,4 +388,39 @@ pub fn compare(
     Ok(
         json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"hotspot_selection":hotspot_selection,"sample_weight_units":{"before":before_units,"after":after_units},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred.","Hotspots group observed function/file/module names across measured code versions; this grouping does not establish semantic equivalence. A missing row outside a truncated rank window is unknown, not an unobserved function."]}),
     )
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+    #[test]
+    fn resource_comparison_counts_distinct_lifetimes_and_observation_points() {
+        let rows=(1..=2).map(|timestamp|json!({"kind":"metric","name":"process.rss","unit":"bytes","scope":"process","pid":1,"timestamp_us":timestamp,"value":timestamp*5,"attributes":{"process_lifetime_id":"original","process_role":"measured"}})).collect::<Vec<_>>();
+        let mut budget = query::WorkBudget::new(
+            query::QueryLimits {
+                maximum_aggregate_entries: 2,
+                ..Default::default()
+            },
+            || Ok(()),
+        );
+        let error = resource_value(&rows, "process.rss", "bytes", false, &mut budget)
+            .err()
+            .unwrap();
+        let limit = error.downcast_ref::<query::WorkBudgetExceeded>().unwrap();
+        assert_eq!(limit.dimension, query::WorkDimension::AggregateEntries);
+        assert_eq!(limit.observed, 3);
+        let mut budget = query::WorkBudget::new(
+            query::QueryLimits {
+                maximum_aggregate_entries: 3,
+                ..Default::default()
+            },
+            || Ok(()),
+        );
+        let value = resource_value(&rows, "process.rss", "bytes", false, &mut budget)
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.value, 10.0);
+        assert_eq!(value.observations, 2);
+        assert_eq!(value.lifetimes, 1);
+    }
 }
