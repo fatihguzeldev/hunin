@@ -126,27 +126,16 @@ impl Operations {
             "timeline.query" => Ok(query::timeline(&store.records(id()?)?, &params)),
             "resources.query" => Ok(query::resources_page(&store.records(id()?)?, &params)),
             "contexts.query" => {
-                let records = store.records(id()?)?;
-                let rows = records
-                    .iter()
-                    .filter(|r| r["kind"] == "context" || r["kind"] == "relation")
-                    .collect::<Vec<_>>();
-                let selected = rows
-                    .iter()
-                    .skip(cursor)
-                    .take(limit)
-                    .copied()
-                    .collect::<Vec<_>>();
+                let mut selected = store.context_records_page(id()?, limit + 1, cursor)?;
+                let more = selected.len() > limit;
+                selected.truncate(limit);
                 Ok(
-                    json!({"contexts":selected.iter().filter(|r|r["kind"]=="context").collect::<Vec<_>>(),"relations":selected.iter().filter(|r|r["kind"]=="relation").collect::<Vec<_>>(),"next_cursor":(cursor+limit<rows.len()).then(||(cursor+limit).to_string())}),
+                    json!({"contexts":selected.iter().filter(|r|r["kind"]=="context").collect::<Vec<_>>(),"relations":selected.iter().filter(|r|r["kind"]=="relation").collect::<Vec<_>>(),"next_cursor":more.then(||(cursor+limit).to_string())}),
                 )
             }
             "evidence.get" => {
-                let records = store.records(id()?)?;
-                let wanted = params["ids"].as_array().unwrap();
-                Ok(
-                    json!({"records":records.iter().filter(|r|wanted.contains(&r["id"])).collect::<Vec<_>>()}),
-                )
+                let wanted = serde_json::from_value::<Vec<String>>(params["ids"].clone())?;
+                Ok(json!({"records":store.evidence_records(id()?, &wanted)?}))
             }
             "artifacts.list" => Ok(metadata_page(
                 "artifacts",

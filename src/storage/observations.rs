@@ -58,6 +58,35 @@ pub struct RecordsSnapshot {
 }
 
 impl Store {
+    pub(crate) fn evidence_records(&self, run_id: &str, ids: &[String]) -> Result<Vec<Value>> {
+        self.run(run_id)?;
+        let connection = self.connection()?;
+        let mut query = connection.prepare("SELECT o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.id IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq")?;
+        query
+            .query_map(params![run_id, serde_json::to_string(ids)?], |row| {
+                row.get::<_, String>(0)
+            })?
+            .map(|row| Ok(serde_json::from_str(&row?)?))
+            .collect()
+    }
+
+    pub(crate) fn context_records_page(
+        &self,
+        run_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Value>> {
+        self.run(run_id)?;
+        let connection = self.connection()?;
+        let mut query = connection.prepare("SELECT o.record FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.kind IN('context','relation') ORDER BY o.timestamp_us,o.seq LIMIT ?2 OFFSET ?3")?;
+        query
+            .query_map(params![run_id, limit.min(5001), offset], |row| {
+                row.get::<_, String>(0)
+            })?
+            .map(|row| Ok(serde_json::from_str(&row?)?))
+            .collect()
+    }
+
     pub(crate) fn with_selected_snapshot<T>(
         &self,
         run_id: &str,

@@ -19,6 +19,64 @@ fn run(id: &str, cwd: &str, passed: bool) -> Run {
 }
 
 #[tokio::test]
+async fn evidence_and_context_pages_filter_before_decoding_unrelated_observations() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    store.save_run(&run("foreign", "/project", true)).unwrap();
+    let context = |id, time| json!({"schema_version":1,"kind":"context","id":id,"run_id":"recording","producer_id":"control","pid":1,"tid":"main","timestamp_us":time,"basis":"observed","name":id});
+    let event = json!({"schema_version":1,"kind":"event","id":"unrelated","run_id":"recording","producer_id":"control","pid":1,"tid":"main","timestamp_us":1,"basis":"observed","name":"unrelated"});
+    let first = context("first", 2);
+    let second = context("second", 4);
+    let relation = json!({"schema_version":1,"kind":"relation","id":"link","run_id":"recording","producer_id":"control","pid":1,"tid":"main","timestamp_us":3,"basis":"observed","from":"first","to":"second","relation":"links","evidence":["first","second"]});
+    store
+        .accept(
+            "recording",
+            "input",
+            &[event, first.clone(), relation.clone(), second.clone()],
+        )
+        .unwrap();
+    let mut foreign = first.clone();
+    foreign["run_id"] = json!("foreign");
+    store
+        .accept("foreign", "foreign-input", &[foreign])
+        .unwrap();
+    let connection = rusqlite::Connection::open(directory.path().join("hunin.sqlite")).unwrap();
+    connection
+        .execute(
+            "UPDATE observations SET record='not JSON' WHERE run_id='recording' AND id='unrelated'",
+            [],
+        )
+        .unwrap();
+    let operations = Operations::new(store);
+    let evidence = operations
+        .call(
+            "evidence.get",
+            json!({"run_id":"recording","ids":["second","first","first","missing"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(evidence["records"], json!([first.clone(), second.clone()]));
+    for (cursor, contexts, relations, next) in [
+        ("0", json!([first]), json!([]), json!("1")),
+        ("1", json!([]), json!([relation]), json!("2")),
+        ("2", json!([second]), json!([]), json!(null)),
+    ] {
+        let page = operations
+            .call(
+                "contexts.query",
+                json!({"run_id":"recording","cursor":cursor,"limit":1}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            page,
+            json!({"contexts":contexts,"relations":relations,"next_cursor":next})
+        );
+    }
+}
+
+#[tokio::test]
 async fn analysis_without_result_identity_is_never_selected() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();
