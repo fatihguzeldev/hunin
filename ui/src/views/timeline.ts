@@ -10,8 +10,10 @@ import {
   referenceIds,
 } from '../observation';
 import { nativeEvidence } from '../native-evidence';
+import { linkedRequest } from '../requests';
 
 export async function timeline(context: ViewContext): Promise<HTMLElement> {
+  const state = context.investigation.timeline;
   const canvas = el('div');
   const detail = el('div');
   const rangeLabel = el('span', { class: 'metric-note' });
@@ -37,9 +39,14 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
     el('option', { value: 'aligned' }, 'Aligned timeline'),
     el('option', { value: 'unmapped' }, 'Unmapped clock evidence'),
   );
+  filter.value = state.kind;
+  pid.value = state.pid === undefined ? '' : String(state.pid);
+  alignment.value = state.alignment;
   let bounds: { start_us: number; end_us: number } | undefined;
-  let window: { start_us: number; end_us: number } | undefined;
-  let cursor: string | undefined;
+  let window = state.window;
+  let cursor = state.cursor;
+  let request: AbortController | undefined;
+  let selectionRequest: AbortController | undefined;
   let epoch = 0;
   const body = el(
     'div',
@@ -56,7 +63,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
         () => {
           window = undefined;
           cursor = undefined;
-          void load();
+          void load('push');
         },
         'button small',
       ),
@@ -70,8 +77,9 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
       field('Process ID', pid),
       field('Clock', alignment),
       button('Apply filter', () => {
+        if (!pid.reportValidity()) return;
         cursor = undefined;
-        void load();
+        void load('push');
       }),
     ),
     canvas,
@@ -95,7 +103,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
       end_us: Math.min(bounds.end_us, Math.round(center + half)),
     };
     cursor = undefined;
-    void load();
+    void load('push');
   }
   function pan(direction: number): void {
     if (!bounds || alignment.value === 'unmapped') return;
@@ -110,9 +118,13 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
     );
     window = { start_us: Math.round(start), end_us: Math.round(start + width) };
     cursor = undefined;
-    void load();
+    void load('push');
   }
-  function inspect(record: Observation): void {
+  function inspect(record: Observation, scroll = true): void {
+    if (context.signal.aborted) return;
+    selectionRequest?.abort();
+    state.selectedId = record.id;
+    context.persist();
     const source = record.stack?.find((frame) =>
       hasInspectableSource(frame.file, frame.code_id),
     );
@@ -147,26 +159,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
                   button(
                     `Open reference ${id}`,
                     () => {
-                      void operation('evidence.get', {
-                        run_id: context.run.id,
-                        ids: [id],
-                      })
-                        .then((data) => {
-                          if (data.records.length) inspect(data.records[0]);
-                          else
-                            detail.append(
-                              el(
-                                'p',
-                                { class: 'notice' },
-                                `Reference ${id} is unavailable in this recording.`,
-                              ),
-                            );
-                        })
-                        .catch((error) =>
-                          detail.append(
-                            errorView(error, () => inspect(record)),
-                          ),
-                        );
+                      void resolve(id);
                     },
                     'button small mono',
                   ),
@@ -177,29 +170,87 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
         ),
       ),
     );
-    detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (scroll) detail.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
-  async function load(): Promise<void> {
+  async function resolve(id: string, scroll = true): Promise<void> {
+    selectionRequest?.abort();
+    selectionRequest = new AbortController();
+    const linked = linkedRequest(context.signal, selectionRequest.signal);
+    try {
+      const data = await operation(
+        'evidence.get',
+        { run_id: context.run.id, ids: [id] },
+        linked.signal,
+      );
+      if (linked.signal.aborted) return;
+      if (data.records[0]) inspect(data.records[0], scroll);
+      else {
+        state.selectedId = undefined;
+        context.persist();
+        detail.replaceChildren(
+          el(
+            'p',
+            { class: 'notice' },
+            `Evidence ${id} is unavailable in the current selected results.`,
+          ),
+        );
+      }
+    } catch (error) {
+      if (!linked.signal.aborted)
+        detail.replaceChildren(
+          errorView(error, () => {
+            void resolve(id, scroll);
+          }),
+        );
+    } finally {
+      linked.finish();
+    }
+  }
+  async function load(history: 'push' | 'replace' = 'replace'): Promise<void> {
+    if (context.signal.aborted) return;
     const version = ++epoch;
+    request?.abort();
+    request = new AbortController();
+    const linked = linkedRequest(context.signal, request.signal);
+    state.kind =
+      filter.value === 'sample' ||
+      filter.value === 'span' ||
+      filter.value === 'event' ||
+      filter.value === 'metric' ||
+      filter.value === 'context' ||
+      filter.value === 'relation'
+        ? filter.value
+        : '';
+    state.pid = pid.value === '' ? undefined : Number(pid.value);
+    state.alignment = alignment.value === 'unmapped' ? 'unmapped' : 'aligned';
+    state.window = window;
+    state.cursor = cursor;
+    context.persist(history);
     canvas.replaceChildren(loading('Loading timeline window…'));
     try {
       const unmappedView = alignment.value === 'unmapped';
-      const data = await operation('timeline.query', {
-        run_id: context.run.id,
-        ...(!unmappedView ? window : {}),
-        alignment: unmappedView ? 'unmapped' : 'aligned',
-        limit: 300,
-        cursor,
-        kind: filter.value || undefined,
-        pid: pid.value === '' ? undefined : Number(pid.value),
-      });
-      if (version !== epoch) return;
+      const data = await operation(
+        'timeline.query',
+        {
+          run_id: context.run.id,
+          ...(!unmappedView ? window : {}),
+          alignment: unmappedView ? 'unmapped' : 'aligned',
+          limit: 300,
+          cursor,
+          kind: filter.value || undefined,
+          pid: state.pid,
+        },
+        linked.signal,
+      );
+      if (version !== epoch || linked.signal.aborted) return;
       bounds ??= data.bounds ?? undefined;
       const current = window ?? data.bounds ?? { start_us: 0, end_us: 0 };
-      const origin = bounds?.start_us ?? current.start_us;
+      const origin = context.run.started_at_us;
       rangeLabel.textContent = unmappedView
         ? 'Unmapped clock · no epoch placement'
-        : `${duration((current.start_us - (bounds?.start_us ?? 0)) * 1_000)} → ${duration((current.end_us - (bounds?.start_us ?? 0)) * 1_000)}`;
+        : data.bounds || window
+          ? `${duration((current.start_us - origin) * 1_000)} → ${duration((current.end_us - origin) * 1_000)} from run start`
+          : 'No aligned timestamps';
       if (!data.records.length) {
         canvas.replaceChildren(
           data.unaligned_count
@@ -344,7 +395,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
             'Next page',
             () => {
               cursor = data.next_cursor ?? undefined;
-              void load();
+              void load('push');
             },
             'button small',
           )
@@ -396,19 +447,23 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
         ),
       );
     } catch (error) {
-      if (version === epoch)
+      if (version === epoch && !linked.signal.aborted)
         canvas.replaceChildren(
           errorView(error, () => {
             void load();
           }),
         );
+    } finally {
+      linked.finish();
     }
   }
   alignment.addEventListener('change', () => {
     cursor = undefined;
     window = undefined;
-    void load();
+    void load('push');
   });
   await load();
+  if (state.selectedId && !context.signal.aborted)
+    await resolve(state.selectedId, false);
   return body;
 }

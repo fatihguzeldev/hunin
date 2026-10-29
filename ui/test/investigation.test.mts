@@ -83,3 +83,30 @@ test('malformed or unavailable private session storage falls back to in-memory i
   assert.deepEqual(malformed.forRun('run').profile.path, []);
   assert.equal(malformed.persistent, true);
 });
+
+test('timeline ranges and evidence identities restore only within the selected observation snapshot', () => {
+  const storage = session();
+  const first = new Investigations(storage);
+  first.observeResult('run', 'a');
+  first.forRun('run').timeline = {
+    kind: 'span',
+    pid: 7,
+    alignment: 'aligned',
+    window: { start_us: 100, end_us: 200 },
+    cursor: 'opaque',
+    selectedId: 'measured-id',
+  };
+  first.persist('run');
+  const reload = new Investigations(storage);
+  assert.equal(reload.observeResult('run', 'a'), undefined);
+  assert.deepEqual(reload.forRun('run').timeline, first.forRun('run').timeline);
+  reload.observeResult('run', 'b');
+  assert.deepEqual(reload.forRun('run').timeline, {
+    kind: 'span',
+    pid: 7,
+    alignment: 'aligned',
+    window: undefined,
+    cursor: undefined,
+    selectedId: undefined,
+  });
+});

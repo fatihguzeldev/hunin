@@ -10,6 +10,15 @@ export type ProfileInvestigation = {
   focus?: { path: string[]; names: string[] };
 };
 
+export type TimelineInvestigation = {
+  kind: '' | 'sample' | 'span' | 'event' | 'metric' | 'context' | 'relation';
+  pid?: number;
+  alignment: 'aligned' | 'unmapped';
+  window?: { start_us: number; end_us: number };
+  cursor?: string;
+  selectedId?: string;
+};
+
 export type SourceSelection = {
   view: string;
   path: string;
@@ -19,6 +28,7 @@ export type SourceSelection = {
 
 export type Investigation = {
   profile: ProfileInvestigation;
+  timeline: TimelineInvestigation;
   source?: SourceSelection;
 };
 
@@ -52,6 +62,7 @@ function strings(value: unknown, limit = 128): string[] | undefined {
 function empty(): Investigation {
   return {
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
+    timeline: { kind: '', alignment: 'aligned' },
   };
 }
 
@@ -74,6 +85,44 @@ function decode(value: unknown): SavedInvestigation | undefined {
   const focusNames = strings(focus?.names, 256);
   if (focusPath && focusNames && focusPath.length === focusNames.length)
     result.profile.focus = { path: focusPath, names: focusNames };
+  const timeline = object(state?.timeline);
+  if (timeline) {
+    const kind = timeline.kind;
+    if (
+      kind === '' ||
+      kind === 'sample' ||
+      kind === 'span' ||
+      kind === 'event' ||
+      kind === 'metric' ||
+      kind === 'context' ||
+      kind === 'relation'
+    )
+      result.timeline.kind = kind;
+    if (
+      typeof timeline.pid === 'number' &&
+      Number.isSafeInteger(timeline.pid) &&
+      timeline.pid >= 0
+    )
+      result.timeline.pid = timeline.pid;
+    result.timeline.alignment =
+      timeline.alignment === 'unmapped' ? 'unmapped' : 'aligned';
+    const range = object(timeline.window);
+    if (
+      range &&
+      typeof range.start_us === 'number' &&
+      typeof range.end_us === 'number' &&
+      Number.isSafeInteger(range.start_us) &&
+      Number.isSafeInteger(range.end_us) &&
+      range.start_us >= 0 &&
+      range.end_us >= range.start_us
+    )
+      result.timeline.window = {
+        start_us: range.start_us,
+        end_us: range.end_us,
+      };
+    result.timeline.cursor = text(timeline.cursor);
+    result.timeline.selectedId = text(timeline.selectedId);
+  }
   const source = object(state?.source);
   const path = text(source?.path);
   const view = text(source?.view);
@@ -182,6 +231,9 @@ export class Investigations {
       profile.expanded = undefined;
       profile.focus = undefined;
       entry.state.source = undefined;
+      entry.state.timeline.window = undefined;
+      entry.state.timeline.cursor = undefined;
+      entry.state.timeline.selectedId = undefined;
     }
     entry.resultIdentity = identity;
     entry.restored = false;
