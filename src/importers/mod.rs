@@ -4,6 +4,8 @@ use formats::ProfileFormat;
 pub(crate) use formats::import_formats;
 mod go_trace;
 mod graal;
+mod inputs;
+pub(crate) use inputs::Limits as NormalizationInputLimits;
 mod javascript_sources;
 mod native_identity;
 mod native_lifetimes;
@@ -15,13 +17,10 @@ mod vmprof;
 
 use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
-use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -55,7 +54,7 @@ pub struct ImportedProfile {
 }
 
 pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile> {
-    import_inner(path, format, run_id, None)
+    import_controlled(path, format, run_id, None)
 }
 pub fn import_with_native_context(
     path: &Path,
@@ -63,27 +62,71 @@ pub fn import_with_native_context(
     run_id: &str,
     manifest_path: &Path,
 ) -> Result<ImportedProfile> {
+    import_with_native_context_controlled(path, format, run_id, manifest_path, None)
+}
+
+pub(crate) fn import_with_native_context_controlled(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    manifest_path: &Path,
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportedProfile> {
     anyhow::ensure!(
         ProfileFormat::parse(format)? == ProfileFormat::Firefox,
         "native image context requires a Firefox/samply recording"
     );
-    import_inner(path, format, run_id, Some(manifest_path))
+    import_with_limits(
+        path,
+        format,
+        run_id,
+        Some(manifest_path),
+        NormalizationInputLimits::default(),
+        deadline,
+    )
 }
-fn import_inner(
+
+pub(crate) fn import_controlled(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportedProfile> {
+    import_with_limits(
+        path,
+        format,
+        run_id,
+        None,
+        NormalizationInputLimits::default(),
+        deadline,
+    )
+}
+
+fn import_with_limits(
     path: &Path,
     format: &str,
     run_id: &str,
     native_context: Option<&Path>,
+    limits: inputs::Limits,
+    deadline: Option<std::time::Instant>,
 ) -> Result<ImportedProfile> {
+    let (snapshot, digest) = capture_inputs(path, format, limits, deadline)?;
+    decode_snapshot(path, format, run_id, native_context, &snapshot, digest)
+}
+
+fn capture_inputs(
+    path: &Path,
+    format: &str,
+    limits: inputs::Limits,
+    deadline: Option<std::time::Instant>,
+) -> Result<(inputs::Snapshot, Sha256)> {
     let kind = ProfileFormat::parse(format)?;
-    let bytes = fs::read(path).with_context(|| format!("read profile {}", path.display()))?;
-    let raw_sha256 = format!("{:x}", Sha256::digest(&bytes));
-    let sidecars = sidecars(path, kind);
+    let mut snapshot = inputs::Snapshot::new(limits, deadline)?;
     let mut digest = Sha256::new();
     digest.update(b"hunin-import-v9\0");
     digest.update(format.as_bytes());
     digest.update([0]);
-    digest.update(&bytes);
+    snapshot.capture_raw(path, &mut digest)?;
     if kind == ProfileFormat::V8 {
         digest.update(
             path.file_name()
@@ -92,8 +135,12 @@ fn import_inner(
                 .as_bytes(),
         );
     }
-    let mut sidecar_sha256 = BTreeMap::new();
-    for sidecar in &sidecars {
+    let scripts = if kind == ProfileFormat::V8 {
+        v8::script_paths(path)
+    } else {
+        vec![]
+    };
+    for sidecar in sidecars(path, kind) {
         digest.update([0]);
         digest.update(
             sidecar
@@ -102,33 +149,46 @@ fn import_inner(
                 .to_string_lossy()
                 .as_bytes(),
         );
-        let content = fs::read(sidecar)?;
-        sidecar_sha256.insert(sidecar.clone(), format!("{:x}", Sha256::digest(&content)));
-        digest.update(content);
+        let maximum = if scripts.contains(&sidecar) {
+            javascript_sources::MAX_TOTAL
+        } else if kind == ProfileFormat::Firefox && sidecar == path.with_extension("lifetimes.json")
+        {
+            native_lifetimes::MAX_SIDECAR
+        } else {
+            limits.sidecar_bytes
+        };
+        snapshot.capture_sidecar(&sidecar, maximum, &mut digest)?;
     }
-    let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
-        let mut decoded = Vec::new();
-        GzDecoder::new(bytes.as_slice())
-            .take(512 * 1024 * 1024 + 1)
-            .read_to_end(&mut decoded)?;
-        if decoded.len() > 512 * 1024 * 1024 {
-            bail!("profile exceeds 512 MiB decompressed limit");
-        }
-        decoded
-    } else {
-        bytes
-    };
+    Ok((snapshot, digest))
+}
+
+fn decode_snapshot(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    native_context: Option<&Path>,
+    snapshot: &inputs::Snapshot,
+    mut digest: Sha256,
+) -> Result<ImportedProfile> {
+    let kind = ProfileFormat::parse(format)?;
+    let raw_sha256 = snapshot.raw_sha256().to_owned();
+    let sidecar_sha256 = snapshot.sidecar_sha256();
+    let sidecars = sidecar_sha256.keys().cloned().collect();
+    let decoder_path = snapshot.path();
+    let raw = snapshot.decoded()?;
     let mut native_raw = if kind == ProfileFormat::Firefox {
         Some(serde_json::from_slice::<Value>(&raw)?)
     } else {
         None
     };
     let lifetimes = if let Some(raw) = &native_raw {
-        let sidecar = path.with_extension("lifetimes.json");
+        let sidecar = decoder_path.with_extension("lifetimes.json");
         native_lifetimes::Timeline::load(
             &sidecar,
             &raw_sha256,
-            sidecar_sha256.get(&sidecar).map(String::as_str),
+            sidecar_sha256
+                .get(&path.with_extension("lifetimes.json"))
+                .map(String::as_str),
             raw,
         )?
     } else {
@@ -156,10 +216,15 @@ fn import_inner(
         digest.update(serde_json::to_vec(&images.fingerprint())?);
     }
     let vmprof = (kind == ProfileFormat::Vmprof)
-        .then(|| vmprof::read(path))
+        .then(|| {
+            vmprof::read(
+                decoder_path,
+                snapshot.remaining(std::time::Duration::from_secs(60))?,
+            )
+        })
         .transpose()?;
     let go_trace = (kind == ProfileFormat::GoTrace)
-        .then(|| go_trace::read(path))
+        .then(|| go_trace::read(decoder_path, snapshot.deadline()))
         .transpose()?;
     let decoder_provenance = vmprof
         .as_ref()
@@ -171,13 +236,13 @@ fn import_inner(
     }
     let key = format!("{:x}", digest.finalize());
     let scripts = if kind == ProfileFormat::V8 {
-        Some(javascript_sources::Scripts::load(path)?)
+        Some(javascript_sources::Scripts::load(decoder_path)?)
     } else {
         None
     };
     let (records, mut diagnostics) = match kind {
         ProfileFormat::Firefox => firefox::decode_with_lifetimes(
-            path,
+            decoder_path,
             native_raw.as_ref().unwrap(),
             run_id,
             &key,
@@ -185,15 +250,17 @@ fn import_inner(
             lifetimes.as_ref(),
         )?,
         ProfileFormat::V8 => v8::decode(
-            path,
+            decoder_path,
             &serde_json::from_slice(&raw)?,
             run_id,
             &key,
             scripts.as_ref().unwrap(),
         )?,
-        ProfileFormat::Graal => graal::decode(path, &serde_json::from_slice(&raw)?, run_id, &key)?,
+        ProfileFormat::Graal => {
+            graal::decode(decoder_path, &serde_json::from_slice(&raw)?, run_id, &key)?
+        }
         ProfileFormat::Pprof => pprof::decode(&raw, run_id, &key)?,
-        ProfileFormat::PythonCpuProgress => python_cpu::decode(path, run_id, &key)?,
+        ProfileFormat::PythonCpuProgress => python_cpu::decode(decoder_path, run_id, &key)?,
         ProfileFormat::GoTrace => go_trace::decode(go_trace.as_ref().unwrap(), run_id, &key)?,
         ProfileFormat::Vmprof => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
         ProfileFormat::Jsonl => {
@@ -225,6 +292,7 @@ fn import_inner(
     let binary_snapshots = images
         .map(native_identity::Images::into_snapshots)
         .unwrap_or_default();
+    snapshot.verify()?;
     Ok(ImportedProfile {
         source: path.to_owned(),
         raw_sha256,
@@ -300,7 +368,7 @@ pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
 #[cfg(test)]
 mod recorded_controls {
     use super::*;
-    use std::collections::HashSet;
+    use std::{collections::HashSet, fs};
 
     #[test]
     fn canonical_sample_units_emit_the_authoritative_wire_contract_without_losing_attributes() {
@@ -441,3 +509,6 @@ mod recorded_controls {
         crate::ingestion::validate("control", &profile.records, &HashSet::new()).unwrap();
     }
 }
+
+#[cfg(test)]
+mod input_budget_tests;

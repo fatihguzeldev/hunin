@@ -11,7 +11,7 @@ use std::{
 };
 
 const UPSTREAM: &str = "da75c28f367454c621e690eeb4e44ec2ebb29a78";
-const MAX_SIDECAR: u64 = 160 * 1024 * 1024;
+pub(super) const MAX_SIDECAR: u64 = 160 * 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct Timeline {

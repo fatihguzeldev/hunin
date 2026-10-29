@@ -131,7 +131,7 @@ pub(super) struct Decoded {
     pub provenance: Value,
 }
 
-pub(super) fn read(path: &Path) -> Result<Decoded> {
+pub(super) fn read(path: &Path, timeout: std::time::Duration) -> Result<Decoded> {
     let python = interpreter();
     let root = assets();
     let source = root.join("src/importers/vmprof/decode.py");
@@ -144,7 +144,7 @@ pub(super) fn read(path: &Path) -> Result<Decoded> {
     let output = probe::output(
         Command::new(&python).arg(&script).arg(path),
         None,
-        std::time::Duration::from_secs(60),
+        timeout,
         64 * 1024 * 1024,
     )
     .with_context(|| format!("run vmprof decoder with {}", python.display()))?;

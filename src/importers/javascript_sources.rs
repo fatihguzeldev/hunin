@@ -9,7 +9,7 @@ use std::{
     path::Path,
 };
 
-const MAX_TOTAL: u64 = 32 * 1024 * 1024;
+pub(super) const MAX_TOTAL: u64 = 32 * 1024 * 1024;
 fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }

@@ -42,7 +42,7 @@ fn resolve(name: &str) -> Option<PathBuf> {
     resolve_launch_executable(name, &env::current_dir().ok()?, &BTreeMap::new())
 }
 
-pub(in crate::importers) fn read(path: &Path) -> Result<Decoded> {
+pub(in crate::importers) fn read(path: &Path, deadline: Option<Instant>) -> Result<Decoded> {
     let metadata: Value = fs::read(path.parent().unwrap_or(Path::new(".")).join("go-tool.json"))
         .ok()
         .map(|bytes| serde_json::from_slice(&bytes))
@@ -70,7 +70,13 @@ pub(in crate::importers) fn read(path: &Path) -> Result<Decoded> {
             "available_toolchain",
         )
     };
-    read_with_tool(path, &go, selection, metadata.get("executable").is_some())
+    read_with_tool(
+        path,
+        &go,
+        selection,
+        metadata.get("executable").is_some(),
+        deadline,
+    )
 }
 
 fn read_with_tool(
@@ -78,13 +84,22 @@ fn read_with_tool(
     go: &Path,
     selection: &str,
     has_capture_hint: bool,
+    deadline: Option<Instant>,
 ) -> Result<Decoded> {
     let began = Instant::now();
     let remaining = || {
-        Duration::from_secs(60)
+        let own = Duration::from_secs(60)
             .checked_sub(began.elapsed())
             .filter(|value| !value.is_zero())
-            .context("Go trace decoder deadline elapsed")
+            .context("Go trace decoder deadline elapsed")?;
+        let remaining = deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()).min(own))
+            .unwrap_or(own);
+        ensure!(
+            !remaining.is_zero(),
+            "Go trace decoder normalization deadline elapsed"
+        );
+        Ok(remaining)
     };
     let go_hash = digest(go)?;
     let environment = probe::output(
@@ -214,9 +229,15 @@ mod tests {
         let trace_path = trace.to_string_lossy().replace('\'', "'\\''");
         fs::write(&go, format!("#!/bin/sh\nif [ \"$1\" = env ]; then printf '%s' '{json}'; else printf '%s' '{trace_path}'; fi\n")).unwrap();
         fs::set_permissions(&go, fs::Permissions::from_mode(0o755)).unwrap();
-        let error = read_with_tool(&directory.path().join("unused"), &go, "control", false)
-            .err()
-            .unwrap();
+        let error = read_with_tool(
+            &directory.path().join("unused"),
+            &go,
+            "control",
+            false,
+            None,
+        )
+        .err()
+        .unwrap();
         assert!(
             error.to_string().contains("executables changed"),
             "{error:#}"
@@ -234,8 +255,14 @@ mod tests {
         let trace_path = trace.to_string_lossy().replace('\'', "'\\''");
         fs::write(&go, format!("#!/bin/sh\nif [ \"$1\" = env ]; then printf '%s' '{environment}'; else printf '%s' '{trace_path}'; fi\n")).unwrap();
         fs::set_permissions(&go, fs::Permissions::from_mode(0o755)).unwrap();
-        let decoded =
-            read_with_tool(&directory.path().join("unused"), &go, "control", false).unwrap();
+        let decoded = read_with_tool(
+            &directory.path().join("unused"),
+            &go,
+            "control",
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(decoded.text, "legacy-output");
         assert_eq!(decoded.provenance["identity"]["arguments"], json!(["-d=1"]));
     }
