@@ -1,3 +1,4 @@
+use super::output::RecordBatch;
 use super::sample;
 use crate::{
     host::{assets, probe, tool},
@@ -170,15 +171,23 @@ pub(super) fn read(path: &Path, timeout: std::time::Duration) -> Result<Decoded>
     Ok(Decoded { raw, provenance })
 }
 
-pub(super) fn decode(
+pub(super) fn decode_into(
     decoded: &Decoded,
     run_id: &str,
     key: &str,
-) -> Result<(Vec<Value>, Vec<String>)> {
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     let raw = &decoded.raw;
     let pid = raw["pid"].as_u64().unwrap_or(0);
     let clock = raw["clock"].as_str().unwrap_or("unknown");
-    let mut records = Vec::new();
+    for name in [
+        "metadata",
+        "sampling_basis",
+        "profile_os",
+        "lost_time_seconds",
+    ] {
+        records.fragment(&raw[name])?;
+    }
     for (index, value) in raw["samples"]
         .as_array()
         .context("vmprof samples missing")?
@@ -193,10 +202,8 @@ pub(super) fn decode(
                 pid,
                 tid: value["tid"].as_str().unwrap_or("unknown"),
                 timestamp_us: value["timestamp_us"].as_u64().unwrap_or(0),
-                stack: value["stack"]
-                    .as_array()
-                    .context("vmprof stack missing")?
-                    .clone(),
+                stack: records
+                    .clone_stack(value["stack"].as_array().context("vmprof stack missing")?)?,
                 weight: 1.0,
                 weight_unit: SampleWeightUnit::Samples,
                 attributes: json!({"clock":clock,"clock_alignment":"unmapped","timestamp_available":value["timestamp_available"],
@@ -206,20 +213,17 @@ pub(super) fn decode(
             },
         );
         record["interval_us"] = raw["interval_us"].clone();
-        records.push(record);
+        records.push(record)?;
         if let Some(bytes) = value["rss_bytes"].as_u64() {
             records.push(json!({"schema_version":1,"kind":"metric","id":format!("profile:{key}:rss:{index}"),"run_id":run_id,
                 "producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":"","timestamp_us":value["timestamp_us"],
                 "basis":"observed","name":"rss","value":bytes,"unit":"bytes","scope":"process",
-                "attributes":{"clock":clock,"clock_alignment":"unmapped","source_format":"vmprof"}}));
+                "attributes":{"clock":clock,"clock_alignment":"unmapped","source_format":"vmprof"}}))?;
         }
     }
-    Ok((
-        records,
-        vec![format!(
-            "vmprof timestamps use an unaligned {clock} clock; inspect hotspots separately from the epoch timeline"
-        )],
-    ))
+    Ok(vec![format!(
+        "vmprof timestamps use an unaligned {clock} clock; inspect hotspots separately from the epoch timeline"
+    )])
 }
 
 #[cfg(test)]

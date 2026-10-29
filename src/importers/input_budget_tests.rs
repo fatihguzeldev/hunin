@@ -55,7 +55,16 @@ fn decoder_uses_exact_captured_raw_and_sidecar_bytes_after_originals_change() {
         capture_inputs(&path, "v8-cpuprofile", inputs::Limits::default(), None).unwrap();
     fs::write(&path, b"changed original raw; no longer valid JSON").unwrap();
     fs::write(&sidecar, br#"{"pid":888,"profile_time_origin_us":2000}"#).unwrap();
-    let profile = decode_snapshot(&path, "v8-cpuprofile", "run", None, &snapshot, digest).unwrap();
+    let profile = decode_snapshot(
+        &path,
+        "v8-cpuprofile",
+        "run",
+        None,
+        &snapshot,
+        digest,
+        &mut OutputBudget::default(),
+    )
+    .unwrap();
     assert_eq!(profile.records, baseline.records);
     assert_eq!(profile.input_fingerprint, baseline.input_fingerprint);
     assert_eq!(profile.raw_sha256, baseline.raw_sha256);

@@ -1,3 +1,4 @@
+use super::output::{RecordBatch, StackBuilder};
 mod tool;
 
 use anyhow::{Context, Result, bail};
@@ -6,18 +7,24 @@ use std::collections::HashMap;
 
 pub(super) use tool::read;
 
-pub(super) fn decode(
+pub(super) fn decode_into(
     decoded: &tool::Decoded,
     run_id: &str,
     key: &str,
-) -> Result<(Vec<Value>, Vec<String>)> {
-    let (records, mut diagnostics) = parse(&decoded.text, run_id, key)?;
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
+    let mut diagnostics = parse_into(&decoded.text, run_id, key, records)?;
     diagnostics.extend(decoded.diagnostics.clone());
-    Ok((records, diagnostics))
+    Ok(diagnostics)
 }
 
-fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
-    let mut records = Vec::new();
+fn parse_into(
+    text: &str,
+    run_id: &str,
+    key: &str,
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
+    let mut current_stack = StackBuilder::new();
     let mut anchor: Option<(i128, i128)> = None;
     let mut ranges: HashMap<(String, String), (u64, String, Value)> = HashMap::new();
     let mut current: Option<Value> = None;
@@ -25,7 +32,14 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
     for line in text.lines() {
         if line.starts_with("M=") {
             if let Some(record) = current.take() {
-                finish(record, &mut records, &mut ranges, run_id, key)?;
+                finish(
+                    record,
+                    std::mem::replace(&mut current_stack, StackBuilder::new()),
+                    records,
+                    &mut ranges,
+                    run_id,
+                    key,
+                )?;
             }
             let mut fields = line.split_whitespace();
             let m = fields
@@ -55,6 +69,7 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
             if !(0..=9_007_199_254_740_991).contains(&timestamp) {
                 bail!("Go trace timestamp outside safe microsecond range");
             }
+            records.fragment(&line)?;
             let mut attrs = json!({"source_format":"go-trace","go_m_id":m,"go_p_id":p,"goroutine_id":g,"raw_event":line,
                 "clock":if mapped.is_some(){"unix_epoch"}else{"go_trace"},"clock_alignment":if mapped.is_some(){"go_clock_snapshot"}else{"unmapped"}});
             for name in ["Name", "Scope", "Reason", "GoID", "ProcID"] {
@@ -89,19 +104,23 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
                         frame["line"] = json!(number);
                     }
                 }
-                if let Some(record) = current.as_mut() {
-                    if record.get("stack").is_none() {
-                        record["stack"] = json!([]);
-                    }
-                    record["stack"].as_array_mut().unwrap().push(frame);
+                if current.is_some() {
+                    current_stack.push_owned(frame, records)?;
                 }
             }
         }
     }
     if let Some(record) = current {
-        finish(record, &mut records, &mut ranges, run_id, key)?;
+        finish(
+            record,
+            std::mem::replace(&mut current_stack, StackBuilder::new()),
+            records,
+            &mut ranges,
+            run_id,
+            key,
+        )?;
     }
-    if records.is_empty() {
+    if records.len() == 0 {
         bail!("Go trace contains no parsed events");
     }
     let mut diagnostics=vec!["Go runtime trace M/G identities are retained separately from unknown OS PID; temporal overlap creates no causal links".into()];
@@ -116,18 +135,21 @@ fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>
             ranges.len()
         ));
     }
-    Ok((records, diagnostics))
+    Ok(diagnostics)
 }
 
 fn finish(
     mut record: Value,
-    records: &mut Vec<Value>,
+    stack: StackBuilder,
+    records: &mut RecordBatch<'_>,
     ranges: &mut HashMap<(String, String), (u64, String, Value)>,
     run_id: &str,
     key: &str,
 ) -> Result<()> {
-    if let Some(stack) = record.get_mut("stack").and_then(Value::as_array_mut) {
+    let mut stack = stack.finish();
+    if !stack.is_empty() {
         stack.reverse();
+        record["stack"] = json!(stack);
     }
     let raw = record["attributes"]["raw_event"].as_str().unwrap_or("");
     let kind = raw.split_whitespace().nth(3).unwrap_or("");
@@ -140,7 +162,7 @@ fn finish(
             (
                 timestamp,
                 record["id"].as_str().unwrap().to_owned(),
-                record.clone(),
+                records.checked_clone(&record)?,
             ),
         );
     } else if kind == "RangeEnd"
@@ -150,9 +172,9 @@ fn finish(
             bail!("Go range ends before it begins");
         }
         let span = json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:range:{}",records.len()),"run_id":run_id,"producer_id":original["producer_id"],"pid":0,"tid":original["tid"],"timestamp_us":start,"duration_us":timestamp-start,"basis":"observed","name":format!("go.{name}"),"evidence":[begin,record["id"]],"attributes":original["attributes"]});
-        records.push(span);
+        records.push(span)?;
     }
-    records.push(record);
+    records.push(record)?;
     Ok(())
 }
 
@@ -176,6 +198,14 @@ fn metric(line: &str) -> Option<(f64, &str)> {
     let value = field(line, "Value")?;
     let number = value.split_once('(')?.1.split_once(')')?.0.parse().ok()?;
     Some((number, unit))
+}
+
+#[cfg(test)]
+fn parse(text: &str, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = parse_into(text, run_id, key, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
 #[cfg(test)]

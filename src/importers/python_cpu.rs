@@ -1,3 +1,4 @@
+use super::output::RecordBatch;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
@@ -6,7 +7,12 @@ use std::{
     path::Path,
 };
 
-pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+pub(super) fn decode_into(
+    path: &Path,
+    run_id: &str,
+    key: &str,
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     let metadata_path = std::path::PathBuf::from(format!("{}.meta.json", path.display()));
     let metadata: Value = serde_json::from_slice(
         &fs::read(&metadata_path).context("CPU progress metadata missing")?,
@@ -35,7 +41,9 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
     let max_latency = metadata["max_capture_latency_ns"]
         .as_u64()
         .context("CPU sampler latency bound missing")?;
-    let mut records = Vec::new();
+    for name in ["clock_source", "coverage", "weight_semantics"] {
+        records.fragment(&metadata[name])?;
+    }
     let mut sample_count = 0;
     let mut ended_thread_gaps = 0;
     for (index, line) in BufReader::new(fs::File::open(path)?).lines().enumerate() {
@@ -79,10 +87,13 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
         let latency = row["capture_latency_ns"]
             .as_u64()
             .context("CPU capture latency missing")?;
+        records.fragment(&row["attribution"])?;
+        records.fragment(&tid)?;
+        records.fragment(&lifetime)?;
         let attrs = json!({"source_format":"python-cpu-progress","clock":"unix_epoch","original_clock":"runtime_monotonic","clock_source":metadata["clock_source"],"clock_alignment":"calibrated_epoch","clock_uncertainty_us":uncertainty.div_ceil(1000),"timestamp_uncertainty_us":uncertainty.saturating_add(latency).div_ceil(1000),"raw_timestamp_ns":timestamp,"frame_capture_started_ns":row["frame_capture_started_ns"],"frame_capture_finished_ns":row["frame_capture_finished_ns"],"counter_read_finished_ns":row["read_finished_ns"],"native_tid":native,"thread_id_source":"python_thread_ident","thread_lifetime_id":lifetime,"process_role":"measured","cpu_counter_ns":cpu,"cpu_delta_ns":delta,"observation_interval_ns":interval,"capture_latency_ns":latency,"attribution":row["attribution"],"sampling_basis":"os_thread_cpu_progress_gated_stack_sample","cost_semantics":metadata["weight_semantics"],"coverage":metadata["coverage"]});
         let mut metric_attrs = attrs.clone();
         metric_attrs["temporality"] = json!("cumulative");
-        records.push(json!({"schema_version":1,"kind":"metric","id":format!("{key}:cpu-counter:{index}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":tid,"timestamp_us":epoch as u64,"basis":"observed","name":"thread.cpu_time","scope":"thread","value":cpu as f64/1000.0,"unit":"microseconds","attributes":metric_attrs}));
+        records.push(json!({"schema_version":1,"kind":"metric","id":format!("{key}:cpu-counter:{index}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":tid,"timestamp_us":epoch as u64,"basis":"observed","name":"thread.cpu_time","scope":"thread","value":cpu as f64/1000.0,"unit":"microseconds","attributes":metric_attrs}))?;
         if row["attribution"] == "sample" {
             if delta == 0 || interval == 0 || interval > max_gap || latency > max_latency {
                 bail!("CPU sample exceeds its declared attribution bounds");
@@ -91,7 +102,8 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
                 .as_array()
                 .filter(|s| !s.is_empty())
                 .context("attributed CPU sample has no captured stack")?;
-            records.push(json!({"schema_version":1,"kind":"sample","id":format!("{key}:cpu-sample:{index}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":tid,"timestamp_us":epoch as u64,"basis":"sampled","stack":stack,"weight":delta as f64/1000.0,"weight_unit":"microseconds","attributes":attrs}));
+            let stack = records.clone_stack(stack)?;
+            records.push(json!({"schema_version":1,"kind":"sample","id":format!("{key}:cpu-sample:{index}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":tid,"timestamp_us":epoch as u64,"basis":"sampled","stack":stack,"weight":delta as f64/1000.0,"weight_unit":"microseconds","attributes":attrs}))?;
             sample_count += 1;
         }
     }
@@ -105,7 +117,15 @@ pub(super) fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>
     if sample_count == 0 {
         diagnostics.push("No positive CPU progress could be attributed within the declared bounds; CPU stack costs were not invented.".into());
     }
-    Ok((records, diagnostics))
+    Ok(diagnostics)
+}
+
+#[cfg(test)]
+fn decode(path: &Path, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = decode_into(path, run_id, key, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use super::output::{RecordBatch, StackBuilder};
 use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, native_identity::Images, sample};
 use anyhow::{Context, Result, bail};
@@ -16,36 +17,39 @@ pub(super) fn decode(
     key: &str,
     images: &Images,
 ) -> Result<(Vec<Value>, Vec<String>)> {
-    decode_with_lifetimes(path, raw, run_id, key, images, None)
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = decode_into(path, raw, run_id, key, images, None, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
-pub(super) fn decode_with_lifetimes(
+pub(super) fn decode_into(
     path: &Path,
     raw: &Value,
     run_id: &str,
     key: &str,
     images: &Images,
     lifetimes: Option<&super::native_lifetimes::Timeline>,
-) -> Result<(Vec<Value>, Vec<String>)> {
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     let sidecar = path.with_extension("syms.json");
     let symbols: Option<Value> = fs::read(&sidecar)
         .ok()
         .map(|data| serde_json::from_slice(&data))
         .transpose()?;
-    let mut records = Vec::new();
     let mut unresolved = 0;
     decode_process(
         raw,
         symbols.as_ref(),
         run_id,
         key,
-        &mut records,
+        records,
         &mut unresolved,
         &NativeContext { images, lifetimes },
     )?;
     let mut diagnostics = images.diagnostics();
     if let Some(lifetimes) = lifetimes {
-        records.extend(lifetimes.records(run_id, key)?);
+        lifetimes.emit_records(run_id, key, records)?;
         diagnostics.extend(lifetimes.diagnostics());
     }
     if unresolved > 0 {
@@ -53,7 +57,7 @@ pub(super) fn decode_with_lifetimes(
             "{unresolved} sampled native frames remain unresolved; retain measured binaries/debug data or the samply symbol sidecar"
         ));
     }
-    Ok((records, diagnostics))
+    Ok(diagnostics)
 }
 
 struct NativeContext<'a> {
@@ -66,7 +70,7 @@ fn decode_process(
     symbols: Option<&Value>,
     run_id: &str,
     key: &str,
-    records: &mut Vec<Value>,
+    records: &mut RecordBatch<'_>,
     unresolved: &mut usize,
     native: &NativeContext<'_>,
 ) -> Result<()> {
@@ -102,7 +106,7 @@ fn decode_process(
             timeline.thread_basis(thread, record);
         }
         let thread_instance_id = thread_lifetime.as_ref().map(|r| r["id"].clone());
-        records.extend(thread_lifetime);
+        records.extend(thread_lifetime)?;
         if let (Some(start), Some(end)) = (relative_start, thread["processShutdownTime"].as_f64()) {
             if end < start {
                 bail!("Firefox process interval ends before it starts");
@@ -122,7 +126,7 @@ fn decode_process(
                     attrs["clock"] = json!("profile_relative");
                     attrs["clock_alignment"] = json!("unmapped");
                 }
-                records.push(json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:process:{pid}:{lifetime}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":timestamp,"duration_us":duration,"basis":"observed","name":"process.observed_lifetime","attributes":attrs}));
+                records.push(json!({"schema_version":1,"kind":"span","id":format!("profile:{key}:process:{pid}:{lifetime}"),"run_id":run_id,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":timestamp,"duration_us":duration,"basis":"observed","name":"process.observed_lifetime","attributes":attrs}))?;
             }
         }
         let table = &thread["samples"];
@@ -144,9 +148,9 @@ fn decode_process(
             if leaf.is_null() {
                 continue;
             }
-            let mut stack = Vec::new();
+            let mut stack = StackBuilder::new();
             let mut chain = Vec::new();
-            let mut image_checks = BTreeMap::new();
+            let mut image_checks = ImageChecks::default();
             let mut seen = HashSet::new();
             let mut cursor = Some(leaf.as_u64().context("invalid Firefox stack index")? as usize);
             while let Some(current) = cursor {
@@ -165,8 +169,17 @@ fn decode_process(
                     .map(|v| v as usize);
             }
             for frame in chain.into_iter().rev() {
-                let resolved = frame_info(raw, thread, frame, symbols, images, &mut image_checks)?;
+                let resolved = frame_info(
+                    raw,
+                    thread,
+                    frame,
+                    symbols,
+                    images,
+                    &mut image_checks,
+                    records,
+                )?;
                 *unresolved += resolved
+                    .as_slice()
                     .iter()
                     .filter(|f| {
                         f["function"]
@@ -174,7 +187,7 @@ fn decode_process(
                             .is_some_and(|n| n.starts_with("0x") || n.starts_with("[unresolved"))
                     })
                     .count();
-                stack.extend(resolved);
+                stack.append(resolved, records)?;
             }
             let time_ms = times[index]
                 .as_f64()
@@ -214,7 +227,7 @@ fn decode_process(
                     pid,
                     tid: &tid,
                     timestamp_us: timestamp,
-                    stack,
+                    stack: stack.finish(),
                     weight,
                     weight_unit: SampleWeightUnit::Samples,
                     attributes,
@@ -225,11 +238,15 @@ fn decode_process(
                 record["interval_us"] = json!(interval);
             }
             let relations = lifetimes
-                .map(|timeline| timeline.link_sample(thread, time_ms, &mut record, key))
+                .map(|timeline| {
+                    timeline.link_sample_into(thread, time_ms, &mut record, key, records)
+                })
                 .transpose()?
                 .unwrap_or_default();
-            records.push(record);
-            records.extend(relations);
+            records.push(record)?;
+            for relation in relations {
+                records.append_reserved(relation)?;
+            }
         }
     }
     for child in raw["processes"].as_array().into_iter().flatten() {
@@ -278,19 +295,53 @@ fn thread_lifetime(
     Ok(Some(record))
 }
 
+struct ImageChecks {
+    values: BTreeMap<String, Value>,
+    bytes: u64,
+}
+impl Default for ImageChecks {
+    fn default() -> Self {
+        Self {
+            values: BTreeMap::new(),
+            bytes: 2,
+        }
+    }
+}
+impl ImageChecks {
+    fn insert(&mut self, key: String, value: &Value, records: &mut RecordBatch<'_>) -> Result<()> {
+        if !self.values.contains_key(&key) {
+            let prefix = self.bytes + u64::from(!self.values.is_empty());
+            let bytes = records.fragment_after(value, prefix)?;
+            self.values.insert(key, value.clone());
+            self.bytes = prefix + bytes;
+        }
+        Ok(())
+    }
+    fn into_values(self) -> impl Iterator<Item = Value> {
+        self.values.into_values()
+    }
+}
+fn one_frame(value: Value, records: &mut RecordBatch<'_>) -> Result<StackBuilder> {
+    let mut stack = StackBuilder::new();
+    stack.push_owned(value, records)?;
+    Ok(stack)
+}
+
 fn frame_info(
     raw: &Value,
     thread: &Value,
     frame: usize,
     sidecar: Option<&Value>,
     images: &Images,
-    checks: &mut BTreeMap<String, Value>,
-) -> Result<Vec<Value>> {
+    checks: &mut ImageChecks,
+    records: &mut RecordBatch<'_>,
+) -> Result<StackBuilder> {
     let function = thread["frameTable"]["func"]
         .get(frame)
         .and_then(Value::as_u64)
         .context("Firefox frame function missing")? as usize;
     let name = string_at(thread, &thread["funcTable"]["name"][function]).unwrap_or("[unresolved]");
+    records.fragment(&name)?;
     let mut result = json!({"function":name});
     for (output, table, field) in [
         ("file", "funcTable", "fileName"),
@@ -305,6 +356,7 @@ fn frame_info(
         let value = &thread[table][field][index];
         if output == "file" {
             if let Some(s) = string_at(thread, value) {
+                records.fragment(&s)?;
                 result[output] = json!(s);
             }
         } else if let Some(n) = value.as_u64()
@@ -323,20 +375,22 @@ fn frame_info(
         .and_then(|l| raw["libs"].get(l as usize));
     if let Some(lib) = lib {
         if let Some(name) = lib["name"].as_str() {
+            records.fragment(&name)?;
             result["module"] = json!(name);
         }
         if let Some(code) = lib["codeId"].as_str() {
+            records.fragment(&code)?;
             result["code_id"] = json!(code);
         }
         if let Some(check) = images.get(lib) {
-            checks.insert(lib.to_string(), check.clone());
+            checks.insert(lib.to_string(), check, records)?;
             if check["status"] == "mismatch" {
                 let frame = result.as_object_mut().unwrap();
                 for field in ["file", "line", "column"] {
                     frame.remove(field);
                 }
                 result["function"] = json!("[unresolved: native image identity mismatch]");
-                return Ok(vec![result]);
+                return one_frame(result, records);
             }
         }
         if let (Some(sidecar), Some(address)) = (sidecar, address)
@@ -354,32 +408,34 @@ fn frame_info(
                 .as_u64()
                 .and_then(|i| strings[i as usize].as_str())
             {
+                records.fragment(&name)?;
                 result["function"] = json!(name);
             }
             if let Some(frames) = symbol["frames"].as_array() {
-                let mut expanded = Vec::new();
+                let mut expanded = StackBuilder::new();
                 for inline in frames.iter().rev() {
-                    let mut item = result.clone();
+                    let mut item = records.checked_clone(&result)?;
                     for (output, input) in [("function", "function"), ("file", "file")] {
                         if let Some(s) = inline[input]
                             .as_u64()
                             .and_then(|i| strings[i as usize].as_str())
                         {
+                            records.fragment(&s)?;
                             item[output] = json!(s);
                         }
                     }
                     if let Some(line) = inline["line"].as_u64().filter(|n| *n > 0) {
                         item["line"] = json!(line);
                     }
-                    expanded.push(item);
+                    expanded.push_owned(item, records)?;
                 }
-                if !expanded.is_empty() {
+                if !expanded.as_slice().is_empty() {
                     return Ok(expanded);
                 }
             }
         }
     }
-    Ok(vec![result])
+    one_frame(result, records)
 }
 
 fn integer(value: &Value) -> Option<u64> {

@@ -10,6 +10,10 @@ mod javascript_sources;
 mod native_identity;
 mod native_lifetimes;
 mod native_sampling;
+mod output;
+#[cfg(test)]
+use output::OutputDimension;
+pub(crate) use output::{NormalizationOutputLimit, OutputBudget};
 mod pprof;
 mod python_cpu;
 mod v8;
@@ -72,16 +76,12 @@ pub(crate) fn import_with_native_context_controlled(
     manifest_path: &Path,
     deadline: Option<std::time::Instant>,
 ) -> Result<ImportedProfile> {
-    anyhow::ensure!(
-        ProfileFormat::parse(format)? == ProfileFormat::Firefox,
-        "native image context requires a Firefox/samply recording"
-    );
-    import_with_limits(
+    import_with_native_context_budget_controlled(
         path,
         format,
         run_id,
-        Some(manifest_path),
-        NormalizationInputLimits::default(),
+        manifest_path,
+        &mut OutputBudget::default(),
         deadline,
     )
 }
@@ -110,8 +110,78 @@ fn import_with_limits(
     limits: inputs::Limits,
     deadline: Option<std::time::Instant>,
 ) -> Result<ImportedProfile> {
+    import_budget_with_limits(
+        path,
+        format,
+        run_id,
+        native_context,
+        limits,
+        &mut OutputBudget::default(),
+        deadline,
+    )
+}
+
+pub(crate) fn import_with_budget_controlled(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    budget: &mut OutputBudget,
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportedProfile> {
+    import_budget_with_limits(
+        path,
+        format,
+        run_id,
+        None,
+        NormalizationInputLimits::default(),
+        budget,
+        deadline,
+    )
+}
+
+pub(crate) fn import_with_native_context_budget_controlled(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    manifest_path: &Path,
+    budget: &mut OutputBudget,
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportedProfile> {
+    anyhow::ensure!(
+        ProfileFormat::parse(format)? == ProfileFormat::Firefox,
+        "native image context requires a Firefox/samply recording"
+    );
+    import_budget_with_limits(
+        path,
+        format,
+        run_id,
+        Some(manifest_path),
+        NormalizationInputLimits::default(),
+        budget,
+        deadline,
+    )
+}
+
+fn import_budget_with_limits(
+    path: &Path,
+    format: &str,
+    run_id: &str,
+    native_context: Option<&Path>,
+    limits: inputs::Limits,
+    budget: &mut OutputBudget,
+    deadline: Option<std::time::Instant>,
+) -> Result<ImportedProfile> {
+    budget.check()?;
     let (snapshot, digest) = capture_inputs(path, format, limits, deadline)?;
-    decode_snapshot(path, format, run_id, native_context, &snapshot, digest)
+    decode_snapshot(
+        path,
+        format,
+        run_id,
+        native_context,
+        &snapshot,
+        digest,
+        budget,
+    )
 }
 
 fn capture_inputs(
@@ -169,6 +239,7 @@ fn decode_snapshot(
     native_context: Option<&Path>,
     snapshot: &inputs::Snapshot,
     mut digest: Sha256,
+    budget: &mut OutputBudget,
 ) -> Result<ImportedProfile> {
     let kind = ProfileFormat::parse(format)?;
     let raw_sha256 = snapshot.raw_sha256().to_owned();
@@ -240,31 +311,43 @@ fn decode_snapshot(
     } else {
         None
     };
-    let (records, mut diagnostics) = match kind {
-        ProfileFormat::Firefox => firefox::decode_with_lifetimes(
+    let mut records = output::RecordBatch::new(budget, snapshot.deadline());
+    let mut diagnostics = match kind {
+        ProfileFormat::Firefox => firefox::decode_into(
             decoder_path,
             native_raw.as_ref().unwrap(),
             run_id,
             &key,
             images.as_ref().unwrap(),
             lifetimes.as_ref(),
+            &mut records,
         )?,
-        ProfileFormat::V8 => v8::decode(
+        ProfileFormat::V8 => v8::decode_into(
             decoder_path,
             &serde_json::from_slice(&raw)?,
             run_id,
             &key,
             scripts.as_ref().unwrap(),
+            &mut records,
         )?,
-        ProfileFormat::Graal => {
-            graal::decode(decoder_path, &serde_json::from_slice(&raw)?, run_id, &key)?
+        ProfileFormat::Graal => graal::decode_into(
+            decoder_path,
+            &serde_json::from_slice(&raw)?,
+            run_id,
+            &key,
+            &mut records,
+        )?,
+        ProfileFormat::Pprof => pprof::decode_into(&raw, run_id, &key, &mut records)?,
+        ProfileFormat::PythonCpuProgress => {
+            python_cpu::decode_into(decoder_path, run_id, &key, &mut records)?
         }
-        ProfileFormat::Pprof => pprof::decode(&raw, run_id, &key)?,
-        ProfileFormat::PythonCpuProgress => python_cpu::decode(decoder_path, run_id, &key)?,
-        ProfileFormat::GoTrace => go_trace::decode(go_trace.as_ref().unwrap(), run_id, &key)?,
-        ProfileFormat::Vmprof => vmprof::decode(vmprof.as_ref().unwrap(), run_id, &key)?,
+        ProfileFormat::GoTrace => {
+            go_trace::decode_into(go_trace.as_ref().unwrap(), run_id, &key, &mut records)?
+        }
+        ProfileFormat::Vmprof => {
+            vmprof::decode_into(vmprof.as_ref().unwrap(), run_id, &key, &mut records)?
+        }
         ProfileFormat::Jsonl => {
-            let mut records = Vec::new();
             for (line, text) in std::str::from_utf8(&raw)?.lines().enumerate() {
                 if text.trim().is_empty() {
                     continue;
@@ -274,9 +357,9 @@ fn decode_snapshot(
                 if record["run_id"].as_str() != Some(run_id) {
                     bail!("JSONL record belongs to another run");
                 }
-                records.push(record);
+                records.push(record)?;
             }
-            (records, Vec::new())
+            Vec::new()
         }
     };
     if lifetimes.is_none()
@@ -297,7 +380,7 @@ fn decode_snapshot(
         source: path.to_owned(),
         raw_sha256,
         format: format.to_owned(),
-        records,
+        records: records.finish()?,
         diagnostics,
         input_fingerprint: key,
         sidecars,
@@ -512,3 +595,6 @@ mod recorded_controls {
 
 #[cfg(test)]
 mod input_budget_tests;
+
+#[cfg(test)]
+mod output_budget_tests;

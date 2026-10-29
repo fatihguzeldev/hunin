@@ -1,5 +1,6 @@
 //! Mapping-instance evidence retained before Samply converts absolute stacks.
 use super::checked_us;
+use super::output::{RecordBatch, ReservedRecord, StackBuilder};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -584,20 +585,28 @@ impl Timeline {
             instance.generation
         )
     }
-    pub fn records(&self, run: &str, key: &str) -> Result<Vec<Value>> {
-        let records = self.instances.iter().map(|i| {
-            let pid=os_pid(&i.process["pid"])?;
-            let process_start=ms(&i.process["start_time_ms"])?;
-            if i.end.is_some_and(|end|end<process_start) { return Ok(None); }
-            let start=i.start.max(process_start);
-            let lifetime=ms(&i.process["start_time_ms"])?;
-            let mut record=json!({"schema_version":1,"kind":if i.end.is_some(){"span"}else{"event"},"id":Self::id(i,key),"run_id":run,"producer_id":format!("profile:{key}:{pid}:{lifetime}"),"pid":pid,"tid":"process","timestamp_us":checked_us((self.epoch_ms+start)*1000.0,"native module time")?,"basis":"observed","name":"module.observed_lifetime","attributes":{
+    pub fn emit_records(&self, run: &str, key: &str, records: &mut RecordBatch<'_>) -> Result<()> {
+        for i in &self.instances {
+            records.check()?;
+            records.fragment(&i.library)?;
+            let pid = os_pid(&i.process["pid"])?;
+            let process_start = ms(&i.process["start_time_ms"])?;
+            if i.end.is_some_and(|end| end < process_start) {
+                continue;
+            }
+            let start = i.start.max(process_start);
+            let lifetime = ms(&i.process["start_time_ms"])?;
+            let mut record = json!({"schema_version":1,"kind":if i.end.is_some(){"span"}else{"event"},"id":Self::id(i,key),"run_id":run,"producer_id":format!("profile:{key}:{pid}:{lifetime}"),"pid":pid,"tid":"process","timestamp_us":checked_us((self.epoch_ms+start)*1000.0,"native module time")?,"basis":"observed","name":"module.observed_lifetime","attributes":{
                 "source_format":"samply-native-lifetimes","scope":"module","module":i.library["name"],"library":i.library,"mapping_instance_id":format!("{}:g{}",i.load_id,i.generation),"collector_load_id":i.load_id,"process_instance_id":i.process["key"],"start_avma":format!("0x{:x}",i.start_avma),"end_avma":format!("0x{:x}",i.end_avma),"boundary_basis":{"start":i.start_basis,"end":i.end_basis},"start_window_ms":i.start_window,"end_window_ms":i.end_window,"inherited_at_process_start":i.start<process_start,"start_censored":i.start_censored || i.start<process_start,"end_censored":i.end_censored,"end_reason":i.end_reason,"exact_event_timestamps":i.start_basis=="etw_image_event" && i.end_basis=="etw_image_event","evidence_complete":self.complete,"collector":self.collector,"clock":"unix_epoch","clock_alignment":"profile_start_epoch_plus_relative_time"
             }});
-            if let Some(end)=i.end { record["duration_us"]=json!(checked_us((end-start)*1000.0,"native module duration")?); }
-            Ok(Some(record))
-        }).collect::<Result<Vec<_>>>()?;
-        let mut records: Vec<_> = records.into_iter().flatten().collect();
+            if let Some(end) = i.end {
+                record["duration_us"] = json!(checked_us(
+                    (end - start) * 1000.0,
+                    "native module duration"
+                )?);
+            }
+            records.push(record)?;
+        }
         if let Some(outcome) = &self.target_outcome
             && (outcome["state"] == "exited" || outcome["state"] == "signaled")
         {
@@ -612,18 +621,19 @@ impl Timeline {
             } else {
                 format!("profile:{key}:root-target:{pid}")
             };
-            records.push(json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:root-target-outcome"),"run_id":run,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":outcome["wait_observed_at_us"],"basis":"observed","name":"process.wait_outcome","attributes":{"scope":"process","source_format":"samply-native-lifetimes","process_id_source":"root_target_os_wait_status","process_instance_id":process.map(|p|&p["key"]),"target_outcome":outcome,"clock":"unix_epoch","clock_alignment":"os_wait_wall_clock_observation","timestamp_semantics":"time the collector observed OS wait status; not exact process death time"}}));
+            records.push(json!({"schema_version":1,"kind":"event","id":format!("profile:{key}:root-target-outcome"),"run_id":run,"producer_id":producer,"pid":pid,"tid":"process","timestamp_us":outcome["wait_observed_at_us"],"basis":"observed","name":"process.wait_outcome","attributes":{"scope":"process","source_format":"samply-native-lifetimes","process_id_source":"root_target_os_wait_status","process_instance_id":process.map(|p|&p["key"]),"target_outcome":outcome,"clock":"unix_epoch","clock_alignment":"os_wait_wall_clock_observation","timestamp_semantics":"time the collector observed OS wait status; not exact process death time"}}))?;
         }
-        Ok(records)
+        Ok(())
     }
 
-    pub fn link_sample(
+    pub fn link_sample_into(
         &self,
         thread: &Value,
         time: f64,
         record: &mut Value,
         key: &str,
-    ) -> Result<Vec<Value>> {
+        records: &mut RecordBatch<'_>,
+    ) -> Result<Vec<ReservedRecord>> {
         let sample = self.samples.get(&sample_key(
             thread["pid"]
                 .as_str()
@@ -642,18 +652,18 @@ impl Timeline {
             .as_str()
             .context("sample mapping process missing")?;
         let mapping_time = ms(&sample["mapping_time_ms"])?;
-        let mut links = Vec::new();
+        let mut links = StackBuilder::new();
         let mut relations = Vec::new();
         let mut linked = std::collections::HashSet::new();
         for frame in sample["frames"]
             .as_array()
             .context("sample mapping frames missing")?
         {
-            let mut link = frame.clone();
+            let mut link = records.checked_clone(frame)?;
             let Some(load) = frame["load_id"].as_str() else {
                 link["record_id"] = Value::Null;
                 link["reason"] = json!("unmapped_or_kernel_frame");
-                links.push(link);
+                links.push_owned(link, records)?;
                 continue;
             };
             let lookup = address(&frame["lookup_address"])?;
@@ -693,12 +703,35 @@ impl Timeline {
             );
             let id = Self::id(instance, key);
             link["record_id"] = json!(id);
-            links.push(link);
+            links.push_owned(link, records)?;
             if linked.insert(id.clone()) {
-                relations.push(json!({"schema_version":1,"kind":"relation","id":format!("{}:native-map:{}",record["id"].as_str().unwrap(),relations.len()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":record["timestamp_us"],"basis":"observed","from":record["id"],"to":id,"relation":"sampled_in_code_instance","evidence":[record["id"],id],"attributes":{"source_format":"samply-native-lifetimes","mapping_time_ms":mapping_time,"evidence_complete":self.complete}}));
+                relations.push(records.reserve(json!({"schema_version":1,"kind":"relation","id":format!("{}:native-map:{}",record["id"].as_str().unwrap(),relations.len()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":record["timestamp_us"],"basis":"observed","from":record["id"],"to":id,"relation":"sampled_in_code_instance","evidence":[record["id"],id],"attributes":{"source_format":"samply-native-lifetimes","mapping_time_ms":mapping_time,"evidence_complete":self.complete}}))?);
             }
         }
-        record["attributes"]["native_load_instances"] = json!(links);
+        record["attributes"]["native_load_instances"] = json!(links.finish());
         Ok(relations)
+    }
+    #[cfg(test)]
+    pub fn records(&self, run: &str, key: &str) -> Result<Vec<Value>> {
+        let mut budget = super::OutputBudget::default();
+        let mut records = RecordBatch::new(&mut budget, None);
+        self.emit_records(run, key, &mut records)?;
+        records.finish()
+    }
+    #[cfg(test)]
+    pub fn link_sample(
+        &self,
+        thread: &Value,
+        time: f64,
+        record: &mut Value,
+        key: &str,
+    ) -> Result<Vec<Value>> {
+        let mut budget = super::OutputBudget::default();
+        let mut records = RecordBatch::new(&mut budget, None);
+        let relations = self.link_sample_into(thread, time, record, key, &mut records)?;
+        for relation in relations {
+            records.append_reserved(relation)?;
+        }
+        records.finish()
     }
 }

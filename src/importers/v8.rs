@@ -1,3 +1,4 @@
+use super::output::{RecordBatch, StackBuilder};
 use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, javascript_sources::Scripts, sample};
 use anyhow::{Context, Result, bail};
@@ -8,13 +9,14 @@ use std::{
     path::Path,
 };
 
-pub(super) fn decode(
+pub(super) fn decode_into(
     path: &Path,
     raw: &Value,
     run_id: &str,
     key: &str,
     sources: &Scripts,
-) -> Result<(Vec<Value>, Vec<String>)> {
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     let nodes = raw["nodes"]
         .as_array()
         .context("CPU profile nodes missing")?;
@@ -70,24 +72,6 @@ pub(super) fn decode(
     let mut now = start;
     let mut backsteps = 0;
     let mut outside_bounds = 0;
-    let mut records = Vec::new();
-    let mut frames = HashMap::new();
-    for (id, node) in &map {
-        let call = &node["callFrame"];
-        let name = call["functionName"].as_str().unwrap_or("[unknown]");
-        let mut frame = json!({"function":if name.is_empty(){"(anonymous)"}else{name}});
-        if let Some(url) = call["url"].as_str().filter(|s| !s.is_empty()) {
-            frame["file"] = json!(url);
-        }
-        if let Some(line) = call["lineNumber"].as_i64().filter(|n| *n >= 0) {
-            frame["line"] = json!(line + 1);
-        }
-        if let Some(column) = call["columnNumber"].as_i64().filter(|n| *n >= 0) {
-            frame["column"] = json!(column);
-        }
-        let proof = sources.frame(call, &mut frame);
-        frames.insert(*id, (frame, proof));
-    }
     for (index, leaf) in samples.iter().enumerate() {
         let delta = deltas[index]
             .as_f64()
@@ -101,22 +85,27 @@ pub(super) fn decode(
         checked_us(now, "CPU profile sample timestamp")?;
         outside_bounds += usize::from(now < start || end.is_some_and(|end| now > end));
         let mut cursor = Some(leaf.as_u64().context("invalid CPU profile leaf")?);
-        let mut chain = Vec::new();
+        let mut chain = StackBuilder::new();
         let mut seen = HashSet::new();
         let mut script_proofs = std::collections::BTreeMap::new();
+        let mut proof_bytes = 2;
         while let Some(id) = cursor {
             if !seen.insert(id) || seen.len() > 8192 {
                 bail!("cyclic or oversized CPU profile ancestry");
             }
-            let (frame, proof) = frames
+            let node = map
                 .get(&id)
                 .context("sample references missing CPU profile node")?;
+            let (frame, proof) = frame(&node["callFrame"], sources, records)?;
             if !proof.is_null() {
-                script_proofs.insert(id, proof.clone());
+                let prefix = proof_bytes + u64::from(!script_proofs.is_empty());
+                proof_bytes = prefix + records.fragment_after(&proof, prefix)?;
+                script_proofs.insert(id, proof);
             }
-            chain.push(frame.clone());
+            chain.push_owned(frame, records)?;
             cursor = parents.get(&id).copied();
         }
+        let mut chain = chain.finish();
         chain.reverse();
         let timestamp = checked_us(now + origin.unwrap_or(0.0), "CPU sample timestamp")?;
         let mut attrs = if origin.is_some() {
@@ -142,7 +131,7 @@ pub(super) fn decode(
                 weight_unit: SampleWeightUnit::Samples,
                 attributes: attrs,
             },
-        ));
+        ))?;
     }
     let mut diagnostics = if origin.is_none() {
         vec!["CPU profile clock has no verified epoch anchor; sample times remain outside the shared epoch timeline".into()]
@@ -156,8 +145,28 @@ pub(super) fn decode(
         diagnostics.push(format!("CPU profile contains {outside_bounds} sample timestamps outside its declared start/end range; reported timestamps are preserved, not clamped"));
     }
     diagnostics.extend(sources.diagnostics.clone());
-    Ok((records, diagnostics))
+    Ok(diagnostics)
 }
+fn frame(call: &Value, sources: &Scripts, records: &mut RecordBatch<'_>) -> Result<(Value, Value)> {
+    let name = call["functionName"].as_str().unwrap_or("[unknown]");
+    records.fragment(&name)?;
+    let mut frame = json!({"function":if name.is_empty(){"(anonymous)"}else{name}});
+    if let Some(url) = call["url"].as_str().filter(|s| !s.is_empty()) {
+        records.fragment(&url)?;
+        frame["file"] = json!(url);
+    }
+    if let Some(line) = call["lineNumber"].as_i64().filter(|n| *n >= 0) {
+        frame["line"] = json!(line + 1);
+    }
+    if let Some(column) = call["columnNumber"].as_i64().filter(|n| *n >= 0) {
+        frame["column"] = json!(column);
+    }
+    let proof = sources.frame(call, &mut frame);
+    records.fragment(&frame)?;
+    records.fragment(&proof)?;
+    Ok((frame, proof))
+}
+
 pub(super) fn script_paths(path: &Path) -> Vec<std::path::PathBuf> {
     let (Some(pid), Some(tid)) = identity_from_filename(path) else {
         return Vec::new();
@@ -221,6 +230,20 @@ fn identity_from_filename(path: &Path) -> (Option<u64>, Option<String>) {
     } else {
         (None, None)
     }
+}
+
+#[cfg(test)]
+fn decode(
+    path: &Path,
+    raw: &Value,
+    run_id: &str,
+    key: &str,
+    sources: &Scripts,
+) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = decode_into(path, raw, run_id, key, sources, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
 #[cfg(test)]

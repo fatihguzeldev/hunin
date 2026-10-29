@@ -1,19 +1,20 @@
+use super::output::{RecordBatch, StackBuilder};
 use super::{SampleWeightUnit, StackSample};
 use super::{checked_us, sample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 
-pub(super) fn decode(
+pub(super) fn decode_into(
     path: &Path,
     raw: &Value,
     run_id: &str,
     key: &str,
-) -> Result<(Vec<Value>, Vec<String>)> {
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     if raw["tool"] != "cpusampler" {
         bail!("expected Graal CPUSampler JSON");
     }
-    let mut records = Vec::new();
     let mut aggregate = false;
     let metadata: Value = fs::read(path.with_extension("meta.json"))
         .ok()
@@ -42,7 +43,7 @@ pub(super) fn decode(
                 .as_array()
                 .context("Graal samples missing")?
             {
-                walk(root, &[], profile, &mut records, &mut aggregate, 0)?;
+                walk(root, &[], profile, records, &mut aggregate, 0)?;
             }
         }
     }
@@ -57,7 +58,7 @@ pub(super) fn decode(
                 .into(),
         );
     }
-    Ok((records, diagnostics))
+    Ok(diagnostics)
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +74,7 @@ fn walk(
     node: &Value,
     parent: &[Value],
     profile: ThreadProfile<'_>,
-    records: &mut Vec<Value>,
+    records: &mut RecordBatch<'_>,
     aggregate: &mut bool,
     depth: usize,
 ) -> Result<()> {
@@ -88,8 +89,10 @@ fn walk(
         bail!("Graal stack exceeds supported depth");
     }
     let source = &node["source_section"];
+    records.fragment(&node["root_name"])?;
     let mut frame = json!({"function":node["root_name"].as_str().unwrap_or("[unknown]")});
     if let Some(file) = source["path"].as_str() {
+        records.fragment(&file)?;
         frame["file"] = json!(file);
     }
     if let Some(line) = source["start_line"].as_u64().filter(|n| *n > 0) {
@@ -98,8 +101,9 @@ fn walk(
     if let Some(column) = source["start_column"].as_u64().filter(|n| *n > 0) {
         frame["column"] = json!(column - 1);
     }
-    let mut stack = parent.to_vec();
-    stack.push(frame);
+    let mut stack = StackBuilder::from_slice(parent, records)?;
+    stack.push_owned(frame, records)?;
+    let stack = stack.finish();
     let count = node["self_hit_count"].as_u64().unwrap_or(0);
     let hits = node["self_hit_times"]
         .as_array()
@@ -119,7 +123,7 @@ fn walk(
                     pid,
                     tid,
                     timestamp_us: 0,
-                    stack: stack.clone(),
+                    stack: records.clone_stack(&stack)?,
                     weight: count as f64,
                     weight_unit: SampleWeightUnit::Samples,
                     attributes: json!({"source_format":"graal-cpusampler","clock":"unknown","clock_alignment":"unmapped","temporal_resolution":"aggregate","tid_kind":"graal_thread_label"}),
@@ -128,7 +132,7 @@ fn walk(
             if let Some(interval) = interval {
                 record["interval_us"] = json!(interval);
             }
-            records.push(record);
+            records.push(record)?;
         } else {
             for hit in hits {
                 let timestamp = checked_us(
@@ -143,7 +147,7 @@ fn walk(
                         pid,
                         tid,
                         timestamp_us: timestamp,
-                        stack: stack.clone(),
+                        stack: records.clone_stack(&stack)?,
                         weight: 1.0,
                         weight_unit: SampleWeightUnit::Samples,
                         attributes: json!({"source_format":"graal-cpusampler","clock":"unix_epoch","clock_alignment":"collector_epoch_ms","tid_kind":"graal_thread_label"}),
@@ -152,7 +156,7 @@ fn walk(
                 if let Some(interval) = interval {
                     record["interval_us"] = json!(interval);
                 }
-                records.push(record);
+                records.push(record)?;
             }
         }
     }
@@ -160,6 +164,14 @@ fn walk(
         walk(child, &stack, profile, records, aggregate, depth + 1)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn decode(path: &Path, raw: &Value, run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = decode_into(path, raw, run_id, key, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
 #[cfg(test)]

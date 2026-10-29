@@ -1,8 +1,11 @@
 //! The wire fields follow Google's canonical perftools.profiles profile.proto.
+use super::output::{RecordBatch, StackBuilder};
 use super::{SampleWeightUnit, StackSample, sample};
 use anyhow::{Context, Result, bail};
 use prost::Message;
-use serde_json::{Value, json};
+#[cfg(test)]
+use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Clone, PartialEq, Message)]
@@ -100,7 +103,12 @@ struct Function {
     start_line: i64,
 }
 
-pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+pub(super) fn decode_into(
+    bytes: &[u8],
+    run_id: &str,
+    key: &str,
+    records: &mut RecordBatch<'_>,
+) -> Result<Vec<String>> {
     let p = Profile::decode(bytes).context("decode pprof protobuf")?;
     if p.string_table.first().map(String::as_str) != Some("") {
         bail!("pprof string table must begin with empty string");
@@ -153,7 +161,6 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
     {
         bail!("duplicate pprof identity");
     }
-    let mut records = Vec::new();
     for entry in &p.sample {
         if entry.value.len() != p.sample_type.len() {
             bail!("pprof sample value/type lengths differ");
@@ -162,36 +169,42 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
         if weight <= 0.0 {
             continue;
         }
-        let mut stack = Vec::new();
+        let mut stack = StackBuilder::new();
         for location_id in entry.location_id.iter().rev() {
             let location = locations
                 .get(location_id)
                 .context("pprof sample references missing location")?;
             let mapping = mappings.get(&location.mapping_id);
+            records.frame()?;
             let mut address =
                 json!({"function":"[unresolved]","address":format!("0x{:x}",location.address)});
             if let Some(mapping) = mapping {
                 let name = text(mapping.filename)?;
                 if !name.is_empty() {
+                    records.fragment(&name)?;
                     address["module"] = json!(name);
                 }
                 let code = text(mapping.build_id)?;
                 if !code.is_empty() {
+                    records.fragment(&code)?;
                     address["code_id"] = json!(code);
                 }
             }
             if location.line.is_empty() {
-                stack.push(address);
+                stack.push_owned(address, records)?;
             } else {
                 for line in location.line.iter().rev() {
                     let function = functions
                         .get(&line.function_id)
                         .context("pprof location references missing function")?;
+                    records.fragment(&address)?;
                     let mut frame = address.clone();
                     let name = text(function.name)?;
+                    records.fragment(&name)?;
                     frame["function"] = json!(if name.is_empty() { "[unnamed]" } else { name });
                     let filename = text(function.filename)?;
                     if !filename.is_empty() {
+                        records.fragment(&filename)?;
                         frame["file"] = json!(filename);
                     }
                     if line.line > 0 {
@@ -200,19 +213,34 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
                     if line.column > 0 {
                         frame["column"] = json!(line.column - 1);
                     }
-                    stack.push(frame);
+                    stack.push_owned(frame, records)?;
                 }
             }
         }
         let mut labels = serde_json::Map::new();
+        let mut labels_bytes = 2u64;
         let mut tid = String::from("unknown");
         for label in &entry.label {
             let name = text(label.key)?;
-            let value = if label.str != 0 {
-                json!(text(label.str)?)
+            let name_bytes = records.fragment(&name)?;
+            let string = if label.str != 0 {
+                Some(text(label.str)?)
             } else {
-                json!(label.num)
+                None
             };
+            let value_bytes = if let Some(string) = string {
+                records.fragment(&string)?
+            } else {
+                records.fragment(&label.num)?
+            };
+            let next = if let Some(old) = labels.get(name) {
+                labels_bytes - records.fragment(old)? + value_bytes
+            } else {
+                labels_bytes + u64::from(!labels.is_empty()) + name_bytes + 1 + value_bytes
+            };
+            records.known_fragment_bytes(next)?;
+            let value = string.map_or_else(|| json!(label.num), |value| json!(value));
+            labels_bytes = next;
             if name == "thread_id" {
                 tid = value
                     .as_str()
@@ -237,14 +265,22 @@ pub(super) fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value
                 pid: 0,
                 tid: &tid,
                 timestamp_us: (p.time_nanos.max(0) / 1000) as u64,
-                stack,
+                stack: stack.finish(),
                 weight,
                 weight_unit: unit,
                 attributes,
             },
-        ));
+        ))?;
     }
-    Ok((records,vec!["pprof weights are aggregated over the profile interval; collection time does not establish individual sample times or an OS PID".into()]))
+    Ok(vec!["pprof weights are aggregated over the profile interval; collection time does not establish individual sample times or an OS PID".into()])
+}
+
+#[cfg(test)]
+fn decode(bytes: &[u8], run_id: &str, key: &str) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut budget = super::OutputBudget::default();
+    let mut records = RecordBatch::new(&mut budget, None);
+    let diagnostics = decode_into(bytes, run_id, key, &mut records)?;
+    Ok((records.finish()?, diagnostics))
 }
 
 #[cfg(test)]
