@@ -865,6 +865,17 @@
         "queue": "fail_fast",
         "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
         "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; context pages and requested evidence IDs filter in SQL before payload copies.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },
@@ -925,6 +936,17 @@
         "queue": "fail_fast",
         "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
         "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; context pages and requested evidence IDs filter in SQL before payload copies.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   },

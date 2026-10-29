@@ -1,7 +1,7 @@
 //! Bounded selected-record reads. The private SQL transaction owns selection.
 use super::super::Store;
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::{
     fmt,
@@ -199,9 +199,37 @@ impl QueryReadPort<'_> {
     /// Kinds filter on stored columns before JSON materialization. Limits count
     /// selected rows/bytes cumulatively across visits. The VM counter also
     /// bounds skipped historical rows, joins and pre-first-row SQL work.
-    pub fn visit(
+    pub fn visit(&mut self, kinds: &[&str], visitor: impl FnMut(&str) -> Result<()>) -> Result<()> {
+        self.visit_selected(kinds, None, None, visitor)
+    }
+
+    /// Select a context/relation page before copying payloads into Rust. VM
+    /// work for skipped/sorted rows still consumes the same snapshot budget.
+    pub fn visit_page(
         &mut self,
         kinds: &[&str],
+        limit: usize,
+        offset: usize,
+        visitor: impl FnMut(&str) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_selected(kinds, None, Some((limit, offset)), visitor)
+    }
+
+    /// Requested evidence IDs remain opaque; duplicates/missing IDs retain SQL
+    /// set semantics and selected timestamp/sequence ordering.
+    pub fn visit_ids(
+        &mut self,
+        ids: &[String],
+        visitor: impl FnMut(&str) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_selected(&[], Some(ids), None, visitor)
+    }
+
+    fn visit_selected(
+        &mut self,
+        kinds: &[&str],
+        ids: Option<&[String]>,
+        page: Option<(usize, usize)>,
         mut visitor: impl FnMut(&str) -> Result<()>,
     ) -> Result<()> {
         self.checkpoint()?;
@@ -212,18 +240,37 @@ impl QueryReadPort<'_> {
         // payload by primary key after its row sentinel. Sorting raw records
         // could otherwise spool many large values before any byte check.
         // The shared VM budget covers both the key sort and payload lookups.
-        let sql = if kinds.is_empty() {
-            "SELECT o.record FROM observations o INDEXED BY observation_timeline JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq"
+        let scalar_keys = !kinds.is_empty() || ids.is_some() || page.is_some();
+        let mut arguments: Vec<rusqlite::types::Value> = vec![self.run_id.to_owned().into()];
+        let mut sql = if let Some(ids) = ids {
+            arguments.push(serde_json::to_string(ids)?.into());
+            "SELECT o.seq FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.id IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq".to_owned()
+        } else if !kinds.is_empty() {
+            arguments.push(serde_json::to_string(kinds)?.into());
+            "SELECT o.seq FROM observations o INDEXED BY observation_kind JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.kind IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq".to_owned()
+        } else if scalar_keys {
+            "SELECT o.seq FROM observations o INDEXED BY observation_timeline JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq".to_owned()
         } else {
-            "SELECT o.seq FROM observations o INDEXED BY observation_kind JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 AND o.kind IN(SELECT value FROM json_each(?2)) ORDER BY o.timestamp_us,o.seq"
+            "SELECT o.record FROM observations o INDEXED BY observation_timeline JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1 ORDER BY o.timestamp_us,o.seq".to_owned()
         };
-        let mut statement = self.control.sql(connection.prepare(sql))?;
-        let mut rows = if kinds.is_empty() {
-            self.control.sql(statement.query([self.run_id]))?
-        } else {
-            self.control
-                .sql(statement.query(params![self.run_id, serde_json::to_string(kinds)?]))?
-        };
+        if let Some((limit, offset)) = page {
+            let parameter = arguments.len() + 1;
+            sql.push_str(&format!(" LIMIT ?{parameter} OFFSET ?{}", parameter + 1));
+            arguments.push(
+                i64::try_from(limit)
+                    .context("query page limit outside SQLite range")?
+                    .into(),
+            );
+            arguments.push(
+                i64::try_from(offset)
+                    .context("query page offset outside SQLite range")?
+                    .into(),
+            );
+        }
+        let mut statement = self.control.sql(connection.prepare(&sql))?;
+        let mut rows = self
+            .control
+            .sql(statement.query(rusqlite::params_from_iter(arguments)))?;
         let mut lookup = None;
         loop {
             self.checkpoint()?;
@@ -232,7 +279,7 @@ impl QueryReadPort<'_> {
             };
             let observed = self.usage.rows.saturating_add(1);
             within(ReadDimension::Rows, self.limits.maximum_rows, observed)?;
-            let mut payload_rows = if kinds.is_empty() {
+            let mut payload_rows = if !scalar_keys {
                 None
             } else {
                 if lookup.is_none() {
@@ -359,6 +406,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     #[derive(Debug)]
     struct Cancelled;
     impl fmt::Display for Cancelled {

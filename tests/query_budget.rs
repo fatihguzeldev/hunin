@@ -57,6 +57,102 @@ fn row_limit_stops_before_the_sentinel_is_materialized() {
 }
 
 #[test]
+fn pages_and_evidence_ids_select_before_payload_decoding_and_share_read_budgets() {
+    let (_root, store) = fixture();
+    let connection = rusqlite::Connection::open(store.root().join("hunin.sqlite")).unwrap();
+    connection
+        .execute(
+            "UPDATE observations SET record=?1 WHERE id='event-0'",
+            ["invalid JSON".repeat(1000)],
+        )
+        .unwrap();
+    let limits = ReadLimits {
+        maximum_record_bytes: 1024,
+        ..Default::default()
+    };
+    let page = store
+        .with_query_snapshot(
+            "recording",
+            limits.clone(),
+            || Ok(()),
+            |port| {
+                let mut ids = Vec::new();
+                port.visit_page(&["event"], 1, 1, |text| {
+                    ids.push(serde_json::from_str::<Value>(text)?["id"].clone());
+                    Ok(())
+                })?;
+                Ok(ids)
+            },
+        )
+        .unwrap();
+    assert_eq!(page.value, vec![json!("event-1")]);
+    assert_eq!(page.usage.rows, 1);
+    let selected = store
+        .with_query_snapshot(
+            "recording",
+            limits.clone(),
+            || Ok(()),
+            |port| {
+                let mut ids = Vec::new();
+                port.visit_ids(
+                    &[
+                        "missing".into(),
+                        "event-2".into(),
+                        "event-2".into(),
+                        "event-1".into(),
+                    ],
+                    |text| {
+                        ids.push(serde_json::from_str::<Value>(text)?["id"].clone());
+                        Ok(())
+                    },
+                )?;
+                Ok(ids)
+            },
+        )
+        .unwrap();
+    assert_eq!(selected.value, vec![json!("event-1"), json!("event-2")]);
+    assert_eq!(selected.usage.rows, 2);
+    let error = store
+        .with_query_snapshot(
+            "recording",
+            limits,
+            || Ok(()),
+            |port| port.visit_ids(&["event-0".into()], |_| panic!("oversize payload decoded")),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<ReadBudgetExceeded>()
+            .unwrap()
+            .dimension,
+        ReadDimension::RecordBytes
+    );
+    let error = store
+        .with_query_snapshot(
+            "recording",
+            ReadLimits {
+                maximum_rows: 1,
+                ..Default::default()
+            },
+            || Ok(()),
+            |port| {
+                port.visit_page(&["event"], 1, 1, |_| Ok(()))?;
+                port.visit_ids(&["event-2".into()], |_| {
+                    panic!("second visit exceeded cumulative rows")
+                })
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<ReadBudgetExceeded>()
+            .unwrap()
+            .dimension,
+        ReadDimension::Rows
+    );
+}
+
+#[test]
 fn oversized_record_is_rejected_before_json_decoding() {
     let (_root, store) = fixture();
     let connection = rusqlite::Connection::open(store.root().join("hunin.sqlite")).unwrap();

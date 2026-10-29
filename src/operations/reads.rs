@@ -44,14 +44,45 @@ pub(super) fn query(
             }
         }
         "contexts.query" => {
-            let mut selected = store.context_records_page(id()?, limit + 1, cursor)?;
+            let interest = interest.clone();
+            let mut selected = store
+                .with_query_snapshot(
+                    id()?,
+                    Default::default(),
+                    move || interest.check(),
+                    |port| {
+                        let mut rows = Vec::new();
+                        port.visit_page(&["context", "relation"], limit + 1, cursor, |text| {
+                            rows.push(serde_json::from_str::<Value>(text)?);
+                            Ok(())
+                        })?;
+                        Ok(rows)
+                    },
+                )?
+                .value;
             let more = selected.len() > limit;
             selected.truncate(limit);
             json!({"contexts":selected.iter().filter(|r|r["kind"]=="context").collect::<Vec<_>>(),"relations":selected.iter().filter(|r|r["kind"]=="relation").collect::<Vec<_>>(),"next_cursor":more.then(||(cursor+limit).to_string())})
         }
         "evidence.get" => {
             let wanted = serde_json::from_value::<Vec<String>>(params["ids"].clone())?;
-            json!({"records":store.evidence_records(id()?, &wanted)?})
+            let interest = interest.clone();
+            let rows = store
+                .with_query_snapshot(
+                    id()?,
+                    Default::default(),
+                    move || interest.check(),
+                    |port| {
+                        let mut rows = Vec::new();
+                        port.visit_ids(&wanted, |text| {
+                            rows.push(serde_json::from_str::<Value>(text)?);
+                            Ok(())
+                        })?;
+                        Ok(rows)
+                    },
+                )?
+                .value;
+            json!({"records":rows})
         }
         "artifacts.list" => metadata_page(
             "artifacts",
