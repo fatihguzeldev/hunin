@@ -632,6 +632,9 @@
       },
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisPage"
     }
   },
   {
@@ -679,6 +682,9 @@
         "requirements"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisRegistered"
     }
   },
   {
@@ -705,6 +711,9 @@
         "analysis_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisStarted"
     }
   },
   {
@@ -731,6 +740,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisResultPage"
     }
   },
   {
@@ -751,6 +763,9 @@
       },
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ScenarioPage"
     }
   },
   {
@@ -826,6 +841,9 @@
           "expected_stdout_sha256"
         ]
       }
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ScenarioSaveResult"
     }
   },
   {
@@ -867,6 +885,9 @@
         "execution_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/AnalysisCanceled"
     }
   },
   {

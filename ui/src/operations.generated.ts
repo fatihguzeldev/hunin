@@ -137,6 +137,78 @@ export type SourceRead = {
   "provenance"?: unknown;
 };
 
+export type AnalysisPage = {
+  "analyses": Array<unknown>;
+  "next_cursor": string | null;
+};
+
+export type AnalysisResultDocument = {
+  "selected": boolean;
+};
+
+export type AnalysisResultPage = {
+  "results": Array<AnalysisResultDocument>;
+  "next_cursor": string | null;
+};
+
+export type AnalysisPackage = {
+  "id": string;
+  "name": string;
+  "version": string;
+  "command": Array<string>;
+  "requirements": Record<string, unknown>;
+  "dependencies": Record<string, unknown>;
+  "package_digest": string;
+  "files": Record<string, unknown>;
+  "package_dir": string;
+  "created_at_us": number;
+  "executable": {
+  "path": string;
+  "sha256": string;
+  "packaged": boolean;
+};
+  "dependency_state": string;
+};
+
+export type AnalysisRegistered = {
+  "analysis": AnalysisPackage;
+};
+
+export type AnalysisStarted = {
+  "result_set_id": string;
+  "status": string;
+  "diagnostics": Array<string>;
+};
+
+export type AnalysisCanceled = {
+  "execution_id": string;
+  "status": unknown;
+  "diagnostics": Array<string>;
+};
+
+export type ScenarioPage = {
+  "scenarios": Array<unknown>;
+  "next_cursor": string | null;
+};
+
+export type ScenarioSaved = {
+  "id": string;
+  "name": string;
+  "command": Array<string>;
+  "cwd"?: string;
+  "runtime"?: string;
+  "timeout_seconds"?: number;
+  "expected_exit_code"?: number;
+  "env"?: Record<string, string>;
+  "input_files"?: Array<string>;
+  "expected_stdout"?: string;
+  "expected_stdout_sha256"?: string;
+};
+
+export type ScenarioSaveResult = {
+  "scenario": ScenarioSaved;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -155,7 +227,7 @@ export type OperationInputs = {
   "runtime"?: string;
   "timeout_seconds"?: number;
   "expected_exit_code"?: number;
-  "env"?: Record<string, unknown>;
+  "env"?: Record<string, string>;
   "input_files"?: Array<string>;
   "expected_stdout"?: string;
   "expected_stdout_sha256"?: string;
@@ -270,7 +342,7 @@ export type OperationInputs = {
   "runtime"?: string;
   "timeout_seconds"?: number;
   "expected_exit_code"?: number;
-  "env"?: Record<string, unknown>;
+  "env"?: Record<string, string>;
   "input_files"?: Array<string>;
   "expected_stdout"?: string;
   "expected_stdout_sha256"?: string;
@@ -315,7 +387,14 @@ export type OperationOutputs = {
 };
   "source.read": SourceRead;
   "recordings.import": ImportResult;
+  "analyses.list": AnalysisPage;
+  "analyses.register": AnalysisRegistered;
+  "analyses.run": AnalysisStarted;
+  "analyses.results": AnalysisResultPage;
+  "scenarios.list": ScenarioPage;
+  "scenarios.save": ScenarioSaveResult;
   "scenarios.run": RunResult;
+  "analyses.cancel": AnalysisCanceled;
   "recordings.reanalyze": ReanalysisResult;
 };
 
@@ -391,6 +470,46 @@ export function isSourceRead(value: unknown): value is SourceRead {
   return (isOutputObject(value) && Object.hasOwn(value, "path") && Object.hasOwn(value, "content") && Object.hasOwn(value, "start_line") && Object.hasOwn(value, "identity_verified") && Object.hasOwn(value, "source_kind") && Object.hasOwn(value, "build_mapping_verified") && Object.hasOwn(value, "diagnostic") && (typeof value["path"] === "string") && (typeof value["content"] === "string") && (typeof value["start_line"] === "number" && Number.isInteger(value["start_line"]) && value["start_line"] >= 1) && (typeof value["identity_verified"] === "boolean") && (typeof value["source_kind"] === "string") && (typeof value["build_mapping_verified"] === "boolean") && (typeof value["diagnostic"] === "string") && (!Object.hasOwn(value, "provenance") || true));
 }
 
+export function isAnalysisPage(value: unknown): value is AnalysisPage {
+  return (isOutputObject(value) && Object.hasOwn(value, "analyses") && Object.hasOwn(value, "next_cursor") && (Array.isArray(value["analyses"])) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)));
+}
+
+export function isAnalysisResultDocument(value: unknown): value is AnalysisResultDocument {
+  return (isOutputObject(value) && Object.hasOwn(value, "selected") && (typeof value["selected"] === "boolean"));
+}
+
+export function isAnalysisResultPage(value: unknown): value is AnalysisResultPage {
+  return (isOutputObject(value) && Object.hasOwn(value, "results") && Object.hasOwn(value, "next_cursor") && (Array.isArray(value["results"]) && value["results"].every(item => isAnalysisResultDocument(item))) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)));
+}
+
+export function isAnalysisPackage(value: unknown): value is AnalysisPackage {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "name") && Object.hasOwn(value, "version") && Object.hasOwn(value, "command") && Object.hasOwn(value, "requirements") && Object.hasOwn(value, "dependencies") && Object.hasOwn(value, "package_digest") && Object.hasOwn(value, "files") && Object.hasOwn(value, "package_dir") && Object.hasOwn(value, "created_at_us") && Object.hasOwn(value, "executable") && Object.hasOwn(value, "dependency_state") && (typeof value["id"] === "string") && (typeof value["name"] === "string") && (typeof value["version"] === "string") && (Array.isArray(value["command"]) && value["command"].every(item => (typeof item === "string"))) && (isOutputObject(value["requirements"])) && (isOutputObject(value["dependencies"])) && (typeof value["package_digest"] === "string") && (isOutputObject(value["files"])) && (typeof value["package_dir"] === "string") && (typeof value["created_at_us"] === "number" && Number.isInteger(value["created_at_us"]) && value["created_at_us"] >= 0) && (isOutputObject(value["executable"]) && Object.hasOwn(value["executable"], "path") && Object.hasOwn(value["executable"], "sha256") && Object.hasOwn(value["executable"], "packaged") && (typeof value["executable"]["path"] === "string") && (typeof value["executable"]["sha256"] === "string") && (typeof value["executable"]["packaged"] === "boolean")) && (typeof value["dependency_state"] === "string"));
+}
+
+export function isAnalysisRegistered(value: unknown): value is AnalysisRegistered {
+  return (isOutputObject(value) && Object.hasOwn(value, "analysis") && isAnalysisPackage(value["analysis"]));
+}
+
+export function isAnalysisStarted(value: unknown): value is AnalysisStarted {
+  return (isOutputObject(value) && Object.hasOwn(value, "result_set_id") && Object.hasOwn(value, "status") && Object.hasOwn(value, "diagnostics") && (typeof value["result_set_id"] === "string") && (typeof value["status"] === "string") && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))));
+}
+
+export function isAnalysisCanceled(value: unknown): value is AnalysisCanceled {
+  return (isOutputObject(value) && Object.hasOwn(value, "execution_id") && Object.hasOwn(value, "status") && Object.hasOwn(value, "diagnostics") && (typeof value["execution_id"] === "string") && true && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))));
+}
+
+export function isScenarioPage(value: unknown): value is ScenarioPage {
+  return (isOutputObject(value) && Object.hasOwn(value, "scenarios") && Object.hasOwn(value, "next_cursor") && (Array.isArray(value["scenarios"])) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)));
+}
+
+export function isScenarioSaved(value: unknown): value is ScenarioSaved {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "name") && Object.hasOwn(value, "command") && (typeof value["id"] === "string") && (typeof value["name"] === "string") && (Array.isArray(value["command"]) && value["command"].every(item => (typeof item === "string"))) && (!Object.hasOwn(value, "cwd") || (typeof value["cwd"] === "string")) && (!Object.hasOwn(value, "runtime") || (typeof value["runtime"] === "string")) && (!Object.hasOwn(value, "timeout_seconds") || (typeof value["timeout_seconds"] === "number" && Number.isFinite(value["timeout_seconds"]))) && (!Object.hasOwn(value, "expected_exit_code") || (typeof value["expected_exit_code"] === "number" && Number.isInteger(value["expected_exit_code"]))) && (!Object.hasOwn(value, "env") || (isOutputObject(value["env"]) && Object.values(value["env"]).every(item => (typeof item === "string")))) && (!Object.hasOwn(value, "input_files") || (Array.isArray(value["input_files"]) && value["input_files"].every(item => (typeof item === "string")))) && (!Object.hasOwn(value, "expected_stdout") || (typeof value["expected_stdout"] === "string")) && (!Object.hasOwn(value, "expected_stdout_sha256") || (typeof value["expected_stdout_sha256"] === "string")));
+}
+
+export function isScenarioSaveResult(value: unknown): value is ScenarioSaveResult {
+  return (isOutputObject(value) && Object.hasOwn(value, "scenario") && isScenarioSaved(value["scenario"]));
+}
+
 // Only declared output schemas are checked while the catalog is migrated.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
@@ -424,8 +543,29 @@ export function validateOperationOutput(name: string, value: unknown): void {
     case "recordings.import":
       if (!isImportResult(value)) throw new Error("Hunin returned an invalid recordings.import result.");
       break;
+    case "analyses.list":
+      if (!isAnalysisPage(value)) throw new Error("Hunin returned an invalid analyses.list result.");
+      break;
+    case "analyses.register":
+      if (!isAnalysisRegistered(value)) throw new Error("Hunin returned an invalid analyses.register result.");
+      break;
+    case "analyses.run":
+      if (!isAnalysisStarted(value)) throw new Error("Hunin returned an invalid analyses.run result.");
+      break;
+    case "analyses.results":
+      if (!isAnalysisResultPage(value)) throw new Error("Hunin returned an invalid analyses.results result.");
+      break;
+    case "scenarios.list":
+      if (!isScenarioPage(value)) throw new Error("Hunin returned an invalid scenarios.list result.");
+      break;
+    case "scenarios.save":
+      if (!isScenarioSaveResult(value)) throw new Error("Hunin returned an invalid scenarios.save result.");
+      break;
     case "scenarios.run":
       if (!isRunResult(value)) throw new Error("Hunin returned an invalid scenarios.run result.");
+      break;
+    case "analyses.cancel":
+      if (!isAnalysisCanceled(value)) throw new Error("Hunin returned an invalid analyses.cancel result.");
       break;
     case "recordings.reanalyze":
       if (!isReanalysisResult(value)) throw new Error("Hunin returned an invalid recordings.reanalyze result.");

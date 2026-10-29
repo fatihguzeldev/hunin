@@ -1,3 +1,4 @@
+import { scenarioMetadata } from '../metadata';
 import { operation, type Scenario } from '../api';
 import { parseCommand } from '../command';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
@@ -27,17 +28,22 @@ export async function scenarios(onRun: (id: string) => void): Promise<HTMLElemen
     el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, 'Save a workload'), form));
   function renderScenarios(items: Scenario[]): HTMLElement {
     if (!items.length) return empty('No saved workloads', 'Save a scenario below, then reuse it before and after a code change.');
-    return el('section', { class: 'panel' }, ...items.map(scenario => {
+    return el('section', { class: 'panel' }, ...items.map(item => {
+      const scenario = scenarioMetadata(item);
+      const scenarioId = scenario.id;
       const run = button('Record scenario', () => {
+        if (!scenarioId) return;
         run.disabled = true;
         feedback.replaceChildren(loading('Starting scenario…'));
-        void operation('scenarios.run', { scenario_id: scenario.id }).then(data => onRun(data.run.id)).catch(error => {
+        void operation('scenarios.run', { scenario_id: scenarioId }).then(data => onRun(data.run.id)).catch(error => {
           feedback.replaceChildren(errorView(error, () => run.click()));
         }).finally(() => { run.disabled = false; });
       }, 'button small');
+      run.disabled = !scenarioId || !scenario.command?.length;
       return el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h2', {}, scenario.name), badge(scenario.runtime || 'auto'), el('span', { class: 'spacer' }), run),
-        el('p', { class: 'mono' }, scenario.command.join(' ')), el('p', {}, `${scenario.cwd} · timeout ${scenario.timeout_seconds}s · expected exit ${scenario.expected_exit_code}`),
-        el('details', {}, el('summary', {}, 'Workload input and output expectations'), el('pre', {}, JSON.stringify({ env: scenario.env ?? {}, input_files: scenario.input_files ?? [], expected_stdout: scenario.expected_stdout, expected_stdout_sha256: scenario.expected_stdout_sha256 }, null, 2))));
+        el('p', { class: 'mono' }, scenario.command?.length ? scenario.command.join(' ') : 'Command unavailable'), el('p', {}, `${scenario.cwd ?? 'default working directory'} · timeout ${scenario.timeout_seconds === undefined ? 'default' : `${scenario.timeout_seconds}s`} · expected exit ${scenario.expected_exit_code ?? 'default'}`),
+        el('details', {}, el('summary', {}, 'Workload input and output expectations'), el('pre', {}, JSON.stringify({ env: scenario.env ?? {}, input_files: scenario.input_files ?? [], expected_stdout: scenario.expected_stdout, expected_stdout_sha256: scenario.expected_stdout_sha256 }, null, 2))),
+        run.disabled ? el('details', {}, el('summary', {}, 'Retained workload metadata · unavailable fields'), el('pre', {}, JSON.stringify(scenario.raw, null, 2))) : null);
     }));
   }
   async function save(): Promise<void> {

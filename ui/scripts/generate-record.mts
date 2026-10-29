@@ -64,7 +64,10 @@ export function typeOf(
   if (schema.type === 'array')
     return `Array<${typeOf(schema.items ?? {}, definitions)}>`;
   if (schema.type === 'object') {
-    if (!schema.properties) return 'Record<string, unknown>';
+    if (!schema.properties)
+      return typeof schema.additionalProperties === 'object'
+        ? `Record<string, ${typeOf(schema.additionalProperties, definitions)}>`
+        : 'Record<string, unknown>';
     return `{\n${Object.entries(schema.properties)
       .map(
         ([key, value]) =>
@@ -206,10 +209,10 @@ function outputCondition(
       break;
     case 'array':
       checks.push(`Array.isArray(${value})`);
-      if (schema.items)
-        checks.push(
-          `${value}.every(item => ${outputCondition(schema.items, 'item', definitions)})`,
-        );
+      if (schema.items) {
+        const item = outputCondition(schema.items, 'item', definitions);
+        if (item !== 'true') checks.push(`${value}.every(item => ${item})`);
+      }
       break;
     case 'object': {
       checks.push(`isOutputObject(${value})`);
@@ -235,9 +238,18 @@ function outputCondition(
         schema.additionalProperties &&
         typeof schema.additionalProperties === 'object'
       ) {
-        checks.push(
-          `Object.entries(${value}).every(([key, item]) => ${JSON.stringify(Object.keys(schema.properties ?? {}))}.includes(key) || ${outputCondition(schema.additionalProperties, 'item', definitions)})`,
+        const keys = Object.keys(schema.properties ?? {});
+        const item = outputCondition(
+          schema.additionalProperties,
+          'item',
+          definitions,
         );
+        if (item !== 'true')
+          checks.push(
+            keys.length
+              ? `Object.entries(${value}).every(([key, item]) => ${JSON.stringify(keys)}.includes(key) || ${item})`
+              : `Object.values(${value}).every(item => ${item})`,
+          );
       }
       break;
     }

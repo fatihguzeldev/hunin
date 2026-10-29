@@ -7,11 +7,11 @@ export type Capability = OperationOutputs['capabilities']['runtimes'][number];
 export type Hotspot = { function: string; file?: string; line?: number; code_id?: string | null; self_weight: number; inclusive_weight: number; weight_unit: string };
 export type TreeNode = { id: string; name: string; file?: string; line?: number; code_id?: string | null; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
 export type Artifact = OperationOutputs['artifacts.list']['artifacts'][number];
-export type Analysis = { id: string; name: string; version: string; command: string[]; requirements: unknown; dependencies?: unknown; status?: string };
-export type AnalysisResult = { id: string; result_set_id?: string; analysis_id: string; version: string; status: string; selected?: boolean; diagnostics: string[]; created_at_us: number; finished_at_us?: number; input_fingerprint: string };
+export type Analysis = OperationOutputs['analyses.list']['analyses'][number];
+export type AnalysisResult = OperationOutputs['analyses.results']['results'][number];
 export type Series = { id: string; name: string; unit: string; scope: string; pid: number; tid?: string | null; producer_id?: string | null; context_id?: string | null; thread_id_source?: string | null; clock?: string | null; clock_alignment?: string | null; process_started_at_seconds?: number | null; process_role?: string | null; point_count?: number; returned_points?: number; truncated?: boolean; points: { id: string; timestamp_us: number; value: number }[] };
 export type Comparison = { before: Run; after: Run; comparable: boolean; reasons: string[]; metrics: { name: string; unit: string; before: number; after: number; delta: number | null; percent_change?: number | null; comparable?: boolean; measurement_quality?: string; diagnostic?: string; before_observations?: number; after_observations?: number }[]; correctness: { before: unknown; after: unknown }; hotspots: unknown; limitations?: string[] };
-export type Scenario = { id: string; name: string; command: string[]; cwd: string; runtime: string; timeout_seconds: number; expected_exit_code: number; env?: Record<string,string>; input_files?: string[]; expected_stdout?: string; expected_stdout_sha256?: string };
+export type Scenario = OperationOutputs['scenarios.list']['scenarios'][number];
 
 type Responses = {
   'profiles.hotspots': { hotspots: Hotspot[]; total_weight: number; weight_unit: string };
@@ -20,14 +20,7 @@ type Responses = {
   'resources.query': { series: Series[]; next_cursor?: string; returned_points?: number; total_points?: number };
   'contexts.query': { contexts: Observation[]; relations: Observation[]; next_cursor?: string };
   'evidence.get': { records: Observation[] };
-  'analyses.list': { analyses: Analysis[]; next_cursor?: string | null };
-  'analyses.register': { analysis: Analysis };
-  'analyses.results': { results: AnalysisResult[]; next_cursor?: string | null };
-  'analyses.run': { result_set_id: string; status: string; diagnostics: string[] };
-  'analyses.cancel': unknown;
   'comparisons.create': Comparison;
-  'scenarios.list': { scenarios: Scenario[]; next_cursor?: string | null };
-  'scenarios.save': { scenario: Scenario };
 } & OperationOutputs;
 
 export type Operations = { [K in keyof Responses]: { input: OperationInputs[K]; output: Responses[K] } };

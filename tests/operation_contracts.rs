@@ -128,6 +128,103 @@ async fn capabilities_and_source_contracts_cover_real_discovery_and_unverified_f
 }
 
 #[tokio::test]
+async fn metadata_contracts_preserve_legacy_documents_and_new_operation_results() {
+    let data = tempfile::tempdir().unwrap();
+    let package = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store
+        .save_run(&Run {
+            id: "recording".into(),
+            name: "recording".into(),
+            status: "completed".into(),
+            command: vec![],
+            cwd: package.path().to_string_lossy().into_owned(),
+            runtime: "fixture".into(),
+            started_at_us: 1,
+            finished_at_us: Some(2),
+            exit_code: None,
+            diagnostics: vec![],
+            source: json!({"fingerprint":"known"}),
+            correctness: Value::Null,
+        })
+        .unwrap();
+    for namespace in ["analyses", "scenarios"] {
+        store
+            .save_document(
+                namespace,
+                "legacy",
+                &json!({"id":"legacy","name":"retained","created_at_us":0}),
+            )
+            .unwrap();
+        store
+            .save_document(namespace, "scalar", &json!("historical scalar"))
+            .unwrap();
+    }
+    store
+        .save_document(
+            "analysis-results",
+            "legacy",
+            &json!({"id":"legacy","run_id":"recording","analysis_id":"legacy","status":"failed"}),
+        )
+        .unwrap();
+    store.accept("recording", "contract-input", &[json!({"schema_version":1,"kind":"event","id":"input","run_id":"recording","producer_id":"control","pid":0,"tid":"","timestamp_us":1,"basis":"observed","name":"input"})]).unwrap();
+    let operations = Operations::new(store);
+    for operation in ["analyses.list", "scenarios.list"] {
+        let page = operations.call(operation, json!({})).await.unwrap();
+        validate_result(operation, &page);
+        assert!(page.as_object().unwrap().values().any(|value| {
+            value
+                .as_array()
+                .is_some_and(|rows| rows.contains(&json!("historical scalar")))
+        }));
+    }
+    let saved = operations
+        .call(
+            "scenarios.save",
+            json!({"name":"minimal","command":["workload"]}),
+        )
+        .await
+        .unwrap();
+    validate_result("scenarios.save", &saved);
+    assert!(saved["scenario"].get("cwd").is_none());
+    assert!(saved["scenario"].get("timeout_seconds").is_none());
+
+    std::fs::write(package.path().join("analyze.py"), "import json,sys\nvalue=json.load(sys.stdin)\nprint(json.dumps({'schema_version':1,'kind':'event','id':'contract-event','run_id':value['run']['id'],'producer_id':'contract','pid':0,'tid':'','timestamp_us':1,'basis':'derived','name':'contract','evidence':[value['records'][0]['id']]}))\n").unwrap();
+    let python = std::env::var("HUNIN_TEST_PYTHON").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "python".into()
+        } else {
+            "python3".into()
+        }
+    });
+    let registered = operations.call("analyses.register", json!({"name":"contract","command":[python,"analyze.py"],"cwd":package.path(),"requirements":{"runtime":"fixture","source_fingerprint":"known"}})).await.unwrap();
+    validate_result("analyses.register", &registered);
+    let started = operations.call("analyses.run", json!({"run_id":"recording","analysis_id":registered["analysis"]["id"],"timeout_seconds":5})).await.unwrap();
+    validate_result("analyses.run", &started);
+    let execution = started["result_set_id"].as_str().unwrap();
+    let finished = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        operations.analyses.wait(execution),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(finished["status"], "accepted", "{finished}");
+    let results = operations
+        .call("analyses.results", json!({"run_id":"recording"}))
+        .await
+        .unwrap();
+    validate_result("analyses.results", &results);
+    assert_eq!(results["results"].as_array().unwrap().len(), 2);
+    let canceled = operations
+        .call("analyses.cancel", json!({"execution_id":execution}))
+        .await
+        .unwrap();
+    validate_result("analyses.cancel", &canceled);
+    assert_eq!(canceled["status"], "accepted");
+}
+
+#[tokio::test]
 async fn artifact_contracts_cover_real_pages_and_lossy_byte_excerpts() {
     let data = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();

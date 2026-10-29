@@ -444,6 +444,233 @@
         "build_mapping_verified",
         "diagnostic"
       ]
+    },
+    "AnalysisPage": {
+      "type": "object",
+      "properties": {
+        "analyses": {
+          "type": "array",
+          "items": {
+            "description": "Historical stored documents are arbitrary JSON; consumers must project known fields without inventing missing metadata."
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["analyses", "next_cursor"]
+    },
+    "AnalysisResultDocument": {
+      "type": "object",
+      "properties": {
+        "selected": {
+          "type": "boolean"
+        }
+      },
+      "required": ["selected"]
+    },
+    "AnalysisResultPage": {
+      "type": "object",
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisResultDocument"
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["results", "next_cursor"]
+    },
+    "AnalysisPackage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requirements": {
+          "type": "object"
+        },
+        "dependencies": {
+          "type": "object"
+        },
+        "package_digest": {
+          "type": "string"
+        },
+        "files": {
+          "type": "object"
+        },
+        "package_dir": {
+          "type": "string"
+        },
+        "created_at_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "executable": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "packaged": {
+              "type": "boolean"
+            }
+          },
+          "required": ["path", "sha256", "packaged"]
+        },
+        "dependency_state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version",
+        "command",
+        "requirements",
+        "dependencies",
+        "package_digest",
+        "files",
+        "package_dir",
+        "created_at_us",
+        "executable",
+        "dependency_state"
+      ]
+    },
+    "AnalysisRegistered": {
+      "type": "object",
+      "properties": {
+        "analysis": {
+          "$ref": "#/$defs/AnalysisPackage"
+        }
+      },
+      "required": ["analysis"]
+    },
+    "AnalysisStarted": {
+      "type": "object",
+      "properties": {
+        "result_set_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["result_set_id", "status", "diagnostics"]
+    },
+    "AnalysisCanceled": {
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "type": "string"
+        },
+        "status": {
+          "description": "Retains the stored attempt status value, including unknown legacy metadata."
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["execution_id", "status", "diagnostics"]
+    },
+    "ScenarioPage": {
+      "type": "object",
+      "properties": {
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "description": "Historical stored documents are arbitrary JSON; consumers must project known fields without inventing missing metadata."
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["scenarios", "next_cursor"]
+    },
+    "ScenarioSaved": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "type": "number"
+        },
+        "expected_exit_code": {
+          "type": "integer"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "input_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_stdout": {
+          "type": "string"
+        },
+        "expected_stdout_sha256": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "name", "command"]
+    },
+    "ScenarioSaveResult": {
+      "type": "object",
+      "properties": {
+        "scenario": {
+          "$ref": "#/$defs/ScenarioSaved"
+        }
+      },
+      "required": ["scenario"]
     }
   }
 }

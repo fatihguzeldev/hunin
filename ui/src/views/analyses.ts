@@ -1,3 +1,4 @@
+import { analysisMetadata, analysisAttemptMetadata } from '../metadata';
 import { runSource } from '../run';
 import { operation, type Analysis, type AnalysisResult } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
@@ -17,7 +18,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
   const attempts = pagedList<AnalysisResult>({
     label: 'analyzer attempts', nextLabel: 'Older attempts',
     load: async cursor => { const page = await operation('analyses.results', { run_id: context.run.id, cursor, limit: 25 }); return { items: page.results, next_cursor: page.next_cursor }; },
-    render: renderAttempts, pollWhen: items => items.some(result => result.status === 'running'),
+    render: renderAttempts, pollWhen: items => items.some(result => analysisAttemptMetadata(result).status === 'running'),
   });
   const body = el('div', { class: 'stack' },
     el('div', { class: 'view-title' }, el('h2', {}, 'Durable analyzers'), el('p', {}, 'Managed packages · fresh inputs · atomic publication')),
@@ -27,32 +28,42 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
   function renderPackages(items: Analysis[]): HTMLElement {
     const list = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Registered packages')));
     if (!items.length) list.append(empty('No registered analyzers', 'Register an analyzer package to derive additional relationships from declared recording inputs.'));
-    for (const analysis of items) {
+    for (const item of items) {
+      const analysis = analysisMetadata(item);
+      const analysisId = analysis.id;
       const run = button('Run on this recording', () => {
+        if (!analysisId) return;
         run.disabled = true;
         feedback.replaceChildren(loading('Running analyzer against this recording…'));
-        void operation('analyses.run', { run_id: context.run.id, analysis_id: analysis.id }).then(result => {
+        void operation('analyses.run', { run_id: context.run.id, analysis_id: analysisId }).then(result => {
           feedback.replaceChildren(el('p', { class: 'notice' }, result.status === 'running' ? `Attempt ${result.result_set_id} started. Follow its status below; output is published only after acceptance.` : `${result.status} · ${result.result_set_id}`, ...result.diagnostics.map(value => el('span', { class: 'source-label' }, value))));
           void attempts.refresh(true);
         }).catch(error => { feedback.replaceChildren(errorView(error, () => run.click())); }).finally(() => { run.disabled = false; });
       }, 'button small');
-      list.append(el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h3', {}, analysis.name), badge(analysis.version), el('span', { class: 'spacer' }), run),
-        el('p', { class: 'mono' }, analysis.command.join(' ')), el('details', {}, el('summary', { class: 'metric-note' }, 'Applicability and dependencies'), el('pre', {}, JSON.stringify({ requirements: analysis.requirements, dependencies: analysis.dependencies }, null, 2)))));
+      run.disabled = !analysisId || !analysis.command?.length;
+      list.append(el('div', { class: 'result-item' }, el('div', { class: 'toolbar' }, el('h3', {}, analysis.name), badge(analysis.version ?? 'unknown version'), el('span', { class: 'spacer' }), run),
+        el('p', { class: 'mono' }, analysis.command?.length ? analysis.command.join(' ') : 'Command unavailable'), el('details', {}, el('summary', { class: 'metric-note' }, 'Applicability and dependencies'), el('pre', {}, JSON.stringify({ requirements: analysis.requirements, dependencies: analysis.dependencies }, null, 2))),
+        run.disabled ? el('details', {}, el('summary', {}, 'Retained package metadata · unavailable fields'), el('pre', {}, JSON.stringify(analysis.raw, null, 2))) : null));
     }
     return list;
   }
   function renderAttempts(items: AnalysisResult[]): HTMLElement {
     const published = el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Attempts and accepted results'), el('small', {}, 'Accepted observations join Timeline and Evidence')));
     if (!items.length) published.append(empty('No analyzer results', 'Completed attempts and accepted result identities will be retained with the recording.'));
-    for (const result of items) published.append(el('div', { class: 'result-item' },
-      el('div', { class: 'toolbar' }, el('h3', { class: 'mono' }, result.id), badge(result.status, ['accepted', 'replayed'].includes(result.status) ? 'good' : ['failed', 'timed_out'].includes(result.status) ? 'bad' : 'warn'),
-        result.selected ? badge('selected result', 'good') : result.selected === false && ['accepted', 'replayed'].includes(result.status) ? badge('historical') : null,
-        result.status === 'running' ? button('Cancel attempt', () => {
-          void operation('analyses.cancel', { execution_id: result.id }).then(() => attempts.refresh()).catch(error => feedback.replaceChildren(errorView(error, () => { void attempts.refresh(); })));
-        }, 'button small danger') : null),
-      el('p', {}, `${result.analysis_id} · ${result.version} · ${date(new Date(result.created_at_us / 1_000).toISOString())}`),
-      result.result_set_id && ['accepted', 'replayed'].includes(result.status) ? el('p', { class: 'mono source-label' }, `Accepted result set ${result.result_set_id}`) : null,
-      el('p', { class: 'mono source-label' }, `Input fingerprint ${result.input_fingerprint}`), ...result.diagnostics.map(message => el('p', {}, message))));
+    for (const item of items) {
+      const result = analysisAttemptMetadata(item);
+      const executionId = result.id;
+      published.append(el('div', { class: 'result-item' },
+        el('div', { class: 'toolbar' }, el('h3', { class: 'mono' }, result.id ?? 'Unknown attempt'), badge(result.status, ['accepted', 'replayed'].includes(result.status) ? 'good' : ['failed', 'timed_out'].includes(result.status) ? 'bad' : 'warn'),
+          result.selected ? badge(result.result_set_id || result.id ? 'selected result' : 'selected flag · identity unavailable', result.result_set_id || result.id ? 'good' : 'warn') : result.selected === false && ['accepted', 'replayed'].includes(result.status) ? badge('historical') : null,
+          result.status === 'running' && executionId ? button('Cancel attempt', () => {
+            void operation('analyses.cancel', { execution_id: executionId }).then(() => attempts.refresh()).catch(error => feedback.replaceChildren(errorView(error, () => { void attempts.refresh(); })));
+          }, 'button small danger') : null),
+        el('p', {}, `${result.analysis_id ?? 'Unknown analyzer'} · ${result.version ?? 'unknown version'} · ${result.created_at ? date(result.created_at) : 'creation time unknown'}`),
+        result.result_set_id && ['accepted', 'replayed'].includes(result.status) ? el('p', { class: 'mono source-label' }, `Accepted result set ${result.result_set_id}`) : null,
+        el('p', { class: 'mono source-label' }, `Input fingerprint ${result.input_fingerprint ?? 'unknown'}`), ...result.diagnostics.map(message => el('p', {}, message)),
+        !result.created_at || !result.analysis_id || !result.input_fingerprint ? el('details', {}, el('summary', {}, 'Retained attempt metadata · unavailable fields'), el('pre', {}, JSON.stringify(result.raw, null, 2))) : null));
+    }
     return published;
   }
   function register(): void {
