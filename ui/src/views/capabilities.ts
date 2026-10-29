@@ -1,8 +1,9 @@
 import { operation } from '../api';
 import { badge, el } from '../dom';
 
-export async function capabilities(): Promise<HTMLElement> {
-  const data = await operation('capabilities', {});
+export async function capabilities(signal?: AbortSignal): Promise<HTMLElement> {
+  const data = await operation('capabilities', {}, signal);
+  signal?.throwIfAborted();
   return el(
     'div',
     { class: 'stack' },

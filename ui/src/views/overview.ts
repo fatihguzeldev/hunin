@@ -23,12 +23,18 @@ export async function overview(
   run: Run,
   summary: Summary,
   source: (file: string, line?: number | null, codeId?: string | null) => void,
+  signal?: AbortSignal,
 ): Promise<HTMLElement> {
   const correctness = runCorrectness(run);
-  const data = await operation('profiles.hotspots', {
-    run_id: run.id,
-    limit: 25,
-  });
+  const data = await operation(
+    'profiles.hotspots',
+    {
+      run_id: run.id,
+      limit: 25,
+    },
+    signal,
+  );
+  signal?.throwIfAborted();
   const body = el('div', { class: 'stack' });
   const elapsed = run.finished_at_us
     ? duration((run.finished_at_us - run.started_at_us) * 1_000)

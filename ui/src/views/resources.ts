@@ -52,12 +52,17 @@ export async function resources(
   cursor?: string,
 ): Promise<HTMLElement> {
   const { series, next_cursor, returned_points, total_points } =
-    await operation('resources.query', {
-      run_id: context.run.id,
-      limit: 12,
-      point_limit: 2000,
-      cursor,
-    });
+    await operation(
+      'resources.query',
+      {
+        run_id: context.run.id,
+        limit: 12,
+        point_limit: 2000,
+        cursor,
+      },
+      context.signal,
+    );
+  context.signal.throwIfAborted();
   if (!series.length)
     return empty(
       'No resource observations',
@@ -172,10 +177,13 @@ export async function resources(
       ),
     );
   async function showPage(page?: string): Promise<void> {
+    if (context.signal.aborted) return;
     body.replaceChildren(loading('Loading more resource series…'));
     try {
-      body.replaceWith(await resources(context, page));
+      const next = await resources(context, page);
+      if (!context.signal.aborted) body.replaceWith(next);
     } catch (error) {
+      if (context.signal.aborted) return;
       body.replaceChildren(
         errorView(error, () => {
           void showPage(page);

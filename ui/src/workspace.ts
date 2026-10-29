@@ -38,6 +38,7 @@ export class Workspace {
   private content = el('main', { class: 'workspace', id: 'main' });
   private epoch = 0;
   private reloadEpoch = 0;
+  private listController: AbortController | undefined;
   private query = '';
   private nextCursor: string | undefined;
   private focusSelectedTab = false;
@@ -77,16 +78,27 @@ export class Workspace {
       overview: {
         name: 'Overview',
         render: (context) =>
-          overview(context.run, context.summary, context.source),
+          overview(
+            context.run,
+            context.summary,
+            context.source,
+            context.signal,
+          ),
       },
       ...views,
     };
     this.normalizeTab();
     this.restoreHistory();
-    window.addEventListener('pagehide', () => this.pauseAttemptReads());
-    window.addEventListener('pageshow', () =>
-      this.selectAttemptRun(this.selected),
-    );
+    window.addEventListener('pagehide', () => {
+      this.pauseAttemptReads();
+      this.renderController?.abort();
+      this.listController?.abort();
+      clearTimeout(this.poll);
+    });
+    window.addEventListener('pageshow', (event) => {
+      this.selectAttemptRun(this.selected);
+      if (event.persisted) void this.reload();
+    });
     window.addEventListener('online', () => this.scheduleAttemptCheck(true));
     window.addEventListener('popstate', () => {
       const wasSource = Boolean(
@@ -188,11 +200,18 @@ export class Workspace {
   }
 
   private async reload(select?: string, preserveView = false): Promise<void> {
+    this.listController?.abort();
+    const controller = new AbortController();
+    this.listController = controller;
     const generation = ++this.reloadEpoch;
     const navigation = this.epoch;
     try {
-      const data = await operation('runs.list', { limit: 100 });
-      if (generation !== this.reloadEpoch) return;
+      const data = await operation(
+        'runs.list',
+        { limit: 100 },
+        controller.signal,
+      );
+      if (generation !== this.reloadEpoch || controller.signal.aborted) return;
       this.runs = data.runs;
       this.nextCursor = data.next_cursor ?? undefined;
       if (preserveView || navigation !== this.epoch) {
@@ -209,12 +228,17 @@ export class Workspace {
       this.renderRail();
       await this.render();
     } catch (error) {
-      if (generation === this.reloadEpoch && navigation === this.epoch)
-        this.content.replaceChildren(
-          errorView(error, () => {
-            void this.reload();
-          }),
-        );
+      if (
+        generation === this.reloadEpoch &&
+        navigation === this.epoch &&
+        !controller.signal.aborted
+      ) {
+        const feedback = errorView(error, () => {
+          void this.reload(undefined, preserveView);
+        });
+        if (preserveView) this.rail.append(feedback);
+        else this.content.replaceChildren(feedback);
+      }
     }
   }
 
@@ -270,9 +294,10 @@ export class Workspace {
           older.disabled = true;
           const cursor = this.nextCursor;
           const generation = this.reloadEpoch;
-          void operation('runs.list', { limit: 100, cursor })
+          const signal = this.listController?.signal;
+          void operation('runs.list', { limit: 100, cursor }, signal)
             .then((data) => {
-              if (generation !== this.reloadEpoch) return;
+              if (generation !== this.reloadEpoch || signal?.aborted) return;
               const unique = new Map(this.runs.map((run) => [run.id, run]));
               for (const run of data.runs)
                 if (!unique.has(run.id)) unique.set(run.id, run);
@@ -281,7 +306,7 @@ export class Workspace {
               this.renderRail();
             })
             .catch((error) => {
-              if (generation === this.reloadEpoch)
+              if (generation === this.reloadEpoch && !signal?.aborted)
                 this.rail.append(
                   errorView(error, () => {
                     void this.reload();
@@ -380,7 +405,7 @@ export class Workspace {
     this.content.replaceChildren(loading('Loading recording…'));
     try {
       if (this.tab === 'capabilities') {
-        const view = await capabilities();
+        const view = await capabilities(signal);
         if (epoch === this.epoch) {
           this.content.replaceChildren(el('div', { class: 'view' }, view));
           document.title = 'Capabilities · Hunin';
