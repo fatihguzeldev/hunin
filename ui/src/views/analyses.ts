@@ -14,11 +14,11 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
     label: 'analyzer packages',
     signal: context.signal,
     nextLabel: 'More analyzer packages',
-    load: async (cursor) => {
+    load: async (cursor, readSignal) => {
       const page = await operation(
         'analyses.list',
         { cursor, limit: 25 },
-        context.signal,
+        readSignal,
       );
       return { items: page.analyses, next_cursor: page.next_cursor };
     },
@@ -28,7 +28,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
     label: 'analyzer attempts',
     signal: context.signal,
     nextLabel: 'Older attempts',
-    load: async (cursor) => {
+    load: async (cursor, readSignal) => {
       const page = await operation(
         'analyses.results',
         {
@@ -36,9 +36,9 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
           cursor,
           limit: 25,
         },
-        context.signal,
+        readSignal,
       );
-      if (!context.signal.aborted)
+      if (!readSignal.aborted)
         for (const row of page.results) {
           const attempt = analysisAttemptMetadata(row);
           if (attempt.id && attempt.status === 'running')

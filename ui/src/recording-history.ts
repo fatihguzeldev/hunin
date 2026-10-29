@@ -11,8 +11,12 @@ export function recordingHistory(
     label: 'recording history',
     nextLabel: 'Older recordings',
     signal,
-    load: async (cursor) => {
-      const page = await operation('runs.list', { limit: 50, cursor }, signal);
+    load: async (cursor, readSignal) => {
+      const page = await operation(
+        'runs.list',
+        { limit: 50, cursor },
+        readSignal,
+      );
       return { items: page.runs, next_cursor: page.next_cursor };
     },
     render: (runs) =>

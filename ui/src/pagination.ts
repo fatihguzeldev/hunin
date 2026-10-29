@@ -1,3 +1,5 @@
+import { linkedRequest } from './requests.js';
+
 export type Page<T> = { items: T[]; next_cursor?: string | null };
 
 /** Keep opaque cursors and commit navigation only after its request succeeds. */
@@ -6,10 +8,14 @@ export class PagedQuery<T> {
   private cursor?: string;
   private previousCursors: (string | undefined)[] = [];
   private version = 0;
+  private request: AbortController | undefined;
 
   constructor(
-    private fetchPage: (cursor?: string) => Promise<Page<T>>,
-    private signal?: AbortSignal,
+    private fetchPage: (
+      cursor: string | undefined,
+      signal: AbortSignal,
+    ) => Promise<Page<T>>,
+    private signal: AbortSignal = new AbortController().signal,
   ) {}
 
   get hasPrevious(): boolean {
@@ -42,18 +48,23 @@ export class PagedQuery<T> {
     cursor: string | undefined,
     previous: (string | undefined)[],
   ): Promise<boolean> {
-    if (this.signal?.aborted) return false;
+    if (this.signal.aborted) return false;
     const version = ++this.version;
+    this.request?.abort();
+    this.request = new AbortController();
+    const linked = linkedRequest(this.signal, this.request.signal);
     try {
-      const page = await this.fetchPage(cursor);
-      if (version !== this.version || this.signal?.aborted) return false;
+      const page = await this.fetchPage(cursor, linked.signal);
+      if (version !== this.version || linked.signal.aborted) return false;
       this.page = page;
       this.cursor = cursor;
       this.previousCursors = previous;
       return true;
     } catch (error) {
-      if (version === this.version && !this.signal?.aborted) throw error;
+      if (version === this.version && !linked.signal.aborted) throw error;
       return false;
+    } finally {
+      linked.finish();
     }
   }
 }

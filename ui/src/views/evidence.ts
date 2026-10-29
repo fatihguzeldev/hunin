@@ -480,7 +480,7 @@ export async function evidence(context: ViewContext): Promise<HTMLElement> {
     label: 'artifacts',
     signal: context.signal,
     nextLabel: 'More artifacts',
-    load: async (pageCursor) => {
+    load: async (pageCursor, readSignal) => {
       const page = await operation(
         'artifacts.list',
         {
@@ -488,7 +488,7 @@ export async function evidence(context: ViewContext): Promise<HTMLElement> {
           cursor: pageCursor,
           limit: 50,
         },
-        context.signal,
+        readSignal,
       );
       return { items: page.artifacts, next_cursor: page.next_cursor };
     },

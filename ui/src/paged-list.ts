@@ -5,7 +5,7 @@ export function pagedList<T>(options: {
   label: string;
   signal?: AbortSignal;
   nextLabel: string;
-  load: (cursor?: string) => Promise<Page<T>>;
+  load: (cursor: string | undefined, signal: AbortSignal) => Promise<Page<T>>;
   render: (items: T[]) => HTMLElement;
   pollWhen?: (items: T[]) => boolean;
 }): { element: HTMLElement; refresh: (reset?: boolean) => Promise<void> } {

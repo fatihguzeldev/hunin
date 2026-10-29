@@ -14,11 +14,11 @@ export async function scenarios(
     label: 'scenarios',
     signal,
     nextLabel: 'More scenarios',
-    load: async (cursor) => {
+    load: async (cursor, readSignal) => {
       const page = await operation(
         'scenarios.list',
         { cursor, limit: 25 },
-        signal,
+        readSignal,
       );
       return { items: page.scenarios, next_cursor: page.next_cursor };
     },
