@@ -1,3 +1,4 @@
+import { runSource } from '../run';
 import { operation, type Run, type Artifact } from '../api';
 import { badge, button, el, empty, errorView, loading } from '../dom';
 import { bytes, numeric } from '../format';
@@ -23,7 +24,7 @@ export async function source(run: Run, path: string, line?: number, codeId?: str
     el('section', { class: 'panel' }, el('div', { class: 'table-scroll' }, code)),
     data.provenance ? el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, 'Source mapping provenance'), el('pre', { class: 'panel-body' }, JSON.stringify(data.provenance, null, 2))) : null,
     codeId ? el('p', { class: 'metric-note mono' }, `Measured code identity ${codeId}`) : null,
-    el('p', { class: 'metric-note' }, `Run ${run.id} · source fingerprint ${run.source.fingerprint}`));
+    el('p', { class: 'metric-note' }, `Run ${run.id} · source fingerprint ${runSource(run).fingerprint}`));
 }
 
 export async function evidence(context: ViewContext, cursor?: string): Promise<HTMLElement> {
@@ -101,7 +102,7 @@ export async function evidence(context: ViewContext, cursor?: string): Promise<H
       }))))),
   });
   body.append(el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, 'Measured source and executable identities'),
-    context.run.source.build_source_verified !== true ? el('p', { class: 'panel-body metric-note' }, 'Source and executable identities are distinct. Their build relationship has not been verified.') : null,
+    runSource(context.run).build_source_verified !== true ? el('p', { class: 'panel-body metric-note' }, 'Source and executable identities are distinct. Their build relationship has not been verified.') : null,
     el('pre', { class: 'panel-body' }, JSON.stringify(context.run.source, null, 2))), contexts, relations, inspector, artifacts.element);
   async function showPage(page?: string): Promise<void> {
     try { body.replaceWith(await evidence(context, page)); }

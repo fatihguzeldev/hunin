@@ -7,6 +7,7 @@ import {
   generatedMatches,
   type ObservationSchema,
   type OperationDefinition,
+  type ResponseSchema,
 } from '../scripts/generate-record.mjs';
 import { operation, ApiError } from '../src/api.js';
 import { duration, bytes, percentage } from '../src/format.js';
@@ -21,6 +22,7 @@ import {
 } from '../src/observation.js';
 import { PagedQuery, type Page } from '../src/pagination.js';
 import type { Observation } from '../src/record.generated.js';
+import { runSource, runCorrectness, runStatusTone } from '../src/run.js';
 
 test('canonical schema produces required fields per observation kind', async () => {
   const schema: ObservationSchema = JSON.parse(
@@ -56,7 +58,13 @@ test('operation input types are generated from the authoritative transport contr
       'utf8',
     ),
   );
-  const generated = generateOperations(operations);
+  const responses: ResponseSchema = JSON.parse(
+    await readFile(
+      new URL('../../../protocol/response.schema.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const generated = generateOperations(operations, responses.$defs);
   assert.ok(
     generatedMatches(
       await readFile(
@@ -227,6 +235,100 @@ test('artifact responses preserve null cursors and byte offsets while rejecting 
       operation('artifacts.read', { run_id: 'r1', artifact_id: 'a1' }),
       /invalid artifacts.read result/,
     );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('run responses retain legacy metadata and extension statuses but reject malformed fixed fields', async () => {
+  const original = globalThis.fetch;
+  const run = {
+    id: 'legacy',
+    name: 'legacy',
+    status: 'archived-by-extension',
+    command: [],
+    cwd: '/project',
+    runtime: 'imported',
+    started_at_us: 1,
+    finished_at_us: null,
+    exit_code: null,
+    diagnostics: [],
+    source: null,
+    correctness: 'unverified',
+  };
+  let result: unknown = { runs: [run], next_cursor: null };
+  try {
+    globalThis.fetch = async () => Response.json({ result });
+    assert.deepEqual(await operation('runs.list', {}), result);
+    result = {
+      runs: [{ ...run, finished_at_us: 'yesterday' }],
+      next_cursor: null,
+    };
+    await assert.rejects(
+      operation('runs.list', {}),
+      /invalid runs.list result/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('run presentation reads known metadata safely without changing retained values', () => {
+  for (const value of [
+    null,
+    'legacy',
+    42,
+    [],
+    { fingerprint: 7, revision: false, passed: 'yes' },
+  ]) {
+    const run = { source: value, correctness: value };
+    assert.equal(runSource(run).fingerprint, 'unknown');
+    assert.equal(runCorrectness(run).passed, null);
+    assert.equal(run.source, value);
+    assert.equal(run.correctness, value);
+  }
+  assert.deepEqual(
+    runSource({
+      source: {
+        fingerprint: 'measured',
+        revision: null,
+        dirty: true,
+        build_source_verified: false,
+      },
+    }),
+    {
+      fingerprint: 'measured',
+      revision: undefined,
+      dirty: true,
+      executable_sha256: undefined,
+      runtime_version: undefined,
+      build_source_verified: false,
+    },
+  );
+  assert.equal(
+    runCorrectness({
+      correctness: { passed: false, reason: 'mismatch', actual_exit_code: 1 },
+    }).passed,
+    false,
+  );
+  assert.equal(runStatusTone('completed'), 'good');
+  assert.equal(runStatusTone('archived-by-extension'), '');
+});
+
+test('transport rejects malformed error fields instead of manufacturing an ApiError', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const error of [
+      { code: 7, message: 'failure' },
+      { code: 'failure', message: [] },
+      {},
+    ]) {
+      globalThis.fetch = async () => Response.json({ error }, { status: 400 });
+      await assert.rejects(
+        operation('runs.list', {}),
+        /invalid error envelope/,
+      );
+    }
   } finally {
     globalThis.fetch = original;
   }

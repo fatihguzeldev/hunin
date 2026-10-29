@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 export type Schema = {
+  $ref?: string;
   type?: string | string[];
   const?: string | number | boolean | null;
   enum?: (string | number | boolean | null)[];
@@ -29,19 +30,45 @@ export type OperationDefinition = {
   outputSchema?: Schema;
 };
 
-export function typeOf(schema: Schema): string {
+export type ResponseSchema = { $defs: Record<string, Schema> };
+
+function referenceName(
+  reference: string,
+  definitions: Record<string, Schema>,
+): string {
+  const prefixes = [
+    'https://hunin.dev/protocol/response-v1.schema.json#/$defs/',
+    '#/$defs/',
+  ];
+  const prefix = prefixes.find((value) => reference.startsWith(value));
+  if (!prefix)
+    throw new Error(`Unsupported response schema reference: ${reference}`);
+  const name = reference.slice(prefix.length);
+  if (!/^[A-Z][A-Za-z0-9]*$/.test(name) || !Object.hasOwn(definitions, name))
+    throw new Error(`Unknown response schema reference: ${reference}`);
+  return name;
+}
+
+export function typeOf(
+  schema: Schema,
+  definitions: Record<string, Schema> = {},
+): string {
+  if (schema.$ref) return referenceName(schema.$ref, definitions);
   if ('const' in schema) return JSON.stringify(schema.const);
   if (schema.enum)
     return schema.enum.map((value) => JSON.stringify(value)).join(' | ');
   if (Array.isArray(schema.type))
-    return schema.type.map((type) => typeOf({ ...schema, type })).join(' | ');
-  if (schema.type === 'array') return `Array<${typeOf(schema.items ?? {})}>`;
+    return schema.type
+      .map((type) => typeOf({ ...schema, type }, definitions))
+      .join(' | ');
+  if (schema.type === 'array')
+    return `Array<${typeOf(schema.items ?? {}, definitions)}>`;
   if (schema.type === 'object') {
     if (!schema.properties) return 'Record<string, unknown>';
     return `{\n${Object.entries(schema.properties)
       .map(
         ([key, value]) =>
-          `  ${JSON.stringify(key)}${schema.required?.includes(key) ? '' : '?'}: ${typeOf(value)};`,
+          `  ${JSON.stringify(key)}${schema.required?.includes(key) ? '' : '?'}: ${typeOf(value, definitions)};`,
       )
       .join('\n')}\n}`;
   }
@@ -69,18 +96,28 @@ export function generate(schema: ObservationSchema): string {
   );
 }
 
-export function generateOperations(operations: OperationDefinition[]): string {
+export function generateOperations(
+  operations: OperationDefinition[],
+  definitions: Record<string, Schema> = {},
+): string {
   const outputs = operations.filter(
     (operation): operation is OperationDefinition & { outputSchema: Schema } =>
       operation.outputSchema !== undefined,
   );
   return (
-    '// Generated from protocol/operations.json. Run npm run generate; do not edit.\n' +
+    '// Generated from protocol/operations.json and response.schema.json. Run npm run generate; do not edit.\n' +
+    Object.entries(definitions)
+      .map(
+        ([name, schema]) =>
+          `export type ${name} = ${typeOf(schema, definitions)};\n`,
+      )
+      .join('\n') +
+    '\n' +
     'export type OperationInputs = {\n' +
     operations
       .map(
         (operation) =>
-          `  ${JSON.stringify(operation.name)}: ${typeOf(operation.inputSchema)};`,
+          `  ${JSON.stringify(operation.name)}: ${typeOf(operation.inputSchema, definitions)};`,
       )
       .join('\n') +
     '\n};\n' +
@@ -88,17 +125,23 @@ export function generateOperations(operations: OperationDefinition[]): string {
     outputs
       .map(
         (operation) =>
-          `  ${JSON.stringify(operation.name)}: ${typeOf(operation.outputSchema)};`,
+          `  ${JSON.stringify(operation.name)}: ${typeOf(operation.outputSchema, definitions)};`,
       )
       .join('\n') +
     '\n};\n' +
     '\nfunction isOutputObject(value: unknown): value is Record<string, unknown> {\n  return value !== null && typeof value === "object" && !Array.isArray(value);\n}\n' +
+    Object.entries(definitions)
+      .map(
+        ([name, schema]) =>
+          `\nexport function is${name}(value: unknown): value is ${name} {\n  return ${outputCondition(schema, 'value', definitions)};\n}\n`,
+      )
+      .join('') +
     '\n// Only declared output schemas are checked while the catalog is migrated.\n' +
     'export function validateOperationOutput(name: string, value: unknown): void {\n  switch (name) {\n' +
     outputs
       .map(
         (operation) =>
-          `    case ${JSON.stringify(operation.name)}:\n      if (!${outputCondition(operation.outputSchema, 'value')}) throw new Error(${JSON.stringify(`Hunin returned an invalid ${operation.name} result.`)});\n      break;`,
+          `    case ${JSON.stringify(operation.name)}:\n      if (!${outputCondition(operation.outputSchema, 'value', definitions)}) throw new Error(${JSON.stringify(`Hunin returned an invalid ${operation.name} result.`)});\n      break;`,
       )
       .join('\n') +
     '\n  }\n}\n'
@@ -107,8 +150,13 @@ export function generateOperations(operations: OperationDefinition[]): string {
 
 // Generate checks for the output vocabulary we actually publish. Reject new
 // unsupported schema keywords rather than silently generating a weaker check.
-function outputCondition(schema: Schema, value: string): string {
+function outputCondition(
+  schema: Schema,
+  value: string,
+  definitions: Record<string, Schema>,
+): string {
   const supported = new Set([
+    '$ref',
     'type',
     'const',
     'enum',
@@ -124,8 +172,10 @@ function outputCondition(schema: Schema, value: string): string {
     if (!supported.has(key))
       throw new Error(`Unsupported operation output schema keyword: ${key}`);
   }
+  if (schema.$ref)
+    return `is${referenceName(schema.$ref, definitions)}(${value})`;
   if (Array.isArray(schema.type))
-    return `(${schema.type.map((type) => outputCondition({ ...schema, type }, value)).join(' || ')})`;
+    return `(${schema.type.map((type) => outputCondition({ ...schema, type }, value, definitions)).join(' || ')})`;
   const checks: string[] = [];
   if ('const' in schema)
     checks.push(`${value} === ${JSON.stringify(schema.const)}`);
@@ -158,7 +208,7 @@ function outputCondition(schema: Schema, value: string): string {
       checks.push(`Array.isArray(${value})`);
       if (schema.items)
         checks.push(
-          `${value}.every(item => ${outputCondition(schema.items, 'item')})`,
+          `${value}.every(item => ${outputCondition(schema.items, 'item', definitions)})`,
         );
       break;
     case 'object': {
@@ -169,6 +219,7 @@ function outputCondition(schema: Schema, value: string): string {
         const condition = outputCondition(
           property,
           `${value}[${JSON.stringify(key)}]`,
+          definitions,
         );
         checks.push(
           schema.required?.includes(key)
@@ -185,7 +236,7 @@ function outputCondition(schema: Schema, value: string): string {
         typeof schema.additionalProperties === 'object'
       ) {
         checks.push(
-          `Object.entries(${value}).every(([key, item]) => ${JSON.stringify(Object.keys(schema.properties ?? {}))}.includes(key) || ${outputCondition(schema.additionalProperties, 'item')})`,
+          `Object.entries(${value}).every(([key, item]) => ${JSON.stringify(Object.keys(schema.properties ?? {}))}.includes(key) || ${outputCondition(schema.additionalProperties, 'item', definitions)})`,
         );
       }
       break;
@@ -212,9 +263,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const operations: OperationDefinition[] = JSON.parse(
     await readFile(new URL('protocol/operations.json', root), 'utf8'),
   );
+  const responses: ResponseSchema = JSON.parse(
+    await readFile(new URL('protocol/response.schema.json', root), 'utf8'),
+  );
   for (const [name, generated] of [
     ['record', generate(schema)],
-    ['operations', generateOperations(operations)],
+    ['operations', generateOperations(operations, responses.$defs)],
   ]) {
     const target = new URL(`ui/src/${name}.generated.ts`, root);
     if (process.argv.includes('--check')) {

@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hunin.dev/protocol/response-v1.schema.json",
+  "title": "Hunin operation results and transport envelopes",
+  "$defs": {
+    "Run": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "description": "Known labels include running, completed, failed and canceled; retained extension labels remain legal."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "started_at_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finished_at_us": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "exit_code": {
+          "type": ["integer", "null"]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "description": "Retained source/build metadata is an extensible JSON value, including legacy scalar/null payloads."
+        },
+        "correctness": {
+          "description": "Retained correctness evidence is an extensible JSON value; absence of a verified result must remain unknown."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "command",
+        "cwd",
+        "runtime",
+        "started_at_us",
+        "finished_at_us",
+        "exit_code",
+        "diagnostics",
+        "source",
+        "correctness"
+      ]
+    },
+    "Summary": {
+      "type": "object",
+      "properties": {
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_weight": {
+          "type": ["number", "null"],
+          "description": "A non-finite floating-point aggregate serializes as null; it must not be relabeled as zero."
+        },
+        "weight_unit": {
+          "type": "string"
+        },
+        "span_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "metric_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "sample_count",
+        "total_weight",
+        "weight_unit",
+        "span_count",
+        "metric_count",
+        "relation_count",
+        "diagnostics"
+      ]
+    },
+    "RunPage": {
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run"
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["runs", "next_cursor"]
+    },
+    "RunResult": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/Run"
+        }
+      },
+      "required": ["run"]
+    },
+    "RunDetails": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": ["run", "summary"]
+    },
+    "ImportResult": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": ["run", "accepted", "summary"]
+    },
+    "ReanalysisResult": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": ["accepted", "diagnostics", "summary"]
+    },
+    "OperationError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {}
+      },
+      "required": ["code", "message"]
+    },
+    "HttpSuccess": {
+      "type": "object",
+      "properties": {
+        "result": {}
+      },
+      "required": ["result"]
+    },
+    "HttpFailure": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/OperationError"
+        }
+      },
+      "required": ["error"]
+    },
+    "McpToolSuccess": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "text"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "text"]
+          }
+        },
+        "structuredContent": {},
+        "isError": {
+          "const": false
+        }
+      },
+      "required": ["content", "structuredContent", "isError"]
+    },
+    "McpToolFailure": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "text"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "text"]
+          }
+        },
+        "isError": {
+          "const": true
+        }
+      },
+      "required": ["content", "isError"]
+    }
+  }
+}

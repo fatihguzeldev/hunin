@@ -1,3 +1,4 @@
+import { runSource } from './run';
 import { operation, type Run, type Summary } from './api';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
@@ -65,7 +66,7 @@ export class Workspace {
       const data = await operation('runs.list', { limit: 100 });
       if (generation !== this.reloadEpoch) return;
       this.runs = data.runs;
-      this.nextCursor = data.next_cursor;
+      this.nextCursor = data.next_cursor ?? undefined;
       if (navigation !== this.epoch) { this.renderRail(); return; }
       if (select) { this.selected = select; this.tab = 'overview'; this.writeLocation(); }
       if (!this.selected && !['capabilities', 'scenarios'].includes(this.tab)) this.selected = this.runs[0]?.id ?? '';
@@ -98,7 +99,7 @@ export class Workspace {
           const unique = new Map(this.runs.map(run => [run.id, run]));
           for (const run of data.runs) if (!unique.has(run.id)) unique.set(run.id, run);
           this.runs = [...unique.values()];
-          this.nextCursor = data.next_cursor;
+          this.nextCursor = data.next_cursor ?? undefined;
           this.renderRail();
         }).catch(error => { if (generation === this.reloadEpoch) this.rail.append(errorView(error, () => { void this.reload(); })); }).finally(() => { older.disabled = false; });
       }, 'button subtle small');
@@ -201,6 +202,7 @@ export class Workspace {
   }
 
   private header(run: Run): HTMLElement {
+    const source = runSource(run);
     const actions = el('div', { class: 'toolbar' });
     if (run.status === 'running') actions.append(button('Stop recording', () => {
       void operation('runs.cancel', { run_id: run.id }).then(() => this.reload()).catch(error => {
@@ -233,8 +235,8 @@ export class Workspace {
       el('div', { class: 'run-heading' }, el('h1', {}, run.name), actions),
       el('div', { class: 'run-meta' }, badge(run.status, runTone(run)), el('span', {}, run.runtime),
         el('span', {}, date(new Date(run.started_at_us / 1_000).toISOString())),
-        el('code', {}, run.source.revision?.slice(0, 8) ?? run.source.fingerprint.slice(0, 12)),
-        run.source.dirty ? badge('modified source', 'warn') : null),
+        el('code', {}, source.revision?.slice(0, 8) ?? source.fingerprint.slice(0, 12)),
+        source.dirty ? badge('modified source', 'warn') : null),
       el('p', { class: 'source-label mono' }, run.command.join(' '))), tabs);
   }
 }

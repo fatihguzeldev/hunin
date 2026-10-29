@@ -1,3 +1,4 @@
+import { runSource } from '../run';
 import { operation, type Analysis, type AnalysisResult } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { date } from '../format';
@@ -6,6 +7,7 @@ import type { ViewContext } from '../workspace';
 import { pagedList } from '../paged-list';
 
 export async function analyses(context: ViewContext): Promise<HTMLElement> {
+  const source = runSource(context.run);
   const feedback = el('div', { role: 'status' });
   const packages = pagedList<Analysis>({
     label: 'analyzer packages', nextLabel: 'More analyzer packages',
@@ -61,7 +63,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
     const command = el('textarea', { class: 'mono', required: true, rows: 3 });
     command.value = '["python3", "analyze.py"]';
     const runtime = el('input', { value: context.run.runtime });
-    const fingerprint = el('input', { class: 'mono', value: context.run.source.fingerprint });
+    const fingerprint = el('input', { class: 'mono', value: source.fingerprint });
     const scope = el('select');
     scope.append(el('option', { value: 'source' }, 'This measured source build'), el('option', { value: 'generic' }, 'Source-independent analyzer'));
     scope.addEventListener('change', () => { fingerprint.disabled = scope.value === 'generic'; runtime.value = scope.value === 'generic' ? '*' : context.run.runtime; });
@@ -87,8 +89,8 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
         await operation('analyses.register', { name: name.value, version: version.value, cwd: cwd.value, command: args,
           requirements: { runtime: runtime.value || undefined, ...(scope.value === 'generic' ? { source_independent: true } : {
             source_fingerprint: fingerprint.value || undefined,
-            executable_sha256: context.run.source.executable_sha256 || undefined,
-            runtime_version: context.run.source.runtime_version || undefined,
+            executable_sha256: source.executable_sha256 || undefined,
+            runtime_version: source.runtime_version || undefined,
           }) }, dependencies: declared as Record<string, unknown> });
         dialog.close(); await packages.refresh(true);
       } catch (error) { message.textContent = error instanceof Error ? error.message : String(error); submit.disabled = false; }

@@ -1,5 +1,6 @@
 mod capabilities;
 mod comparison;
+mod contracts;
 
 use crate::{
     execution::{Engine, StartRequest},
@@ -25,8 +26,19 @@ pub struct Operations {
 pub fn catalog() -> &'static Vec<Value> {
     static CATALOG: OnceLock<Vec<Value>> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        serde_json::from_str(include_str!("../../protocol/operations.json"))
-            .expect("embedded operation catalog")
+        let mut operations: Vec<Value> =
+            serde_json::from_str(include_str!("../../protocol/operations.json"))
+                .expect("embedded operation catalog");
+        let responses: Value =
+            serde_json::from_str(include_str!("../../protocol/response.schema.json"))
+                .expect("embedded response definitions");
+        let definitions = responses["$defs"].as_object().expect("response definitions");
+        for operation in &mut operations {
+            if let Some(schema) = operation.get_mut("outputSchema") {
+                *schema = contracts::bundle(schema, definitions).expect("embedded output schema");
+            }
+        }
+        operations
     })
 }
 

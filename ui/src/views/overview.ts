@@ -1,10 +1,11 @@
+import { runCorrectness, runStatusTone } from '../run';
 import { operation, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
 import { duration, numeric } from '../format';
 import { hasInspectableSource } from '../source-path';
 
 export function runTone(run: Run): string {
-  return { completed: 'good', failed: 'bad', canceled: 'warn', running: 'warn' }[run.status];
+  return runStatusTone(run.status);
 }
 
 export function weight(value: number, unit: string): string {
@@ -17,6 +18,7 @@ function stat(label: string, value: string, note: string): HTMLElement {
 }
 
 export async function overview(run: Run, summary: Summary, source: (file: string, line?: number, codeId?: string) => void): Promise<HTMLElement> {
+  const correctness = runCorrectness(run);
   const data = await operation('profiles.hotspots', { run_id: run.id, limit: 25 });
   const body = el('div', { class: 'stack' });
   const elapsed = run.finished_at_us ? duration((run.finished_at_us - run.started_at_us) * 1_000) : 'Recording';
@@ -25,11 +27,11 @@ export async function overview(run: Run, summary: Summary, source: (file: string
     stat('Sampled profile', weight(data.total_weight, data.weight_unit), `${numeric(summary.sample_count)} stack samples`),
     stat('Recorded spans', numeric(summary.span_count), 'inspect each interval’s basis'),
     stat('Relationships', numeric(summary.relation_count), 'recorded evidence')));
-  if (run.correctness?.passed === false) body.append(el('p', { class: 'notice' }, run.correctness.actual_exit_code == null
-    ? `Workload check incomplete: no exit result is available for this ${run.status} recording. ${run.correctness.reason ?? ''}`
-    : `Workload correctness check failed. ${run.correctness.reason ?? ''}`));
-  if (run.correctness) body.append(el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, run.correctness.passed == null ? 'Correctness · unknown' : run.correctness.validation === 'exit_code_and_stdout' ? 'Correctness · exit code and stdout checks' : 'Correctness · exit code check only'),
-    run.correctness.passed == null ? el('p', { class: 'panel-body metric-note' }, 'This recording has no verified correctness result.') : run.correctness.validation !== 'exit_code_and_stdout' ? el('p', { class: 'panel-body metric-note' }, 'The exit result does not validate the program’s output.') : null,
+  if (correctness.passed === false) body.append(el('p', { class: 'notice' }, correctness.actual_exit_code == null
+    ? `Workload check incomplete: no exit result is available for this ${run.status} recording. ${correctness.reason ?? ''}`
+    : `Workload correctness check failed. ${correctness.reason ?? ''}`));
+  if (run.correctness) body.append(el('details', { class: 'panel' }, el('summary', { class: 'panel-body' }, correctness.passed == null ? 'Correctness · unknown' : correctness.validation === 'exit_code_and_stdout' ? 'Correctness · exit code and stdout checks' : 'Correctness · exit code check only'),
+    correctness.passed == null ? el('p', { class: 'panel-body metric-note' }, 'This recording has no verified correctness result.') : correctness.validation !== 'exit_code_and_stdout' ? el('p', { class: 'panel-body metric-note' }, 'The exit result does not validate the program’s output.') : null,
     el('pre', { class: 'panel-body' }, JSON.stringify(run.correctness, null, 2))));
   const rows = el('tbody');
   for (const item of data.hotspots) {

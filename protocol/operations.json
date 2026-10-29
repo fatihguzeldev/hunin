@@ -27,6 +27,9 @@
       },
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunPage"
     }
   },
   {
@@ -44,6 +47,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunDetails"
     }
   },
   {
@@ -114,6 +120,9 @@
           "expected_stdout_sha256"
         ]
       }
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
     }
   },
   {
@@ -131,6 +140,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
     }
   },
   {
@@ -148,6 +160,17 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "const": true
+        }
+      },
+      "required": [
+        "removed"
+      ]
     }
   },
   {
@@ -554,6 +577,9 @@
         "format"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ImportResult"
     }
   },
   {
@@ -815,6 +841,9 @@
         "scenario_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/RunResult"
     }
   },
   {
@@ -854,6 +883,9 @@
         "artifact_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ReanalysisResult"
     }
   }
 ]

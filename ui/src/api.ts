@@ -1,14 +1,8 @@
 import type { Observation } from './record.generated';
-import { validateOperationOutput, type OperationInputs, type OperationOutputs } from './operations.generated.js';
+import { isHttpFailure, isHttpSuccess, validateOperationOutput, type OperationInputs, type OperationOutputs, type Run as RunWire, type Summary as SummaryWire } from './operations.generated.js';
 
-export type Run = {
-  id: string; name: string; status: 'running' | 'completed' | 'failed' | 'canceled';
-  command: string[]; cwd: string; runtime: string; started_at_us: number;
-  finished_at_us?: number; exit_code?: number; diagnostics: string[];
-  source: { revision?: string; dirty?: boolean; fingerprint: string; executable_sha256?: string | null; runtime_version?: string | null; build_source_verified?: boolean };
-  correctness: { passed: boolean | null; expected_exit_code?: number; actual_exit_code?: number | null; reason?: string; validation?: 'exit_code_only' | 'exit_code_and_stdout'; checks?: unknown[]; stdout_sha256?: string; stdout_bytes?: number; canceled?: boolean; timed_out?: boolean };
-};
-export type Summary = { sample_count: number; total_weight: number; weight_unit: string; span_count: number; metric_count: number; relation_count: number; diagnostics: string[] };
+export type Run = RunWire;
+export type Summary = SummaryWire;
 export type Capability = { runtime: string; available: boolean; version?: string | null; executable?: string | null; probe_status?: string; verification?: string; modes?: { mode: string; mechanism: string; availability: string; basis: string; recording_verified: boolean }[]; capabilities: string[]; diagnostics: string[] };
 export type Hotspot = { function: string; file?: string; line?: number; code_id?: string | null; self_weight: number; inclusive_weight: number; weight_unit: string };
 export type TreeNode = { id: string; name: string; file?: string; line?: number; code_id?: string | null; self_weight: number; total_weight: number; child_count?: number; children_truncated?: boolean; depth_truncated?: boolean; children: TreeNode[] };
@@ -21,10 +15,6 @@ export type Scenario = { id: string; name: string; command: string[]; cwd: strin
 
 type Responses = {
   capabilities: { host: { os: string; arch: string }; runtimes: Capability[]; schema_version: number; native_sampling_permission?: { state: string; probe: string }; probe_limits?: { output_bytes_per_stream: number; timeout_seconds_per_command: number } };
-  'runs.list': { runs: Run[]; next_cursor?: string };
-  'runs.get': { run: Run; summary: Summary };
-  'runs.start': { run: Run };
-  'runs.cancel': { run: Run };
   'profiles.hotspots': { hotspots: Hotspot[]; total_weight: number; weight_unit: string };
   'profiles.tree': { roots: TreeNode[]; weight_unit: string; next_cursor?: string | null; returned_nodes?: number; node_limit?: number; depth_limit?: number; diagnostics?: string[] };
   'timeline.query': { records: Observation[]; unaligned_records?: Observation[]; next_cursor?: string; unaligned_count?: number; bounds: { start_us: number; end_us: number } | null };
@@ -32,7 +22,6 @@ type Responses = {
   'contexts.query': { contexts: Observation[]; relations: Observation[]; next_cursor?: string };
   'evidence.get': { records: Observation[] };
   'source.read': { path: string; content: string; start_line: number; identity_verified: boolean; source_kind?: 'recorded_snapshot' | 'current_file' | 'recorded_source_map'; build_mapping_verified?: boolean; diagnostic?: string; provenance?: unknown };
-  'recordings.reanalyze': { accepted: boolean; diagnostics: string[]; summary: Summary };
   'analyses.list': { analyses: Analysis[]; next_cursor?: string | null };
   'analyses.register': { analysis: Analysis };
   'analyses.results': { results: AnalysisResult[]; next_cursor?: string | null };
@@ -41,7 +30,6 @@ type Responses = {
   'comparisons.create': Comparison;
   'scenarios.list': { scenarios: Scenario[]; next_cursor?: string | null };
   'scenarios.save': { scenario: Scenario };
-  'scenarios.run': { run: Run };
 } & OperationOutputs;
 
 export type Operations = { [K in keyof Responses]: { input: OperationInputs[K]; output: Responses[K] } };
@@ -65,11 +53,10 @@ export async function operation<K extends keyof Operations>(
   const envelope: unknown = await response.json().catch(() => { throw new Error('Hunin returned an invalid response. Check that the local service is running.'); });
   if (!envelope || typeof envelope !== 'object') throw new Error('Hunin returned an invalid response envelope.');
   if ('error' in envelope) {
-    if (!envelope.error || typeof envelope.error !== 'object') throw new Error('Hunin returned an invalid error envelope.');
-    const error = envelope.error as { code?: string; message?: string; details?: unknown };
-    throw new ApiError(error.code ?? 'request_failed', error.message ?? 'The operation failed.', error.details);
+    if (!isHttpFailure(envelope)) throw new Error('Hunin returned an invalid error envelope.');
+    throw new ApiError(envelope.error.code, envelope.error.message, envelope.error.details);
   }
-  if (!response.ok || !('result' in envelope)) throw new Error(`The local service returned HTTP ${response.status}.`);
+  if (!response.ok || !isHttpSuccess(envelope)) throw new Error(`The local service returned HTTP ${response.status}.`);
   validateOperationOutput(name, envelope.result);
   return envelope.result as Operations[K]['output'];
 }
