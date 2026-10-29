@@ -249,7 +249,9 @@ async fn output_budget_rejects_overflow_and_preserves_bounded_raw_evidence() {
         &format!("{RELATION}\nsys.stderr.write('x'*(20*1024*1024))\nsys.stderr.flush()\n"),
         json!({}),
     );
-    let started = fixture.start(&analysis, 5.0).await;
+    // Isolate the byte-cap rejection while allowing bounded raw retention to
+    // finish inside the whole-attempt deadline. Separate controls test timeout.
+    let started = fixture.start(&analysis, 10.0).await;
     let failed = fixture.wait(&started).await;
     assert_eq!(failed["status"], "failed", "{failed}");
     assert!(failed["diagnostics"].to_string().contains("16 MiB"));
