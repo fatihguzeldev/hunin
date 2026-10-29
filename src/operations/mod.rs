@@ -4,6 +4,7 @@ mod contracts;
 mod errors;
 mod inputs;
 mod inspection;
+mod reads;
 mod responses;
 mod workers;
 pub(crate) use errors::operation_failure;
@@ -16,12 +17,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    io::{Read, Seek, SeekFrom},
-    path::PathBuf,
-    sync::OnceLock,
-};
+use std::{path::PathBuf, sync::OnceLock};
 
 #[derive(Clone)]
 pub struct Operations {
@@ -105,11 +101,16 @@ impl Operations {
                     .read(|_| Ok(capabilities::discover()))
                     .await
             }
-            "runs.list" => {
-                let mut runs = store.runs(limit + 1, cursor)?;
-                let more = runs.len() > limit;
-                runs.truncate(limit);
-                Ok(json!({"runs":runs,"next_cursor":more.then(||(cursor+limit).to_string())}))
+            "runs.list" | "runs.metadata" | "contexts.query" | "evidence.get"
+            | "artifacts.list" | "artifacts.read" | "source.read" | "scenarios.list"
+            | "analyses.list" => {
+                let store = store.clone();
+                let name = name.to_owned();
+                self.metadata_work
+                    .read(move |interest| {
+                        reads::query(&store, &name, &params, limit, cursor, &interest)
+                    })
+                    .await
             }
             "runs.get" => {
                 let store = store.clone();
@@ -118,19 +119,6 @@ impl Operations {
                     let run = store.run(&run_id)?;
                     let snapshot = query::read_recording(&store, &run_id, query::RecordingQuery::Summary, Default::default(), move || interest.check())?;
                     Ok(json!({"run":run,"summary":snapshot.value,"result_identity":snapshot.result_identity}))
-                }).await
-            }
-            "runs.metadata" => {
-                let store = store.clone();
-                let run_id = id()?.to_owned();
-                self.metadata_work.read(move |interest| {
-                    let run = store.run(&run_id)?;
-                    let identity = store.with_query_snapshot(&run_id, Default::default(), move || interest.check(), |_| Ok(()));
-                    match identity {
-                        Ok(snapshot) => Ok(json!({"run":run,"result_identity":snapshot.result_identity})),
-                        Err(error) if error.is::<crate::storage::ReadBudgetExceeded>() => Ok(json!({"run":run,"result_identity_diagnostic":format!("Selection identity unavailable within the metadata read budget: {error:#}")})),
-                        Err(error) => Err(error),
-                    }
                 }).await
             }
             "runs.start" => Ok(
@@ -178,41 +166,6 @@ impl Operations {
                     })
                     .await
             }
-            "contexts.query" => {
-                let mut selected = store.context_records_page(id()?, limit + 1, cursor)?;
-                let more = selected.len() > limit;
-                selected.truncate(limit);
-                Ok(
-                    json!({"contexts":selected.iter().filter(|r|r["kind"]=="context").collect::<Vec<_>>(),"relations":selected.iter().filter(|r|r["kind"]=="relation").collect::<Vec<_>>(),"next_cursor":more.then(||(cursor+limit).to_string())}),
-                )
-            }
-            "evidence.get" => {
-                let wanted = serde_json::from_value::<Vec<String>>(params["ids"].clone())?;
-                Ok(json!({"records":store.evidence_records(id()?, &wanted)?}))
-            }
-            "artifacts.list" => Ok(metadata_page(
-                "artifacts",
-                store.artifacts_page(id()?, limit + 1, cursor)?,
-                limit,
-                cursor,
-            )),
-            "artifacts.read" => {
-                let path = store.artifact_path(id()?, params["artifact_id"].as_str().unwrap())?;
-                let mut file = fs::File::open(path)?;
-                let size = file.metadata()?.len();
-                let start = params["offset"].as_u64().unwrap_or(0);
-                if start > size {
-                    bail!("artifact offset outside content");
-                }
-                file.seek(SeekFrom::Start(start))?;
-                let mut bytes = Vec::new();
-                file.take(limit.min(5000) as u64).read_to_end(&mut bytes)?;
-                let end = start + bytes.len() as u64;
-                Ok(
-                    json!({"content":String::from_utf8_lossy(&bytes),"encoding":"utf8_lossy","next_offset":(end<size).then_some(end),"size":size}),
-                )
-            }
-            "source.read" => crate::source::read(store, &params),
             "recordings.import" => {
                 let operations = self.clone();
                 self.aggregate_work
@@ -242,12 +195,6 @@ impl Operations {
                     })
                     .await
             }
-            "scenarios.list" => Ok(metadata_page(
-                "scenarios",
-                store.documents_page("scenarios", None, limit + 1, cursor)?,
-                limit,
-                cursor,
-            )),
             "scenarios.save" => {
                 let mut scenario = params;
                 let id = scenario["id"]
@@ -268,12 +215,6 @@ impl Operations {
                 let request = serde_json::from_value(scenario)?;
                 Ok(json!({"run":self.engine.start(request).await?}))
             }
-            "analyses.list" => Ok(metadata_page(
-                "analyses",
-                store.documents_page("analyses", None, limit + 1, cursor)?,
-                limit,
-                cursor,
-            )),
             "analyses.results" => {
                 let operations = self.clone();
                 self.metadata_work

@@ -144,7 +144,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -154,6 +160,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -206,7 +221,8 @@
         "pool": "metadata",
         "maximum_in_flight": 8,
         "queue": "fail_fast",
-        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -824,7 +840,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -834,6 +856,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -869,7 +900,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -879,6 +916,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -946,7 +992,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -956,6 +1008,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -1013,7 +1074,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -1023,6 +1090,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -1068,7 +1144,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -1078,6 +1160,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -1244,7 +1335,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -1254,6 +1351,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
@@ -1487,7 +1593,13 @@
         "version": 1
       },
       "hunin/operation-errors": {
-        "typed_origin_codes": ["invalid_parameters", "work_budget_exceeded"],
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",
         "http_machine_field": "error.details.operation_error",
@@ -1497,6 +1609,15 @@
         "maximum_bytes": 16777216,
         "scope": "operation result before transport envelopes",
         "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "metadata",
+        "maximum_in_flight": 8,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate.",
+        "checkpoints": "Before and after synchronous read units; not preemption of one SQLite, filesystem or JSON decode operation."
       }
     }
   },
