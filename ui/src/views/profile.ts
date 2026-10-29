@@ -2,7 +2,7 @@ import { operation, type TreeNode } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
 import { numeric } from '../format';
 import type { ViewContext } from '../workspace';
-import { weight } from './overview';
+import { weight, weightShare, totalWeight } from '../profile-weight';
 import { hasInspectableSource } from '../source-path';
 
 export async function profile(context: ViewContext, unit = '', path: string[] = [], cursor?: string, breadcrumbs: string[] = [], initialMode: 'tree' | 'flame' = 'tree'): Promise<HTMLElement> {
@@ -84,9 +84,9 @@ export async function profile(context: ViewContext, unit = '', path: string[] = 
   }
   function flamegraph(): HTMLElement {
     let count = 0;
-    function branch(node: TreeNode, parentWeight: number, ancestors: string[], names: string[]): HTMLElement {
+    function branch(node: TreeNode, parentWeight: number | null, ancestors: string[], names: string[]): HTMLElement {
       const group = el('div');
-      group.style.width = `${parentWeight > 0 ? Math.min(100, node.total_weight / parentWeight * 100) : 0}%`;
+      group.style.width = `${weightShare(node.total_weight, parentWeight) ?? 0}%`;
       group.style.minWidth = '1px';
       if (count++ >= 2_000) return group;
       const frame = button(node.name, () => { focused = node; focusedPath = [...ancestors, node.id]; focusedNames = [...names, node.name]; render(); }, 'flame-frame');
@@ -103,7 +103,7 @@ export async function profile(context: ViewContext, unit = '', path: string[] = 
       return group;
     }
     const shown = focused ? [focused] : roots;
-    const total = shown.reduce((value, root) => value + root.total_weight, 0);
+    const total = totalWeight(shown.map(root => root.total_weight));
     const graph = el('div', { class: 'flamegraph' }, el('div', { class: 'flame-children' }, ...shown.map(root => branch(root, total, focused ? focusedPath.slice(0, -1) : path, focused ? focusedNames.slice(0, -1) : breadcrumbs))));
     return el('section', { class: 'panel' }, el('div', { class: 'panel-head' }, el('h2', {}, 'Sampled stacks'), el('small', {}, 'Click to focus · hover for weight')),
       el('div', { class: 'table-scroll' }, graph), count >= 2_000 ? el('p', { class: 'table-foot' }, 'First 2,000 frames shown. Use the call tree to inspect specific paths.') : null);

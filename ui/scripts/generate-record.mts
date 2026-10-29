@@ -2,6 +2,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 export type Schema = {
+  $id?: string;
+  $schema?: string;
+  title?: string;
   $ref?: string;
   type?: string | string[];
   const?: string | number | boolean | null;
@@ -14,9 +17,18 @@ export type Schema = {
   maximum?: number;
   description?: string;
   pattern?: string;
+  minLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  uniqueItems?: boolean;
+  exclusiveMinimum?: number;
+  allOf?: Schema[];
+  if?: Schema;
+  then?: Schema;
+  else?: Schema;
 };
 
-export type ObservationSchema = Schema & {
+export type ObservationSchema = Omit<Schema, 'allOf' | 'properties'> & {
   properties: Record<string, Schema> & { kind: Schema & { enum: string[] } };
   allOf: {
     if: { properties: { kind: { const: string } } };
@@ -31,6 +43,20 @@ export type OperationDefinition = {
 };
 
 export type ResponseSchema = { $defs: Record<string, Schema> };
+
+const recordSchemaId = 'https://hunin.dev/protocol/record-v1.schema.json';
+
+export function responseDefinitions(
+  responses: ResponseSchema,
+  record: ObservationSchema,
+): Record<string, Schema> {
+  return Object.fromEntries(
+    Object.entries(responses.$defs).map(([name, schema]) => [
+      name,
+      schema.$ref === recordSchemaId ? record : schema,
+    ]),
+  );
+}
 
 function referenceName(
   reference: string,
@@ -54,6 +80,10 @@ export function typeOf(
   definitions: Record<string, Schema> = {},
 ): string {
   if (schema.$ref) return referenceName(schema.$ref, definitions);
+  if (schema.allOf?.every((branch) => !branch.if)) {
+    const { allOf, ...base } = schema;
+    return `(${[typeOf(base, definitions), ...allOf.map((branch) => typeOf(branch, definitions))].join(' & ')})`;
+  }
   if ('const' in schema) return JSON.stringify(schema.const);
   if (schema.enum)
     return schema.enum.map((value) => JSON.stringify(value)).join(' | ');
@@ -103,13 +133,21 @@ export function generateOperations(
   operations: OperationDefinition[],
   definitions: Record<string, Schema> = {},
 ): string {
+  for (const operation of operations) {
+    if (!operation.outputSchema)
+      throw new Error(`Missing operation output schema: ${operation.name}`);
+  }
   const outputs = operations.filter(
     (operation): operation is OperationDefinition & { outputSchema: Schema } =>
       operation.outputSchema !== undefined,
   );
   return (
     '// Generated from protocol/operations.json and response.schema.json. Run npm run generate; do not edit.\n' +
+    (definitions.Observation
+      ? 'import type { Observation } from "./record.generated.js";\nexport type { Observation } from "./record.generated.js";\n\n'
+      : '') +
     Object.entries(definitions)
+      .filter(([name]) => name !== 'Observation')
       .map(
         ([name, schema]) =>
           `export type ${name} = ${typeOf(schema, definitions)};\n`,
@@ -139,7 +177,7 @@ export function generateOperations(
           `\nexport function is${name}(value: unknown): value is ${name} {\n  return ${outputCondition(schema, 'value', definitions)};\n}\n`,
       )
       .join('') +
-    '\n// Only declared output schemas are checked while the catalog is migrated.\n' +
+    '\n// Every operation result is checked against its declared wire contract.\n' +
     'export function validateOperationOutput(name: string, value: unknown): void {\n  switch (name) {\n' +
     outputs
       .map(
@@ -147,7 +185,7 @@ export function generateOperations(
           `    case ${JSON.stringify(operation.name)}:\n      if (!${outputCondition(operation.outputSchema, 'value', definitions)}) throw new Error(${JSON.stringify(`Hunin returned an invalid ${operation.name} result.`)});\n      break;`,
       )
       .join('\n') +
-    '\n  }\n}\n'
+    '\n    default: throw new Error(`No output contract for operation: ${name}`);\n  }\n}\n'
   );
 }
 
@@ -159,6 +197,9 @@ function outputCondition(
   definitions: Record<string, Schema>,
 ): string {
   const supported = new Set([
+    '$id',
+    '$schema',
+    'title',
     '$ref',
     'type',
     'const',
@@ -170,16 +211,54 @@ function outputCondition(
     'minimum',
     'maximum',
     'description',
+    'minLength',
+    'minItems',
+    'maxItems',
+    'uniqueItems',
+    'exclusiveMinimum',
+    'allOf',
+    'if',
+    'then',
+    'else',
   ]);
   for (const key of Object.keys(schema)) {
     if (!supported.has(key))
       throw new Error(`Unsupported operation output schema keyword: ${key}`);
   }
-  if (schema.$ref)
+  if (schema.$ref) {
+    const annotations = new Set([
+      '$ref',
+      '$id',
+      '$schema',
+      'title',
+      'description',
+    ]);
+    if (Object.keys(schema).some((key) => !annotations.has(key))) {
+      throw new Error(
+        'Unsupported response reference siblings; express combined constraints with allOf',
+      );
+    }
     return `is${referenceName(schema.$ref, definitions)}(${value})`;
+  }
   if (Array.isArray(schema.type))
     return `(${schema.type.map((type) => outputCondition({ ...schema, type }, value, definitions)).join(' || ')})`;
   const checks: string[] = [];
+  if (
+    schema.type === undefined &&
+    (schema.properties ||
+      schema.required ||
+      schema.additionalProperties !== undefined)
+  ) {
+    checks.push(
+      `(!isOutputObject(${value}) || ${outputCondition({ ...schema, type: 'object' }, value, definitions)})`,
+    );
+  }
+  for (const branch of schema.allOf ?? [])
+    checks.push(outputCondition(branch, value, definitions));
+  if (schema.if)
+    checks.push(
+      `(${outputCondition(schema.if, value, definitions)} ? ${schema.then ? outputCondition(schema.then, value, definitions) : 'true'} : ${schema.else ? outputCondition(schema.else, value, definitions) : 'true'})`,
+    );
   if ('const' in schema)
     checks.push(`${value} === ${JSON.stringify(schema.const)}`);
   if (schema.enum)
@@ -193,6 +272,10 @@ function outputCondition(
       checks.push(`${value} === null`);
       break;
     case 'string':
+      checks.push(`typeof ${value} === "string"`);
+      if (schema.minLength !== undefined)
+        checks.push(`[...${value}].length >= ${schema.minLength}`);
+      break;
     case 'boolean':
       checks.push(`typeof ${value} === ${JSON.stringify(schema.type)}`);
       break;
@@ -206,9 +289,20 @@ function outputCondition(
         checks.push(`${value} >= ${schema.minimum}`);
       if (schema.maximum !== undefined)
         checks.push(`${value} <= ${schema.maximum}`);
+      if (schema.exclusiveMinimum !== undefined)
+        checks.push(`${value} > ${schema.exclusiveMinimum}`);
       break;
     case 'array':
       checks.push(`Array.isArray(${value})`);
+      if (schema.minItems !== undefined)
+        checks.push(`${value}.length >= ${schema.minItems}`);
+      if (schema.maxItems !== undefined)
+        checks.push(`${value}.length <= ${schema.maxItems}`);
+      if (schema.uniqueItems) {
+        if (schema.items?.type !== 'string')
+          throw new Error('Output uniqueItems currently requires string items');
+        checks.push(`new Set(${value}).size === ${value}.length`);
+      }
       if (schema.items) {
         const item = outputCondition(schema.items, 'item', definitions);
         if (item !== 'true') checks.push(`${value}.every(item => ${item})`);
@@ -280,7 +374,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   );
   for (const [name, generated] of [
     ['record', generate(schema)],
-    ['operations', generateOperations(operations, responses.$defs)],
+    [
+      'operations',
+      generateOperations(operations, responseDefinitions(responses, schema)),
+    ],
   ]) {
     const target = new URL(`ui/src/${name}.generated.ts`, root);
     if (process.argv.includes('--check')) {

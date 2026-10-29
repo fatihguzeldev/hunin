@@ -1,0 +1,241 @@
+{
+  "description": "Schema-only controls shared by Rust and generated TypeScript; passing them does not establish reference validity or semantic correctness.",
+  "cases": [
+    {
+      "name": "event at the exact timestamp ceiling",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "event",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 9007199254740991,
+        "basis": "observed",
+        "name": "event"
+      }
+    },
+    {
+      "name": "span with an explicit zero duration",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "span",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "observed",
+        "name": "span",
+        "duration_us": 0
+      }
+    },
+    {
+      "name": "sample with a source-unavailable frame",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "sample",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "sampled",
+        "stack": [
+          {
+            "function": "hotspot"
+          }
+        ],
+        "weight": 1,
+        "weight_unit": "samples"
+      }
+    },
+    {
+      "name": "metric with opaque extension attributes",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "metric",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "observed",
+        "name": "cpu",
+        "value": 1,
+        "unit": "milliseconds",
+        "scope": "process",
+        "attributes": {
+          "clock": null,
+          "extension": {
+            "values": [
+              1,
+              null
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "explicit context",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "context",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "explicit",
+        "name": "context"
+      }
+    },
+    {
+      "name": "relation schema shape does not prove its references",
+      "valid": true,
+      "record": {
+        "schema_version": 1,
+        "kind": "relation",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "derived",
+        "from": "one",
+        "to": "two",
+        "relation": "dispatches",
+        "evidence": [
+          "one",
+          "two"
+        ]
+      }
+    },
+    {
+      "name": "event requires its name",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "event",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "observed"
+      }
+    },
+    {
+      "name": "timestamp above the exact integer ceiling",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "event",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 9007199254740992,
+        "basis": "observed",
+        "name": "event"
+      }
+    },
+    {
+      "name": "optional frame file cannot be null when present",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "sample",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "sampled",
+        "stack": [
+          {
+            "function": "hotspot",
+            "file": null
+          }
+        ],
+        "weight": 1,
+        "weight_unit": "samples"
+      }
+    },
+    {
+      "name": "sample weight must be positive",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "sample",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "sampled",
+        "stack": [
+          {
+            "function": "hotspot"
+          }
+        ],
+        "weight": 0,
+        "weight_unit": "samples"
+      }
+    },
+    {
+      "name": "evidence identities must not repeat",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "relation",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "derived",
+        "from": "one",
+        "to": "two",
+        "relation": "dispatches",
+        "evidence": [
+          "one",
+          "one"
+        ]
+      }
+    },
+    {
+      "name": "unexpected observation fields stay invalid",
+      "valid": false,
+      "record": {
+        "schema_version": 1,
+        "kind": "event",
+        "id": "event",
+        "run_id": "recording",
+        "producer_id": "control",
+        "pid": 1,
+        "tid": "thread",
+        "timestamp_us": 1,
+        "basis": "observed",
+        "name": "event",
+        "unexpected": true
+      }
+    }
+  ]
+}

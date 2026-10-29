@@ -108,7 +108,7 @@ export async function evidence(context: ViewContext, cursor?: string): Promise<H
     try { body.replaceWith(await evidence(context, page)); }
     catch (error) { inspector.replaceChildren(errorView(error, () => { void showPage(page); })); }
   }
-  if (relationships.next_cursor) body.append(button('Next context / relationship page', () => { void showPage(relationships.next_cursor); }));
+  if (relationships.next_cursor) body.append(button('Next context / relationship page', () => { void showPage(relationships.next_cursor ?? undefined); }));
   if (cursor) body.append(button('First evidence page', () => { void showPage(); }, 'button subtle'));
   await artifacts.refresh();
   return body;

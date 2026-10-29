@@ -671,6 +671,693 @@
         }
       },
       "required": ["scenario"]
+    },
+    "Observation": {
+      "$ref": "https://hunin.dev/protocol/record-v1.schema.json"
+    },
+    "ContextObservation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Observation"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "context"
+            }
+          },
+          "required": ["kind"]
+        }
+      ]
+    },
+    "RelationObservation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Observation"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "relation"
+            }
+          },
+          "required": ["kind"]
+        }
+      ]
+    },
+    "Hotspot": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "source_position_basis": {
+          "type": "string"
+        },
+        "self_weight": {
+          "type": ["number", "null"]
+        },
+        "inclusive_weight": {
+          "type": ["number", "null"]
+        },
+        "weight_unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "function",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "source_position_basis",
+        "self_weight",
+        "inclusive_weight",
+        "weight_unit"
+      ]
+    },
+    "ProfileHotspots": {
+      "type": "object",
+      "properties": {
+        "hotspots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hotspot"
+          }
+        },
+        "total_weight": {
+          "type": ["number", "null"]
+        },
+        "weight_unit": {
+          "type": "string"
+        }
+      },
+      "required": ["hotspots", "total_weight", "weight_unit"]
+    },
+    "TreeNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "source_position_basis": {
+          "type": "string"
+        },
+        "self_weight": {
+          "type": ["number", "null"]
+        },
+        "total_weight": {
+          "type": ["number", "null"]
+        },
+        "child_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "children_truncated": {
+          "type": "boolean"
+        },
+        "depth_truncated": {
+          "type": "boolean"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeNode"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "source_position_basis",
+        "self_weight",
+        "total_weight",
+        "child_count",
+        "children_truncated",
+        "depth_truncated",
+        "children"
+      ]
+    },
+    "ProfileTree": {
+      "type": "object",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeNode"
+          }
+        },
+        "weight_unit": {
+          "type": "string"
+        },
+        "total_weight": {
+          "type": ["number", "null"]
+        },
+        "scope_self_weight": {
+          "type": ["number", "null"]
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "returned_nodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "root_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        },
+        "node_limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "depth_limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "roots",
+        "weight_unit",
+        "total_weight",
+        "scope_self_weight",
+        "path",
+        "returned_nodes",
+        "root_count",
+        "next_cursor",
+        "node_limit",
+        "depth_limit",
+        "diagnostics"
+      ]
+    },
+    "Timeline": {
+      "type": "object",
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Observation"
+          }
+        },
+        "unaligned_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Observation"
+          }
+        },
+        "alignment": {
+          "type": "string"
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        },
+        "bounds": {
+          "type": ["object", "null"],
+          "properties": {
+            "start_us": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end_us": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": ["start_us", "end_us"]
+        },
+        "unaligned_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unaligned_clock_domains": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "producer_id": {
+                "type": "string"
+              },
+              "clock": {}
+            },
+            "required": ["producer_id", "clock"]
+          }
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "records",
+        "unaligned_records",
+        "alignment",
+        "next_cursor",
+        "bounds",
+        "unaligned_count",
+        "unaligned_clock_domains",
+        "total_count",
+        "returned_count"
+      ]
+    },
+    "ResourcePoint": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "timestamp_us": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value": {
+          "type": "number"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tid": {
+          "type": "string"
+        },
+        "context_id": {
+          "type": ["string", "null"]
+        },
+        "producer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "timestamp_us",
+        "value",
+        "pid",
+        "tid",
+        "context_id",
+        "producer_id"
+      ]
+    },
+    "ResourceSeries": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tid": {
+          "type": "string"
+        },
+        "producer_id": {
+          "type": "string"
+        },
+        "context_id": {
+          "type": ["string", "null"]
+        },
+        "thread_id_source": {
+          "type": "string"
+        },
+        "clock": {
+          "type": "string"
+        },
+        "clock_alignment": {
+          "type": "string"
+        },
+        "time_mapping": {
+          "type": "string"
+        },
+        "process_started_at_seconds": {},
+        "process_lifetime_id": {},
+        "process_role": {},
+        "temporality": {},
+        "point_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "point_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned_points": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourcePoint"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "unit",
+        "scope",
+        "pid",
+        "tid",
+        "producer_id",
+        "context_id",
+        "thread_id_source",
+        "clock",
+        "clock_alignment",
+        "time_mapping",
+        "process_started_at_seconds",
+        "process_lifetime_id",
+        "process_role",
+        "temporality",
+        "point_count",
+        "point_start",
+        "returned_points",
+        "truncated",
+        "points"
+      ]
+    },
+    "Resources": {
+      "type": "object",
+      "properties": {
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceSeries"
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        },
+        "returned_points": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_points": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "point_limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unaligned_point_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "series",
+        "next_cursor",
+        "returned_points",
+        "total_points",
+        "point_limit",
+        "unaligned_point_count",
+        "diagnostics"
+      ]
+    },
+    "Contexts": {
+      "type": "object",
+      "properties": {
+        "contexts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextObservation"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RelationObservation"
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["contexts", "relations", "next_cursor"]
+    },
+    "Evidence": {
+      "type": "object",
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Observation"
+          }
+        }
+      },
+      "required": ["records"]
+    },
+    "ComparisonMetric": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string"
+        },
+        "before": {
+          "type": ["number", "null"]
+        },
+        "after": {
+          "type": ["number", "null"]
+        },
+        "delta": {
+          "type": ["number", "null"]
+        },
+        "percent_change": {
+          "type": ["number", "null"]
+        },
+        "measurement_quality": {
+          "type": "string"
+        },
+        "comparable": {
+          "type": "boolean"
+        },
+        "before_observations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_observations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "before_process_lifetimes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_process_lifetimes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "scope",
+        "basis",
+        "before",
+        "after",
+        "delta",
+        "percent_change"
+      ]
+    },
+    "ComparisonHotspot": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "before": {
+          "type": ["number", "null"]
+        },
+        "after": {
+          "type": ["number", "null"]
+        },
+        "delta": {
+          "type": ["number", "null"]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string"
+        },
+        "before_available": {
+          "type": "boolean"
+        },
+        "after_available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "function",
+        "file",
+        "module",
+        "before",
+        "after",
+        "delta",
+        "unit",
+        "basis",
+        "before_available",
+        "after_available"
+      ]
+    },
+    "Comparison": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "$ref": "#/$defs/Run"
+        },
+        "after": {
+          "$ref": "#/$defs/Run"
+        },
+        "comparable": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComparisonMetric"
+          }
+        },
+        "correctness": {
+          "type": "object",
+          "properties": {
+            "before": {},
+            "after": {}
+          },
+          "required": ["before", "after"]
+        },
+        "hotspots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComparisonHotspot"
+          }
+        },
+        "sample_weight_units": {
+          "type": "object",
+          "properties": {
+            "before": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "after": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["before", "after"]
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "comparable",
+        "reasons",
+        "metrics",
+        "correctness",
+        "hotspots",
+        "sample_weight_units",
+        "limitations"
+      ]
     }
   }
 }

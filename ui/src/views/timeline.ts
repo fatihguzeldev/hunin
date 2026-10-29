@@ -111,7 +111,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
         el('td', {}, badge(record.kind)), el('td', {}, badge(record.basis)),
         el('td', { class: 'numeric' }, unmappedView || record.attributes?.clock_alignment === 'unmapped' ? 'Unmapped clock' : duration((record.timestamp_us - origin) * 1_000)),
         el('td', { class: 'numeric' }, record.duration_us === undefined ? '—' : duration(record.duration_us * 1_000)))));
-      const next = data.next_cursor ? button('Next page', () => { cursor = data.next_cursor; void load(); }, 'button small') : null;
+      const next = data.next_cursor ? button('Next page', () => { cursor = data.next_cursor ?? undefined; void load(); }, 'button small') : null;
       canvas.replaceChildren(el('div', { class: 'stack' }, unmapped ? el('p', { class: 'notice' }, `${unmapped} observations have unmapped clocks and are omitted from the aligned plot. Select unmapped clock evidence to inspect those records.`) : null, !unmappedView ? graph : null, el('section', { class: 'panel' }, el('div', { class: 'table-scroll' }, el('table', {},
         el('thead', {}, el('tr', {}, el('th', {}, 'Observation'), el('th', {}, 'Kind'), el('th', {}, 'Basis'), el('th', { class: 'numeric' }, 'Offset'), el('th', { class: 'numeric' }, 'Duration'))), rows)),
         el('div', { class: 'table-foot' }, `${numeric(data.records.length)} observations on this page`, next))));

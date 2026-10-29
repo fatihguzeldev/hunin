@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::OnceLock};
 
 const RESPONSE_REFERENCE: &str = "https://hunin.dev/protocol/response-v1.schema.json#/$defs/";
 
@@ -14,10 +14,21 @@ pub(super) fn bundle(schema: &Value, definitions: &Map<String, Value>) -> Result
         if included.contains_key(&name) {
             continue;
         }
-        let mut definition = definitions
+        let definition = definitions
             .get(&name)
-            .with_context(|| format!("unknown response definition: {name}"))?
-            .clone();
+            .with_context(|| format!("unknown response definition: {name}"))?;
+        let mut definition =
+            if definition["$ref"] == "https://hunin.dev/protocol/record-v1.schema.json" {
+                static RECORD: OnceLock<Value> = OnceLock::new();
+                RECORD
+                    .get_or_init(|| {
+                        serde_json::from_str(include_str!("../../protocol/record.schema.json"))
+                            .expect("embedded observation schema")
+                    })
+                    .clone()
+            } else {
+                definition.clone()
+            };
         localize(&mut definition, &mut pending)?;
         included.insert(name, definition);
     }

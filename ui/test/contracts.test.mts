@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   generate,
   generateOperations,
+  responseDefinitions,
   generatedMatches,
   type ObservationSchema,
   type OperationDefinition,
@@ -64,7 +65,16 @@ test('operation input types are generated from the authoritative transport contr
       'utf8',
     ),
   );
-  const generated = generateOperations(operations, responses.$defs);
+  const record: ObservationSchema = JSON.parse(
+    await readFile(
+      new URL('../../../protocol/record.schema.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const generated = generateOperations(
+    operations,
+    responseDefinitions(responses, record),
+  );
   assert.ok(
     generatedMatches(
       await readFile(
@@ -93,6 +103,24 @@ test('operation output generation refuses unsupported validation rules', () => {
       ]),
     /Unsupported operation output schema keyword: pattern/,
   );
+  assert.throws(
+    () => generateOperations([{ name: 'missing', inputSchema: {} }]),
+    /Missing operation output schema/,
+  );
+  assert.throws(
+    () =>
+      generateOperations(
+        [
+          {
+            name: 'reference',
+            inputSchema: {},
+            outputSchema: { $ref: '#/$defs/Example', type: 'string' },
+          },
+        ],
+        { Example: { type: 'object' } },
+      ),
+    /Unsupported response reference siblings/,
+  );
 });
 
 test('generated freshness tolerates Windows checkout line endings but rejects stale types', () => {
@@ -119,7 +147,17 @@ test('transport preserves operation arguments and rejects backend errors', async
     globalThis.fetch = async (url, request) => {
       captured = { url, ...request };
       return Response.json({
-        result: { records: [], bounds: { start_us: 1, end_us: 2 } },
+        result: {
+          records: [],
+          unaligned_records: [],
+          alignment: 'aligned',
+          next_cursor: null,
+          bounds: { start_us: 1, end_us: 2 },
+          unaligned_count: 0,
+          unaligned_clock_domains: [],
+          total_count: 0,
+          returned_count: 0,
+        },
       });
     };
     await operation('timeline.query', {

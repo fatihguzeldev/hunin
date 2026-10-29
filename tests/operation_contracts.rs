@@ -19,8 +19,7 @@ fn validate_result(name: &str, result: &Value) {
 fn validate_transport(name: &str, result: &Value) {
     let definitions: Value =
         serde_json::from_str(include_str!("../protocol/response.schema.json")).unwrap();
-    let schema = json!({"$ref":format!("#/$defs/{name}"),"$defs":definitions["$defs"]});
-    jsonschema::validator_for(&schema)
+    jsonschema::validator_for(&definitions["$defs"][name])
         .unwrap()
         .validate(result)
         .unwrap();
@@ -222,6 +221,104 @@ async fn metadata_contracts_preserve_legacy_documents_and_new_operation_results(
         .unwrap();
     validate_result("analyses.cancel", &canceled);
     assert_eq!(canceled["status"], "accepted");
+}
+
+#[test]
+fn observation_response_guards_match_the_shared_schema_only_controls() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../protocol/fixtures/record-response-cases.json"
+    ))
+    .unwrap();
+    let schema = &catalog()
+        .iter()
+        .find(|entry| entry["name"] == "evidence.get")
+        .unwrap()["outputSchema"];
+    let validator = jsonschema::validator_for(schema).unwrap();
+    for fixture in fixtures["cases"].as_array().unwrap() {
+        assert_eq!(
+            validator.is_valid(&json!({"records":[fixture["record"]]})),
+            fixture["valid"].as_bool().unwrap(),
+            "{}",
+            fixture["name"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn query_contracts_cover_nullable_positions_clock_metadata_and_shared_comparison() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    for (id, weight) in [("before", 3), ("after", 2)] {
+        store.save_run(&Run {
+            id: id.into(), name: id.into(), status: "completed".into(), command: vec!["workload".into()],
+            cwd: data.path().to_string_lossy().into_owned(), runtime: "fixture".into(), started_at_us: 10,
+            finished_at_us: Some(20), exit_code: Some(0), diagnostics: vec![],
+            source: json!({"fingerprint":"known","collector_settings_fingerprint":"settings","environment_fingerprint":"environment","workload_inputs":{"fingerprint":"inputs"},"correctness_recipe_fingerprint":"recipe","supervised_elapsed_us":10,"supervised_execution_scope":"target_process"}),
+            correctness: json!({"passed":true}),
+        }).unwrap();
+        let record = |kind: &str, suffix: &str, basis: &str| json!({"schema_version":1,"kind":kind,"id":format!("{id}-{suffix}"),"run_id":id,"producer_id":"control","pid":1,"tid":"thread","timestamp_us":11,"basis":basis});
+        let mut context = record("context", "context", "explicit");
+        context["name"] = json!("context");
+        let mut sample = record("sample", "sample", "sampled");
+        sample["stack"] = json!([{"function":"hotspot","file":"missing.rs"}]);
+        sample["weight"] = json!(weight);
+        sample["weight_unit"] = json!("samples");
+        sample["context_id"] = context["id"].clone();
+        let mut metric = record("metric", "metric", "observed");
+        metric["name"] = json!("process.cpu_time");
+        metric["value"] = json!(1);
+        metric["unit"] = json!("milliseconds");
+        metric["scope"] = json!("process");
+        metric["attributes"] = json!({"clock_alignment":"unmapped","clock":{"domain":"opaque"},"process_role":{"extension":"unknown"}});
+        let mut relation = record("relation", "relation", "explicit");
+        relation["from"] = context["id"].clone();
+        relation["to"] = sample["id"].clone();
+        relation["relation"] = json!("dispatches");
+        relation["evidence"] = json!([context["id"]]);
+        store
+            .accept(id, "contract-input", &[context, sample, metric, relation])
+            .unwrap();
+    }
+    let operations = Operations::new(store);
+    for name in [
+        "profiles.hotspots",
+        "profiles.tree",
+        "timeline.query",
+        "resources.query",
+        "contexts.query",
+    ] {
+        let result = operations
+            .call(name, json!({"run_id":"before"}))
+            .await
+            .unwrap();
+        validate_result(name, &result);
+        if name == "profiles.hotspots" {
+            assert_eq!(result["hotspots"][0]["line"], Value::Null);
+        }
+        if name == "profiles.tree" {
+            assert_eq!(result["roots"][0]["line"], Value::Null);
+        }
+        if name == "resources.query" {
+            assert!(result["series"][0]["process_role"].is_object());
+        }
+    }
+    let evidence = operations
+        .call(
+            "evidence.get",
+            json!({"run_id":"before","ids":["before-sample"]}),
+        )
+        .await
+        .unwrap();
+    validate_result("evidence.get", &evidence);
+    let comparison = operations
+        .call(
+            "comparisons.create",
+            json!({"before":"before","after":"after"}),
+        )
+        .await
+        .unwrap();
+    validate_result("comparisons.create", &comparison);
+    assert_eq!(comparison["comparable"], true);
 }
 
 #[tokio::test]

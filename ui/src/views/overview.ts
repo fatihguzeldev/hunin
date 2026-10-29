@@ -1,3 +1,4 @@
+import { weight, weightShare } from '../profile-weight';
 import { runCorrectness, runStatusTone } from '../run';
 import { operation, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
@@ -8,16 +9,12 @@ export function runTone(run: Run): string {
   return runStatusTone(run.status);
 }
 
-export function weight(value: number, unit: string): string {
-  return unit === 'microseconds' ? duration(value * 1_000) : `${numeric(value)} ${unit}`;
-}
-
 function stat(label: string, value: string, note: string): HTMLElement {
   return el('div', { class: 'stat' }, el('div', { class: 'stat-label' }, label),
     el('div', { class: 'stat-value' }, value), el('div', { class: 'stat-note' }, note));
 }
 
-export async function overview(run: Run, summary: Summary, source: (file: string, line?: number, codeId?: string) => void): Promise<HTMLElement> {
+export async function overview(run: Run, summary: Summary, source: (file: string, line?: number | null, codeId?: string | null) => void): Promise<HTMLElement> {
   const correctness = runCorrectness(run);
   const data = await operation('profiles.hotspots', { run_id: run.id, limit: 25 });
   const body = el('div', { class: 'stack' });
@@ -38,7 +35,7 @@ export async function overview(run: Run, summary: Summary, source: (file: string
     const name = hasInspectableSource(item.file, item.code_id) ? el('button', { class: 'text-button mono', type: 'button' }, item.function) : el('span', { class: 'mono' }, item.function);
     if (hasInspectableSource(item.file, item.code_id)) name.addEventListener('click', () => source(item.file!, item.line, item.code_id ?? undefined));
     const bar = el('span');
-    bar.style.width = `${data.total_weight > 0 ? Math.min(100, item.self_weight / data.total_weight * 100) : 0}%`;
+    bar.style.width = `${weightShare(item.self_weight, data.total_weight) ?? 0}%`;
     rows.append(el('tr', {}, el('td', {}, name,
       el('span', { class: 'source-label mono' }, item.file ? `${item.file}${item.line ? `:${item.line}` : ''}` : 'Source unavailable')),
     el('td', { class: 'numeric' }, weight(item.self_weight, item.weight_unit), el('div', { class: 'weight-bar' }, bar)),

@@ -7,7 +7,7 @@ import { capabilities } from './views/capabilities';
 import { overview, runTone } from './views/overview';
 import { scenarios } from './views/scenarios';
 
-export type ViewContext = { run: Run; summary: Summary; runs: Run[]; source: (path: string, line?: number, codeId?: string) => void };
+export type ViewContext = { run: Run; summary: Summary; runs: Run[]; source: (path: string, line?: number | null, codeId?: string | null) => void };
 export type View = { name: string; render: (context: ViewContext) => Promise<HTMLElement> };
 
 export class Workspace {
@@ -155,8 +155,8 @@ export class Workspace {
         this.content.querySelector<HTMLButtonElement>(`#tab-${this.tab}`)?.focus();
         this.focusSelectedTab = false;
       }
-      const source = (path: string, line?: number, codeId?: string): void => {
-        void this.showSource(run, path, line, codeId);
+      const source = (path: string, line?: number | null, codeId?: string | null): void => {
+        void this.showSource(run, path, line ?? undefined, codeId ?? undefined);
       };
       const renderer = this.views[this.tab] ?? this.views.overview;
       const body = await renderer.render({ run, summary, runs: this.runs, source });
@@ -197,7 +197,7 @@ export class Workspace {
         if (run.status === 'running') this.pollStatus(run.id, epoch);
       }
     } catch (error) {
-      if (epoch === this.epoch) view.replaceChildren(errorView(error, () => { void this.showSource(run, path, line, codeId); }));
+      if (epoch === this.epoch) view.replaceChildren(errorView(error, () => { void this.showSource(run, path, line ?? undefined, codeId ?? undefined); }));
     }
   }
 

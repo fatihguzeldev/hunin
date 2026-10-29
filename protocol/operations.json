@@ -200,6 +200,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ProfileHotspots"
     }
   },
   {
@@ -243,6 +246,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ProfileTree"
     }
   },
   {
@@ -292,6 +298,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Timeline"
     }
   },
   {
@@ -331,6 +340,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Resources"
     }
   },
   {
@@ -357,6 +369,9 @@
         "run_id"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Contexts"
     }
   },
   {
@@ -383,6 +398,9 @@
         "ids"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Evidence"
     }
   },
   {
@@ -608,6 +626,9 @@
         "after"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Comparison"
     }
   },
   {

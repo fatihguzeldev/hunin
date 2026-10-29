@@ -30,7 +30,7 @@ function plot(series: Series): SVGSVGElement {
 function aligned(series: Series): boolean { return ['aligned', 'epoch'].includes(series.clock_alignment ?? ''); }
 
 function identity(series: Series): string {
-  return `PID ${series.pid} · thread ${series.tid || 'unavailable'} (${series.thread_id_source ?? 'namespace unknown'}) · context ${series.context_id ?? 'unavailable'} · producer ${series.producer_id ?? 'unavailable'} · clock ${series.clock ?? 'unknown'} (${series.clock_alignment ?? 'unknown'})${series.process_role ? ` · ${series.process_role}` : ''}`;
+  return `PID ${series.pid} · thread ${series.tid || 'unavailable'} (${series.thread_id_source ?? 'namespace unknown'}) · context ${series.context_id ?? 'unavailable'} · producer ${series.producer_id ?? 'unavailable'} · clock ${series.clock ?? 'unknown'} (${series.clock_alignment ?? 'unknown'})${typeof series.process_role === 'string' && series.process_role ? ` · ${series.process_role}` : ''}`;
 }
 
 export async function resources(context: ViewContext, cursor?: string): Promise<HTMLElement> {

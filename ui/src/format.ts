@@ -1,7 +1,7 @@
 const number = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
 
-export function numeric(value: number): string {
-  return number.format(value);
+export function numeric(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : number.format(value);
 }
 
 export function percentage(value: number | null | undefined): string {
