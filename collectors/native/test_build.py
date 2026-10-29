@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("native_build", Path(__file__).with_name("build.py"))
+spec = importlib.util.spec_from_file_location(
+    "native_build", Path(__file__).with_name("build.py")
+)
 native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
@@ -45,7 +47,10 @@ class NativeBuildTests(unittest.TestCase):
             patches = [(Path("0001.patch"), change)]
             source, workspace, identity = native.prepare_source(cache, archive, patches)
             self.assertEqual((source / "value.txt").read_text(), "after\n")
-            self.assertEqual(native.prepare_source(cache, archive, patches), (source, workspace, identity))
+            self.assertEqual(
+                native.prepare_source(cache, archive, patches),
+                (source, workspace, identity),
+            )
             (source / "value.txt").write_text("modified\n")
             with self.assertRaisesRegex(ValueError, "Preserving modified"):
                 native.prepare_source(cache, archive, patches)
