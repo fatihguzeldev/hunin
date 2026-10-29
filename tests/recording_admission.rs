@@ -3,7 +3,27 @@ use hunin::{
     storage::Store,
 };
 use serde_json::json;
-use std::{fs, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    fs,
+    future::{Future, poll_fn},
+    path::PathBuf,
+    pin::Pin,
+    sync::mpsc,
+    task::Poll,
+    time::Duration,
+};
+
+async fn poll_pending(future: Pin<&mut impl Future>) {
+    let mut future = future;
+    poll_fn(|context| {
+        assert!(
+            future.as_mut().poll(context).is_pending(),
+            "control unexpectedly completed before its ownership handoff"
+        );
+        Poll::Ready(())
+    })
+    .await;
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -59,10 +79,10 @@ async fn recording_admission_is_responsive_and_survives_dropped_acknowledgement(
     let (release, writer) = writer_lock(&fixture.store);
     let engine = fixture.engine.clone();
     let request = fixture.request();
-    let caller = tokio::spawn(async move { engine.start(request).await });
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    caller.abort();
-    let _ = caller.await;
+    let mut caller = Box::pin(engine.start(request));
+    // start acquires its permit and spawns the owner before awaiting its reply.
+    poll_pending(caller.as_mut()).await;
+    drop(caller);
     let _ = release.send(());
     assert!(
         writer.join().unwrap(),
@@ -140,22 +160,19 @@ async fn shutdown_drains_pending_admission_and_cannot_launch_after_return() {
     let (release, writer) = writer_lock(&fixture.store);
     let engine = fixture.engine.clone();
     let request = fixture.request();
-    let caller = tokio::spawn(async move { engine.start(request).await });
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    let engine = fixture.engine.clone();
-    let mut shutdown = tokio::spawn(async move { engine.shutdown().await });
-    tokio::select! {
-        result=&mut shutdown=>panic!("shutdown abandoned an owned preparation: {result:?}"),
-        _=tokio::time::sleep(Duration::from_millis(30))=>{},
-    }
+    let mut caller = Box::pin(engine.start(request));
+    poll_pending(caller.as_mut()).await;
+    let mut shutdown = Box::pin(fixture.engine.shutdown());
+    // Close the gate while the already-owned permit is held. Preparation may
+    // either reach SQLite or observe this gate and legitimately fail early.
+    poll_pending(shutdown.as_mut()).await;
     let _ = release.send(());
     assert!(writer.join().unwrap());
     tokio::time::timeout(Duration::from_secs(10), shutdown)
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
-    let _ = caller.await.unwrap();
+    let _ = caller.await;
     assert!(!fixture.root.path().join("launched").exists());
     assert!(
         fixture
