@@ -1,5 +1,4 @@
 import hashlib
-import importlib.util
 import io
 from pathlib import Path
 import tarfile
@@ -8,11 +7,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-spec = importlib.util.spec_from_file_location(
-    "fetch_runtime", Path(__file__).with_name("fetch_runtime.py")
-)
-runtime = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runtime)
+from . import runtime
 
 
 class RuntimeTests(unittest.TestCase):

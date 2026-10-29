@@ -90,7 +90,10 @@
       "name": "go-sdk",
       "source_root": "sdk/go",
       "destination_root": "sdk/go",
-      "files": { "go.mod": "go.mod", "hunin.go": "hunin.go" }
+      "files": {
+        "go.mod": "go.mod",
+        "hunin.go": "hunin.go"
+      }
     },
     {
       "name": "c-sdk",
@@ -106,7 +109,9 @@
       "name": "cpp-sdk",
       "source_root": "sdk/cpp",
       "destination_root": "sdk/cpp",
-      "files": { "include/hunin.hpp": "include/hunin.hpp" }
+      "files": {
+        "include/hunin.hpp": "include/hunin.hpp"
+      }
     },
     {
       "name": "protocol",
@@ -120,16 +125,18 @@
     },
     {
       "name": "installation",
-      "source_root": "distribution",
+      "source_root": "distribution/installation",
       "destination_root": ".",
-      "files": { "install.py": "install.py" }
+      "files": {
+        "install.py": "bundle.py"
+      }
     },
     {
       "name": "runtime-provisioning",
-      "source_root": "distribution",
+      "source_root": "distribution/provisioning",
       "destination_root": ".",
       "files": {
-        "fetch_runtime.py": "fetch_runtime.py",
+        "fetch_runtime.py": "runtime.py",
         "runtime-assets.json": "runtime-assets.json"
       }
     },
@@ -138,7 +145,10 @@
       "source_root": "ui/dist",
       "destination_root": "ui",
       "build": "npm --prefix ui ci && npm --prefix ui run build",
-      "files": { "index.html": "index.html", "hunin.svg": "hunin.svg" },
+      "files": {
+        "index.html": "index.html",
+        "hunin.svg": "hunin.svg"
+      },
       "vite_manifest": ".vite/manifest.json",
       "entry": "index.html"
     }

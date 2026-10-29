@@ -1,18 +1,9 @@
-import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location(
-    "verify_install", Path(__file__).with_name("verify_install.py")
-)
-control = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(control)
-native_spec = importlib.util.spec_from_file_location(
-    "verify_native_sdk", Path(__file__).with_name("verify_native_sdk.py")
-)
-native = importlib.util.module_from_spec(native_spec)
-native_spec.loader.exec_module(native)
+from . import installed as control
+from . import native_sdk as native
 
 
 class InstalledControlTests(unittest.TestCase):

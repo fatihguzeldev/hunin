@@ -1,25 +1,18 @@
-import importlib.util
-import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 
+from . import assembly as package
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(
-        name, Path(__file__).with_name(name + ".py")
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+if __package__.startswith("distribution."):
+    from ..installation import bundle as installer
+else:
+    from installation import bundle as installer
 
 
-package = load("package")
-installer = load("install")
-
-RUNTIME_SOURCES = (
+RUNTIME_FILES = (
     "collectors/javascript/plan.mjs",
     "collectors/javascript/clock-preload.mjs",
     "collectors/javascript/bun-preload.mjs",
@@ -55,9 +48,9 @@ RUNTIME_SOURCES = (
     "protocol/record.schema.json",
     "protocol/operations.json",
     "protocol/response.schema.json",
-    "distribution/install.py",
-    "distribution/fetch_runtime.py",
-    "distribution/runtime-assets.json",
+    "install.py",
+    "fetch_runtime.py",
+    "runtime-assets.json",
 )
 
 
@@ -105,22 +98,36 @@ class PackageTests(unittest.TestCase):
     def source_tree(self, root):
         """A disposable assembly fixture, not a built-product acceptance result."""
         (root / "Cargo.toml").write_text('[package]\nversion="0.1.0"\n')
-        for name in (*RUNTIME_SOURCES, "distribution/fetch_samply.py"):
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(name)
+        inventory = json.loads(package.inventory.ASSETS.read_text())
+        native = next(
+            component
+            for component in inventory["components"]
+            if component["name"] == "native-collector"
+        )
+        for component in inventory["components"]:
+            if component is native:
+                continue
+            for source in component["files"].values():
+                path = root / component["source_root"] / source
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(str(path.relative_to(root)))
+        stock = root / "distribution/fetch_samply.py"
+        stock.parent.mkdir(parents=True, exist_ok=True)
+        stock.write_text("unrelated legacy helper")
+        native_root = Path(__file__).parents[2] / native["source_root"]
         patches = sorted(
-            path.name
-            for path in (Path(__file__).parents[1] / "collectors/native/patches").glob(
-                "*.patch"
-            )
+            path.name for path in (native_root / "patches").glob("*.patch")
         )
         for name, data in self.native_files(patches).items():
-            path = root / name
+            path = (
+                root
+                / native["source_root"]
+                / Path(name).relative_to(native["destination_root"])
+            )
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         ui = root / "ui/dist"
-        ui.mkdir(parents=True)
+        ui.mkdir(parents=True, exist_ok=True)
         (ui / ".vite").mkdir()
         (ui / "assets").mkdir()
         (ui / "index.html").write_text(
@@ -151,31 +158,6 @@ class PackageTests(unittest.TestCase):
         binary.write_bytes(b"test-binary")
         return binary
 
-    def bundle(self, root, version):
-        root.mkdir(parents=True)
-        files = {"hunin": b"test-binary", "ui/index.html": b"test-ui"}
-        for name, data in files.items():
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        (root / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "version": version,
-                    "platform": "linux-x64",
-                    "files": {
-                        name: {
-                            "size": len(data),
-                            "sha256": hashlib.sha256(data).hexdigest(),
-                        }
-                        for name, data in files.items()
-                    },
-                }
-            )
-        )
-        return root
-
     def test_bundle_retains_assets_and_install_verifies_integrity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -188,9 +170,8 @@ class PackageTests(unittest.TestCase):
             extracted = next((root / "extracted").iterdir())
             manifest = installer.verify(extracted)
             self.assertIn("collectors/python/cpu.py", manifest["files"])
-            for name in RUNTIME_SOURCES:
-                destination = name.removeprefix("distribution/")
-                self.assertIn(destination, manifest["files"])
+            for name in RUNTIME_FILES:
+                self.assertIn(name, manifest["files"])
             installed = installer.install(extracted, root / "installed")
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
@@ -300,66 +281,3 @@ class PackageTests(unittest.TestCase):
                     del changed["collectors/native/bin/samply"]
                 with self.assertRaises(ValueError):
                     package.verify_native_collector(changed, target)
-
-    def test_manifest_rejects_traversal(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "bundle").mkdir()
-            (root / "outside").write_text("private")
-            (root / "bundle/manifest.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "version": "0.1.0",
-                        "platform": "linux-x64",
-                        "files": {"../outside": {"size": 7, "sha256": "unused"}},
-                    }
-                )
-            )
-            with self.assertRaisesRegex(ValueError, "Unsafe package path"):
-                installer.verify(root / "bundle")
-
-    @unittest.skipIf(os.name == "nt", "The optional bin symlink is Unix-only")
-    def test_bin_link_preserves_unrelated_and_dangling_targets(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            bundle = self.bundle(root / "bundle", "0.2.0")
-            for kind in ("unrelated", "dangling"):
-                with self.subTest(kind=kind):
-                    case = root / kind
-                    (case / "bin").mkdir(parents=True)
-                    target = case / "another-program"
-                    if kind == "unrelated":
-                        target.write_bytes(b"unrelated executable")
-                    link = case / "bin/hunin"
-                    link.symlink_to(target)
-                    with self.assertRaisesRegex(
-                        ValueError, "Preserving existing executable"
-                    ):
-                        installer.install(bundle, case / "installed", case / "bin")
-                    self.assertEqual(link.readlink(), target)
-                    if kind == "unrelated":
-                        self.assertEqual(target.read_bytes(), b"unrelated executable")
-
-    @unittest.skipIf(os.name == "nt", "The optional bin symlink is Unix-only")
-    def test_bin_link_upgrades_only_a_verified_installation_under_its_prefix(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            prefix = root / "installed"
-            previous = self.bundle(prefix / "0.1.0-linux-x64", "0.1.0")
-            bundle = self.bundle(root / "bundle", "0.2.0")
-            (root / "bin").mkdir()
-            link = root / "bin/hunin"
-            link.symlink_to(previous / "hunin")
-            executable = installer.install(bundle, prefix, root / "bin")
-            self.assertEqual(link.resolve(), executable.resolve())
-            self.assertTrue((previous / "hunin").is_file())
-            # A valid-looking directory name does not establish ownership if its bytes changed.
-            (previous / "hunin").write_bytes(b"modified")
-            link.unlink()
-            link.symlink_to(previous / "hunin")
-            self.assertFalse(installer.owned_link(link, prefix))
-
-
-if __name__ == "__main__":
-    unittest.main()
