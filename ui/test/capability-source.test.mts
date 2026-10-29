@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { operation } from '../src/api.js';
+import { isCapabilityMode } from '../src/operations.generated.js';
 
 test('capability discovery retains failed probes with missing optional runtime metadata', async () => {
   const original = globalThis.fetch;
@@ -71,4 +72,26 @@ test('source responses preserve nullable provenance while checking the measured-
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('launch descriptors preserve explicit-command selection independently of prerequisite probes', () => {
+  const legacy = {
+    mode: 'automatic-cpu',
+    mechanism: 'native sampling',
+    availability: 'missing_tool',
+    basis: 'discovery only',
+    recording_verified: false,
+  };
+  assert.equal(isCapabilityMode(legacy), true);
+  const mode = {
+    ...legacy,
+    launch_runtime: 'native',
+    command_requirement: 'explicit target executable',
+    default_executable: null,
+    selectable: true,
+  };
+  assert.equal(isCapabilityMode(mode), true);
+  assert.equal(isCapabilityMode({ ...mode, launch_runtime: 1 }), false);
+  assert.equal(isCapabilityMode({ ...mode, default_executable: false }), false);
+  assert.equal(isCapabilityMode({ ...mode, selectable: 'yes' }), false);
 });

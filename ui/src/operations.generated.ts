@@ -91,6 +91,10 @@ export type CapabilityMode = {
   "availability": string;
   "basis": string;
   "recording_verified": boolean;
+  "launch_runtime"?: string;
+  "command_requirement"?: string;
+  "default_executable"?: string | null;
+  "selectable"?: boolean;
 };
 
 export type Capability = {
@@ -639,7 +643,7 @@ export function isMcpToolFailure(value: unknown): value is McpToolFailure {
 }
 
 export function isCapabilityMode(value: unknown): value is CapabilityMode {
-  return (isOutputObject(value) && Object.hasOwn(value, "mode") && Object.hasOwn(value, "mechanism") && Object.hasOwn(value, "availability") && Object.hasOwn(value, "basis") && Object.hasOwn(value, "recording_verified") && (typeof value["mode"] === "string") && (typeof value["mechanism"] === "string") && (typeof value["availability"] === "string") && (typeof value["basis"] === "string") && (typeof value["recording_verified"] === "boolean"));
+  return (isOutputObject(value) && Object.hasOwn(value, "mode") && Object.hasOwn(value, "mechanism") && Object.hasOwn(value, "availability") && Object.hasOwn(value, "basis") && Object.hasOwn(value, "recording_verified") && (typeof value["mode"] === "string") && (typeof value["mechanism"] === "string") && (typeof value["availability"] === "string") && (typeof value["basis"] === "string") && (typeof value["recording_verified"] === "boolean") && (!Object.hasOwn(value, "launch_runtime") || (typeof value["launch_runtime"] === "string")) && (!Object.hasOwn(value, "command_requirement") || (typeof value["command_requirement"] === "string")) && (!Object.hasOwn(value, "default_executable") || ((typeof value["default_executable"] === "string") || (value["default_executable"] === null))) && (!Object.hasOwn(value, "selectable") || (typeof value["selectable"] === "boolean")));
 }
 
 export function isCapability(value: unknown): value is Capability {

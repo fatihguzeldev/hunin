@@ -278,6 +278,22 @@
         },
         "recording_verified": {
           "type": "boolean"
+        },
+        "launch_runtime": {
+          "type": "string",
+          "description": "Backend-owned runtime argument for this registered collection mode. Older services may omit launch descriptors."
+        },
+        "command_requirement": {
+          "type": "string",
+          "description": "Backend-owned description of the target command this mode requires."
+        },
+        "default_executable": {
+          "type": ["string", "null"],
+          "description": "Default workload interpreter/tool only when appropriate for this mode; a collector/probe executable is not a workload default."
+        },
+        "selectable": {
+          "type": "boolean",
+          "description": "Whether the registered launch path can be selected with a user command. This does not assert that the default probe passed or recording is verified."
         }
       },
       "required": [
