@@ -40,6 +40,7 @@ export type Investigation = {
   profile: ProfileInvestigation;
   timeline: TimelineInvestigation;
   evidence: EvidenceInvestigation;
+  comparison: { before?: string; after?: string };
   source?: SourceSelection;
 };
 
@@ -75,6 +76,7 @@ function empty(): Investigation {
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
     timeline: { kind: '', alignment: 'aligned' },
     evidence: {},
+    comparison: {},
   };
 }
 
@@ -155,6 +157,9 @@ function decode(value: unknown): SavedInvestigation | undefined {
         offset: selection.offset,
       };
   }
+  const comparison = object(state?.comparison);
+  result.comparison.before = text(comparison?.before) || undefined;
+  result.comparison.after = text(comparison?.after) || undefined;
   const source = object(state?.source);
   const path = text(source?.path);
   const view = text(source?.view);

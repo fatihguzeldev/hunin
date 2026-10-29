@@ -158,3 +158,21 @@ test('private source-history depth preserves legacy entries without accepting in
   ])
     assert.equal(sourceReturnDepth(invalid), 0);
 });
+
+test('comparison pair preferences survive reload and observation replacement without caching comparison results', () => {
+  const storage = session();
+  const first = new Investigations(storage);
+  first.observeResult('candidate', 'a');
+  first.forRun('candidate').comparison = {
+    before: 'older-than-first-page',
+    after: 'candidate',
+  };
+  first.persist('candidate');
+  const reload = new Investigations(storage);
+  reload.observeResult('candidate', 'b');
+  assert.deepEqual(reload.forRun('candidate').comparison, {
+    before: 'older-than-first-page',
+    after: 'candidate',
+  });
+  assert.deepEqual(reload.forRun('other').comparison, {});
+});

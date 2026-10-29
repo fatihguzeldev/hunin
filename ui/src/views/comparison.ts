@@ -1,4 +1,6 @@
 import { operation, type Comparison } from '../api';
+import { linkedRequest } from '../requests';
+import { recordingHistory } from '../recording-history';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { numeric, percentage } from '../format';
 import type { ViewContext } from '../workspace';
@@ -192,19 +194,15 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
       'Record the same workload again',
       'Comparison needs at least two recordings. Run your workload after a change, then select a baseline here.',
     );
+  const state = context.investigation.comparison;
+  state.after ??= context.run.id;
+  state.before ??= context.runs.find((run) => run.id !== state.after)?.id;
+  const known = new Map(context.runs.map((run) => [run.id, run]));
   const before = el('select');
   const after = el('select');
-  for (const run of context.runs) {
-    before.append(
-      el('option', { value: run.id }, `${run.name} · ${run.id.slice(0, 8)}`),
-    );
-    after.append(
-      el('option', { value: run.id }, `${run.name} · ${run.id.slice(0, 8)}`),
-    );
-  }
-  after.value = context.run.id;
-  before.value = context.runs.find((run) => run.id !== context.run.id)!.id;
   const content = el('div');
+  let request: AbortController | undefined;
+  let epoch = 0;
   const compare = button(
     'Compare recordings',
     () => {
@@ -212,6 +210,58 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
     },
     'button primary',
   );
+  function populate(): void {
+    const allowed = new Set([
+      ...context.runs.map((run) => run.id),
+      state.before,
+      state.after,
+    ]);
+    for (const id of known.keys()) if (!allowed.has(id)) known.delete(id);
+    for (const select of [before, after]) {
+      select.replaceChildren(
+        ...[...known.values()].map((run) =>
+          el(
+            'option',
+            { value: run.id },
+            `${run.name} · ${run.id.slice(0, 8)}`,
+          ),
+        ),
+      );
+      const selected = select === before ? state.before : state.after;
+      if (selected && !known.has(selected))
+        select.append(
+          el(
+            'option',
+            { value: selected },
+            `${selected} · metadata not loaded`,
+          ),
+        );
+      select.value = selected ?? '';
+    }
+  }
+  function changed(): void {
+    state.before = before.value;
+    state.after = after.value;
+    epoch++;
+    request?.abort();
+    compare.disabled = false;
+    context.persist();
+    content.replaceChildren(
+      empty(
+        'Comparison selection changed',
+        'Compare these recordings to read their current selected results and limitations.',
+      ),
+    );
+  }
+  populate();
+  before.addEventListener('change', changed);
+  after.addEventListener('change', changed);
+  const historyPicker = recordingHistory(context.signal, (run, side) => {
+    known.set(run.id, run);
+    state[side] = run.id;
+    populate();
+    changed();
+  });
   const body = el(
     'div',
     { class: 'stack' },
@@ -222,10 +272,13 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
       field('After · candidate', after),
       compare,
     ),
+    historyPicker,
     content,
   );
   async function load(): Promise<void> {
-    if (before.value === after.value) {
+    if (context.signal.aborted) return;
+    const pair = { before: before.value, after: after.value };
+    if (!pair.before || !pair.after || pair.before === pair.after) {
       content.replaceChildren(
         empty(
           'Choose two different recordings',
@@ -234,25 +287,49 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
       );
       return;
     }
+    const version = ++epoch;
+    request?.abort();
+    request = new AbortController();
+    const linked = linkedRequest(context.signal, request.signal);
+    state.before = pair.before;
+    state.after = pair.after;
+    context.persist();
     compare.disabled = true;
     content.replaceChildren(loading('Assessing comparability…'));
     try {
-      content.replaceChildren(
-        results(
-          await operation('comparisons.create', {
-            before: before.value,
-            after: after.value,
+      await Promise.all(
+        [...new Set([pair.before, pair.after])]
+          .filter((id) => !known.has(id))
+          .map(async (id) => {
+            const { run } = await operation(
+              'runs.get',
+              { run_id: id },
+              linked.signal,
+            );
+            if (!linked.signal.aborted) known.set(run.id, run);
           }),
-        ),
       );
+      if (version !== epoch || linked.signal.aborted) return;
+      populate();
+      const data = await operation('comparisons.create', pair, linked.signal);
+      if (
+        version !== epoch ||
+        linked.signal.aborted ||
+        before.value !== pair.before ||
+        after.value !== pair.after
+      )
+        return;
+      content.replaceChildren(results(data));
     } catch (error) {
-      content.replaceChildren(
-        errorView(error, () => {
-          void load();
-        }),
-      );
+      if (version === epoch && !linked.signal.aborted)
+        content.replaceChildren(
+          errorView(error, () => {
+            void load();
+          }),
+        );
     } finally {
-      compare.disabled = false;
+      linked.finish();
+      if (version === epoch) compare.disabled = false;
     }
   }
   await load();
