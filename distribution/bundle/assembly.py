@@ -83,6 +83,14 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
         raise ValueError(
             "Windows packages require a .exe; Unix packages require a native binary"
         )
+    name = f"hunin-{version}-{target}"
+    archive = output / f"{name}{'.zip' if target.startswith('windows') else '.tar.gz'}"
+    checksum_path = archive.with_name(archive.name + ".sha256")
+    for path in (archive, checksum_path):
+        if path.exists() or path.is_symlink():
+            raise ValueError(
+                f"Preserving existing bundle output: {path}. Choose a fresh --output directory."
+            )
     files = contents(root, binary, target)
     manifest = {
         "schema_version": 1,
@@ -95,11 +103,9 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
         },
     }
     files["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()
-    name = f"hunin-{version}-{target}"
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"{name}{'.zip' if target.startswith('windows') else '.tar.gz'}"
     if target.startswith("windows"):
-        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
             for path, data in sorted(files.items()):
                 entry = zipfile.ZipInfo(
                     f"{name}/{path}", date_time=(1980, 1, 1, 0, 0, 0)
@@ -108,7 +114,7 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
                 bundle.writestr(entry, data, compress_type=zipfile.ZIP_DEFLATED)
     else:
         with (
-            archive.open("wb") as raw,
+            archive.open("xb") as raw,
             gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, filename="") as compressed,
             tarfile.open(fileobj=compressed, mode="w") as bundle,
         ):
@@ -122,10 +128,10 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
                 )
                 entry.mtime = 0
                 bundle.addfile(entry, io.BytesIO(data))
-    checksum = sha256(archive.read_bytes())
-    archive.with_name(archive.name + ".sha256").write_text(
-        f"{checksum}  {archive.name}\n"
-    )
+    with archive.open("rb") as stream:
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    with checksum_path.open("x") as stream:
+        stream.write(f"{checksum}  {archive.name}\n")
     return archive
 
 

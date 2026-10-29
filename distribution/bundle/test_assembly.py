@@ -66,6 +66,27 @@ RUNTIME_FILES = (
 
 
 class PackageTests(unittest.TestCase):
+    def test_existing_archive_or_checksum_is_not_overwritten(self):
+        for reserved in ("archive", "checksum"):
+            with (
+                self.subTest(reserved=reserved),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                binary = self.source_tree(root)
+                output = root / "output"
+                output.mkdir()
+                archive = output / "hunin-0.1.0-linux-x64.tar.gz"
+                path = (
+                    archive
+                    if reserved == "archive"
+                    else archive.with_name(archive.name + ".sha256")
+                )
+                path.write_bytes(b"preserved accepted artifact")
+                with self.assertRaisesRegex(ValueError, "Preserving existing"):
+                    package.assemble(root, binary, output, "linux-x64")
+                self.assertEqual(path.read_bytes(), b"preserved accepted artifact")
+
     def native_files(self, patch_names=("0001.patch",)):
         base = "collectors/native/"
         upstream = {"revision": "test-pin", "archive_sha256": "test-archive"}
