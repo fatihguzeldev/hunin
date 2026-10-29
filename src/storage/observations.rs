@@ -1,6 +1,10 @@
 //! Selected observation reads and transaction-scoped snapshots.
+mod query;
 use super::Store;
 use anyhow::{Context, Result};
+pub use query::{
+    QueryReadPort, QuerySnapshot, ReadBudgetExceeded, ReadDimension, ReadLimits, ReadUsage,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};

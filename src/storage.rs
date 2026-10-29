@@ -26,6 +26,9 @@ pub use inspection::{
 };
 pub(crate) use observations::RecordReadLimit;
 pub use observations::RecordsSnapshot;
+pub use observations::{
+    QueryReadPort, QuerySnapshot, ReadBudgetExceeded, ReadDimension, ReadLimits, ReadUsage,
+};
 
 #[cfg(test)]
 mod publication_tests;
