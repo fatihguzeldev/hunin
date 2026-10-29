@@ -75,9 +75,31 @@ def verify_native_collector(files, target):
         )
 
 
+def verify_native_patch_inventory(root, files):
+    base = "collectors/native/"
+    manifest = json.loads(files[base + "manifest.json"])
+    pattern = inventory.relative(manifest["patches"])
+    source = root / base
+    expected = {
+        base + path.relative_to(source).as_posix() for path in source.glob(pattern)
+    }
+    selected = {
+        name
+        for name in files
+        if name.startswith(base + "patches/") and name.endswith(".patch")
+    }
+    if not expected or expected != selected:
+        raise ValueError(
+            "Native patch inventory does not match the current build manifest; "
+            "update the explicit runtime assets and rebuild the native collector. "
+            f"Missing: {sorted(expected - selected)}; extra: {sorted(selected - expected)}"
+        )
+
+
 def contents(root, binary, target):
     files = {"hunin.exe" if binary.suffix == ".exe" else "hunin": binary.read_bytes()}
     files.update(inventory.contents(root, target))
+    verify_native_patch_inventory(root, files)
     verify_native_collector(files, target)
     return files
 

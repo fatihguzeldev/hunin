@@ -67,7 +67,9 @@
         "patches/0006-pe-embedded-dwarf.patch": "patches/0006-pe-embedded-dwarf.patch",
         "patches/0007-windows-helper-lifetime-cleanup.patch": "patches/0007-windows-helper-lifetime-cleanup.patch",
         "patches/0008-windows-sampled-instruction-pointer.patch": "patches/0008-windows-sampled-instruction-pointer.patch",
-        "patches/0009-macos-consistent-dyld-snapshot.patch": "patches/0009-macos-consistent-dyld-snapshot.patch"
+        "patches/0009-macos-consistent-dyld-snapshot.patch": "patches/0009-macos-consistent-dyld-snapshot.patch",
+        "patches/0010-linux-clock-reference.patch": "patches/0010-linux-clock-reference.patch",
+        "patches/0011-linux-perf-sample-wakeup.patch": "patches/0011-linux-perf-sample-wakeup.patch"
       }
     },
     {

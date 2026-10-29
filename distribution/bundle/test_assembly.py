@@ -138,6 +138,7 @@ class PackageTests(unittest.TestCase):
                     "upstream": upstream,
                     "version": "test-version",
                     "extension": extension,
+                    "patches": "patches/*.patch",
                 }
             ).encode(),
             **{base + "patches/" + name: data for name, data in patch_bytes.items()},
@@ -297,6 +298,18 @@ class PackageTests(unittest.TestCase):
             for name in unshipped:
                 self.assertFalse(name in files, f"Unexpected runtime asset: {name}")
             self.assertFalse("fetch_samply.py" in files)
+
+    def test_native_manifest_patch_cannot_be_omitted_from_runtime_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            # The existing binary receipt still matches every selected inventory
+            # file. A newly selected source patch requires an explicit asset and
+            # a rebuilt matching collector rather than silently shipping the old one.
+            unselected = root / "collectors/native/patches/9999-required.patch"
+            unselected.write_text("new build input deliberately absent from inventory")
+            with self.assertRaisesRegex(ValueError, "Native patch inventory"):
+                package.contents(root, binary, "linux-x64")
 
     def test_installed_vmprof_decoder_is_standalone_format_implementation(self):
         with tempfile.TemporaryDirectory() as temporary:
