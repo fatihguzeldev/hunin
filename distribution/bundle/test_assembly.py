@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from . import assembly as package
 
@@ -182,7 +183,8 @@ class PackageTests(unittest.TestCase):
             self.assertIn("collectors/python/cpu.py", manifest["files"])
             for name in RUNTIME_FILES:
                 self.assertIn(name, manifest["files"])
-            installed = installer.install(extracted, root / "installed")
+            with patch.object(installer, "host_platform", return_value="linux-x64"):
+                installed = installer.install(extracted, root / "installed")
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
             if os.name != "nt":

@@ -6,9 +6,45 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import tempfile
+
+
+def host_platform():
+    """Identify a selected OS/architecture; this does not establish an OS floor."""
+    system = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(
+        platform.system()
+    )
+    machine = platform.machine().lower()
+    architecture = {
+        "x86_64": "x64",
+        "amd64": "x64",
+        "x64": "x64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+    }.get(machine)
+    target = f"{system}-{architecture}"
+    if target not in (
+        "linux-x64",
+        "linux-arm64",
+        "macos-x64",
+        "macos-arm64",
+        "windows-x64",
+    ):
+        raise ValueError(
+            f"Unsupported installation host: {platform.system()} {machine}"
+        )
+    return target
+
+
+def verify_host(manifest):
+    host = host_platform()
+    if manifest["platform"] != host:
+        raise ValueError(
+            f"Package target {manifest['platform']} does not match installation host {host}"
+        )
 
 
 def verify(bundle):
@@ -64,8 +100,9 @@ def owned_link(link, prefix):
 
 def install(bundle, prefix, bin_dir=None):
     manifest = verify(bundle)
+    verify_host(manifest)
     destination = prefix / f"{manifest['version']}-{manifest['platform']}"
-    if destination.exists():
+    if destination.exists() or destination.is_symlink():
         raise ValueError(
             f"Install directory already exists: {destination}. Choose another --prefix to preserve it."
         )
@@ -78,6 +115,10 @@ def install(bundle, prefix, bin_dir=None):
             target = staged / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+        # The staged bytes own the publication decision. Checking only the
+        # source before copying would miss a changed source or copy failure.
+        staged_manifest = verify(staged)
+        verify_host(staged_manifest)
         executable = staged / (
             "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
         )

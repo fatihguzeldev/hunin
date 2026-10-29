@@ -4,11 +4,21 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from . import bundle as installer
 
+HOST_PLATFORM = installer.host_platform
+
 
 class InstalledBundleTests(unittest.TestCase):
+    def setUp(self):
+        # These integrity/link fixtures model Linux bundles, not executable
+        # host acceptance. Host identity has separate positive/negative controls.
+        host = patch.object(installer, "host_platform", return_value="linux-x64")
+        host.start()
+        self.addCleanup(host.stop)
+
     def bundle(self, root, version):
         root.mkdir(parents=True)
         files = {"hunin": b"test-binary", "ui/index.html": b"test-ui"}
@@ -51,6 +61,81 @@ class InstalledBundleTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "Unsafe package path"):
                 installer.verify(root / "bundle")
+
+    def test_wrong_host_fails_before_creating_an_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = self.bundle(root / "bundle", "0.2.0")
+            with patch.object(installer, "host_platform", return_value="macos-arm64"):
+                with self.assertRaisesRegex(ValueError, "host.*macos-arm64"):
+                    installer.install(bundle, root / "installed", root / "bin")
+            self.assertFalse((root / "installed").exists())
+            self.assertFalse((root / "bin").exists())
+
+    def test_host_identity_recognizes_selected_platforms_and_architecture_aliases(self):
+        with patch.object(installer, "host_platform", wraps=HOST_PLATFORM):
+            for system, machine, expected in [
+                ("Linux", "x86_64", "linux-x64"),
+                ("Linux", "aarch64", "linux-arm64"),
+                ("Darwin", "x86_64", "macos-x64"),
+                ("Darwin", "arm64", "macos-arm64"),
+                ("Windows", "AMD64", "windows-x64"),
+            ]:
+                with (
+                    self.subTest(system=system, machine=machine),
+                    patch.object(installer.platform, "system", return_value=system),
+                    patch.object(installer.platform, "machine", return_value=machine),
+                ):
+                    self.assertEqual(installer.host_platform(), expected)
+            with (
+                patch.object(installer.platform, "system", return_value="Windows"),
+                patch.object(installer.platform, "machine", return_value="ARM64"),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "Unsupported installation host"
+                ):
+                    installer.host_platform()
+
+    def test_changed_staged_bytes_never_publish_an_installation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = self.bundle(root / "bundle", "0.2.0")
+            prefix = root / "installed"
+            prefix.mkdir()
+            unrelated = prefix / "keep.txt"
+            unrelated.write_text("preserve unrelated data")
+            copy = installer.shutil.copy2
+
+            def changed_copy(source, target):
+                result = copy(source, target)
+                if Path(target).name == "hunin":
+                    Path(target).write_bytes(b"changed during staging")
+                return result
+
+            with (
+                patch.object(installer, "host_platform", return_value="linux-x64"),
+                patch.object(installer.shutil, "copy2", side_effect=changed_copy),
+            ):
+                with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                    installer.install(bundle, prefix)
+            self.assertEqual(list(prefix.iterdir()), [unrelated])
+            self.assertEqual(unrelated.read_text(), "preserve unrelated data")
+
+    @unittest.skipIf(
+        os.name == "nt", "Creating local symlinks requires host privileges"
+    )
+    def test_same_version_dangling_destination_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = self.bundle(root / "bundle", "0.2.0")
+            prefix = root / "installed"
+            prefix.mkdir()
+            destination = prefix / "0.2.0-linux-x64"
+            missing = root / "missing-version"
+            destination.symlink_to(missing)
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                installer.install(bundle, prefix)
+            self.assertEqual(destination.readlink(), missing)
 
     @unittest.skipIf(os.name == "nt", "The optional bin symlink is Unix-only")
     def test_bin_link_preserves_unrelated_and_dangling_targets(self):
