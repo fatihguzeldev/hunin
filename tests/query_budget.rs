@@ -4,6 +4,123 @@ use hunin::{
 };
 use serde_json::{Value, json};
 
+fn exclusive_wal_writer(store: &Store) -> rusqlite::Connection {
+    let connection = rusqlite::Connection::open(store.root().join("hunin.sqlite")).unwrap();
+    let journal: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
+    connection
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE")
+        .unwrap();
+    connection
+}
+
+#[test]
+fn readonly_snapshot_waits_for_a_short_wal_lock_without_replaying_visitors() {
+    use std::{sync::mpsc, time::Duration};
+    let (_root, store) = fixture();
+    let writer = exclusive_wal_writer(&store);
+    let reader = store.clone();
+    let (started, ready) = mpsc::sync_channel(1);
+    let read = std::thread::spawn(move || {
+        let mut started = Some(started);
+        reader.with_query_snapshot(
+            "recording",
+            ReadLimits::default(),
+            move || {
+                if let Some(started) = started.take() {
+                    started.send(()).unwrap();
+                }
+                Ok(())
+            },
+            |port| {
+                let mut rows = vec![];
+                port.visit(&[], |text| {
+                    rows.push(serde_json::from_str::<Value>(text)?);
+                    Ok(())
+                })?;
+                Ok(rows)
+            },
+        )
+    });
+    ready.recv_timeout(Duration::from_secs(2)).unwrap();
+    // A real WAL exclusive lock is present when the read starts. Release it
+    // inside the reader's bounded SQLite wait, rather than retrying a query.
+    std::thread::sleep(Duration::from_millis(50));
+    drop(writer);
+    let result = read
+        .join()
+        .unwrap()
+        .expect("read rejected a short WAL lock");
+    let expected = store.records_snapshot("recording").unwrap();
+    assert_eq!(result.value, expected.records);
+    assert_eq!(result.result_identity, expected.result_identity);
+    assert_eq!(result.usage.rows, 3);
+}
+
+#[test]
+fn readonly_snapshot_reports_busy_after_its_bounded_wait_before_consuming_rows() {
+    let (_root, store) = fixture();
+    let _writer = exclusive_wal_writer(&store);
+    let mut consumed = false;
+    let error = store
+        .with_query_snapshot(
+            "recording",
+            ReadLimits::default(),
+            || Ok(()),
+            |_| {
+                consumed = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    let error = error.downcast_ref::<rusqlite::Error>().unwrap();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy)
+    );
+    assert!(!consumed);
+}
+
+#[test]
+fn readonly_snapshot_keeps_the_interest_error_that_expires_during_a_busy_unit() {
+    use std::{
+        fmt,
+        time::{Duration, Instant},
+    };
+    #[derive(Debug)]
+    struct Abandoned;
+    impl fmt::Display for Abandoned {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("read interest abandoned")
+        }
+    }
+    impl std::error::Error for Abandoned {}
+    let (_root, store) = fixture();
+    let _writer = exclusive_wal_writer(&store);
+    let began = Instant::now();
+    let mut consumed = false;
+    let error = store
+        .with_query_snapshot(
+            "recording",
+            ReadLimits::default(),
+            move || {
+                if began.elapsed() >= Duration::from_millis(50) {
+                    return Err(Abandoned.into());
+                }
+                Ok(())
+            },
+            |_| {
+                consumed = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    assert!(error.downcast_ref::<Abandoned>().is_some(), "{error:#}");
+    assert!(!consumed);
+}
+
 fn fixture() -> (tempfile::TempDir, Store) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

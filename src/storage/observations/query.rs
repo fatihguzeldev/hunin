@@ -12,6 +12,9 @@ use std::{
     time::Duration,
 };
 
+/// Short WAL cleanup/recovery contention belongs to this read, not a replay.
+const SQLITE_BUSY_WAIT: Duration = Duration::from_millis(250);
+
 #[derive(Clone, Debug)]
 pub struct ReadLimits {
     pub maximum_rows: usize,
@@ -154,13 +157,14 @@ impl ReadControl {
     }
 
     fn sql<T>(&self, result: rusqlite::Result<T>) -> Result<T> {
-        result.map_err(|error| {
-            self.interruption
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or_else(|| error.into())
-        })
+        if let Some(reason) = self.interruption.lock().unwrap().take() {
+            return Err(reason);
+        }
+        // SQLite's supported busy timeout is one non-preemptible locking unit.
+        // Preserve the request's original typed error if its interest expired
+        // during that wait, including when SQLite ultimately returns BUSY.
+        self.checkpoint()?;
+        result.map_err(Into::into)
     }
 }
 
@@ -327,6 +331,8 @@ impl Store {
     /// Checkpoints must be pure controls: no SQL and no checker re-entry.
     /// Normal live-WAL semantics can use SQLite sidecars; this is not forensic
     /// zero-filesystem-write access. The retained schema/content is read-only.
+    /// Each SQLite locking unit may wait 250ms for transient contention; the
+    /// original request checkpoint is rechecked afterward. Rows are not replayed.
     pub fn with_query_snapshot<T>(
         &self,
         run_id: &str,
@@ -341,7 +347,7 @@ impl Store {
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
-        connection.busy_timeout(Duration::ZERO)?;
+        connection.busy_timeout(SQLITE_BUSY_WAIT)?;
         let control = ReadControl::new(&connection, limits.maximum_sqlite_steps, checkpoint);
         control.checkpoint()?;
         let tx = control.sql(connection.transaction())?;
