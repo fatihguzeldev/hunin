@@ -281,14 +281,19 @@ impl Store {
     }
 
     pub fn artifact_path(&self, run_id: &str, id: &str) -> Result<PathBuf> {
+        let artifact = self.artifact_metadata(run_id, id)?;
+        Ok(self.root.join("artifacts").join(artifact.sha256))
+    }
+
+    pub(crate) fn artifact_metadata(&self, run_id: &str, id: &str) -> Result<Artifact> {
         // Resolve through a run-owned reference, never by joining an arbitrary caller path.
         self.run(run_id)?;
-        let metadata: String = self
+        let (metadata, indexed_sha): (String, String) = self
             .connection()?
             .query_row(
-                "SELECT metadata FROM artifacts WHERE run_id=?1 AND id=?2",
+                "SELECT metadata,sha256 FROM artifacts WHERE run_id=?1 AND id=?2",
                 params![run_id, id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .context("artifact not found")?;
         let artifact: Artifact = serde_json::from_str(&metadata)?;
@@ -296,7 +301,11 @@ impl Store {
             super::maintenance::is_artifact_digest(&artifact.sha256),
             "retained artifact digest is not a canonical SHA-256"
         );
-        Ok(self.root.join("artifacts").join(artifact.sha256))
+        anyhow::ensure!(
+            artifact.sha256 == indexed_sha && artifact.id == id,
+            "artifact metadata disagrees with its indexed identity"
+        );
+        Ok(artifact)
     }
 }
 

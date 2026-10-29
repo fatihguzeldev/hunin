@@ -3,7 +3,23 @@ use crate::{importers::ImportedProfile, model::runs::Artifact, storage::Store};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{fmt, fs, io::Write, path::Path, time::Instant};
+
+#[derive(Debug)]
+pub(crate) struct ReanalysisSidecarLimit {
+    pub maximum: usize,
+    pub observed: usize,
+}
+impl fmt::Display for ReanalysisSidecarLimit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "profile-normalization-input-v1 restored sidecars exceed {} file limit (observed {} manifest entries)",
+            self.maximum, self.observed
+        )
+    }
+}
+impl std::error::Error for ReanalysisSidecarLimit {}
 
 pub(crate) struct Publication {
     pub accepted: bool,
@@ -15,14 +31,54 @@ pub(crate) fn publish(
     run_id: &str,
     profile: ImportedProfile,
 ) -> Result<Publication> {
-    let raw = store.add_artifact(run_id, &profile.source, &profile.format)?;
+    publish_controlled(store, run_id, profile, None)
+}
+
+pub(crate) fn publish_controlled(
+    store: &Store,
+    run_id: &str,
+    profile: ImportedProfile,
+    deadline: Option<std::time::Instant>,
+) -> Result<Publication> {
+    publish_with_limits(
+        store,
+        run_id,
+        profile,
+        crate::importers::NormalizationInputLimits::default(),
+        deadline,
+    )
+}
+
+fn publish_with_limits(
+    store: &Store,
+    run_id: &str,
+    profile: ImportedProfile,
+    limits: crate::importers::NormalizationInputLimits,
+    deadline: Option<Instant>,
+) -> Result<Publication> {
+    let raw = store.add_artifact_controlled(
+        run_id,
+        &profile.source,
+        &profile.format,
+        limits.raw_bytes,
+        &mut 0,
+        || checkpoint(deadline),
+    )?;
     anyhow::ensure!(
         raw.sha256 == profile.raw_sha256,
         "raw recording changed during normalization; retry with stable inputs"
     );
     let mut sidecars = Vec::new();
+    let mut sidecar_reads = 0;
     for path in &profile.sidecars {
-        let artifact = store.add_artifact(run_id, path, "profile-sidecar")?;
+        let artifact = store.add_artifact_controlled(
+            run_id,
+            path,
+            "profile-sidecar",
+            limits.sidecar_bytes.saturating_sub(sidecar_reads),
+            &mut sidecar_reads,
+            || checkpoint(deadline),
+        )?;
         anyhow::ensure!(
             profile.sidecar_sha256.get(path) == Some(&artifact.sha256),
             "profile sidecar changed during normalization; retry with stable inputs"
@@ -30,6 +86,7 @@ pub(crate) fn publish(
         sidecars.push(artifact);
     }
     for image in &profile.binary_snapshots {
+        checkpoint(deadline)?;
         anyhow::ensure!(
             format!("{:x}", Sha256::digest(&image.content)) == image.sha256,
             "native image snapshot digest mismatch"
@@ -40,11 +97,13 @@ pub(crate) fn publish(
             "native-image",
             &image.content,
         )?;
+        checkpoint(deadline)?;
     }
     let context = profile
         .native_image_context
         .as_ref()
         .map(|value| {
+            checkpoint(deadline)?;
             store.add_artifact_bytes(
                 run_id,
                 "native-images.json",
@@ -55,6 +114,7 @@ pub(crate) fn publish(
         .transpose()?;
     let mut sources = Vec::new();
     for source in &profile.source_snapshots {
+        checkpoint(deadline)?;
         anyhow::ensure!(
             format!("{:x}", Sha256::digest(source.content.as_bytes())) == source.sha256,
             "resolved source snapshot digest mismatch"
@@ -66,12 +126,14 @@ pub(crate) fn publish(
             source.content.as_bytes(),
         )?;
         sources.push(json!({"uri":source.uri,"artifact_id":artifact.id,"sha256":source.sha256,"provenance":source.provenance}));
+        checkpoint(deadline)?;
     }
     let id = format!("{run_id}:{}", raw.sha256);
     let decoder = profile
         .decoder_provenance
         .as_ref()
         .map(|value| {
+            checkpoint(deadline)?;
             store.add_artifact_bytes(
                 run_id,
                 "decoder-provenance.json",
@@ -104,7 +166,7 @@ pub(crate) fn publish(
             input_id: &id,
             document: &document,
         }),
-        deadline: None,
+        deadline,
     })?;
     Ok(Publication {
         accepted,
@@ -113,26 +175,53 @@ pub(crate) fn publish(
 }
 
 pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Result<Publication> {
+    reanalyze_controlled(store, run_id, artifact_id, None)
+}
+
+pub(crate) fn reanalyze_controlled(
+    store: &Store,
+    run_id: &str,
+    artifact_id: &str,
+    deadline: Option<std::time::Instant>,
+) -> Result<Publication> {
+    reanalyze_with_limits(
+        store,
+        run_id,
+        artifact_id,
+        crate::importers::NormalizationInputLimits::default(),
+        deadline,
+    )
+}
+
+fn reanalyze_with_limits(
+    store: &Store,
+    run_id: &str,
+    artifact_id: &str,
+    limits: crate::importers::NormalizationInputLimits,
+    deadline: Option<Instant>,
+) -> Result<Publication> {
+    checkpoint(deadline)?;
     let mut components = Path::new(run_id).components();
     anyhow::ensure!(
         matches!(components.next(), Some(std::path::Component::Normal(_)))
             && components.next().is_none(),
         "recording ID cannot name a managed directory"
     );
-    let raw = store
-        .artifacts(run_id)?
-        .into_iter()
-        .find(|a| a.id == artifact_id)
-        .context("recording artifact not found")?;
-    let inputs = store.document("profile-inputs",&format!("{run_id}:{}",raw.sha256)).context("recording lacks a retained import manifest; import the original recording and its sidecars first")?;
+    let selected = store.artifact_metadata(run_id, artifact_id)?;
+    let inputs = store.document("profile-inputs",&format!("{run_id}:{}",selected.sha256)).context("recording lacks a retained import manifest; import the original recording and its sidecars first")?;
     let raw: Artifact = serde_json::from_value(inputs["raw"].clone())?;
+    anyhow::ensure!(
+        raw.sha256 == selected.sha256 && inputs["run_id"] == run_id,
+        "retained import manifest does not match requested recording/raw identity"
+    );
     let directory = store
         .root()
         .join("captures")
         .join(run_id)
         .join("reanalysis")
         .join(uuid::Uuid::new_v4().to_string());
-    fs::create_dir_all(&directory)?;
+    fs::create_dir_all(directory.parent().context("reanalysis parent missing")?)?;
+    fs::create_dir(&directory)?;
     struct RestoreDirectory(std::path::PathBuf);
     impl Drop for RestoreDirectory {
         fn drop(&mut self) {
@@ -140,32 +229,62 @@ pub(crate) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Resul
         }
     }
     let _cleanup = RestoreDirectory(directory.clone());
-    let path = restore(store, run_id, &raw, &directory)?;
-    for sidecar in inputs["sidecars"]
+    let path = restore(
+        store,
+        run_id,
+        &raw,
+        &directory,
+        limits.raw_bytes,
+        &mut 0,
+        deadline,
+    )?;
+    let sidecars = inputs["sidecars"]
         .as_array()
-        .context("retained sidecar manifest missing")?
-    {
+        .context("retained sidecar manifest missing")?;
+    if sidecars.len() > 1024 {
+        return Err(ReanalysisSidecarLimit {
+            maximum: 1024,
+            observed: sidecars.len(),
+        }
+        .into());
+    }
+    let mut names = std::collections::BTreeMap::from([(raw.name.clone(), raw.sha256.clone())]);
+    let mut restored_sidecar_bytes = 0;
+    for sidecar in sidecars {
+        let sidecar: Artifact = serde_json::from_value(sidecar.clone())?;
+        if let Some(sha) = names.get(&sidecar.name) {
+            anyhow::ensure!(
+                sha == &sidecar.sha256,
+                "retained input filenames disagree on content identity"
+            );
+            continue;
+        }
         restore(
             store,
             run_id,
-            &serde_json::from_value(sidecar.clone())?,
+            &sidecar,
             &directory,
+            limits.sidecar_bytes.saturating_sub(restored_sidecar_bytes),
+            &mut restored_sidecar_bytes,
+            deadline,
         )?;
+        names.insert(sidecar.name, sidecar.sha256);
     }
     let mut profile = if let Some(id) = inputs["native_context_artifact_id"].as_str() {
-        crate::importers::import_with_native_context(
+        crate::importers::import_with_native_context_controlled(
             &path,
             &raw.format,
             run_id,
             &store.artifact_path(run_id, id)?,
+            deadline,
         )?
     } else {
-        crate::importers::import(&path, &raw.format, run_id)?
+        crate::importers::import_controlled(&path, &raw.format, run_id, deadline)?
     };
     if profile.decoder_provenance.is_some() && inputs["decoder_identity"].is_null() {
         profile.diagnostics.push("Legacy normalization has no decoder identity; this reanalysis uses the current identified decoder and cannot establish the historical decoder environment.".into());
     }
-    publish(store, run_id, profile)
+    publish_with_limits(store, run_id, profile, limits, deadline)
 }
 
 fn restore(
@@ -173,6 +292,9 @@ fn restore(
     run_id: &str,
     artifact: &Artifact,
     directory: &Path,
+    maximum: u64,
+    read_bytes: &mut u64,
+    deadline: Option<Instant>,
 ) -> Result<std::path::PathBuf> {
     anyhow::ensure!(
         !artifact.name.is_empty()
@@ -180,14 +302,43 @@ fn restore(
             && !matches!(artifact.name.as_str(), "." | ".."),
         "invalid retained artifact filename"
     );
-    let content = fs::read(store.artifact_path(run_id, &artifact.id)?)?;
+    let path = directory.join(&artifact.name);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(&path)?;
+    let mut hash = Sha256::new();
+    crate::host::visit_regular(
+        &store.artifact_path(run_id, &artifact.id)?,
+        maximum,
+        read_bytes,
+        || checkpoint(deadline),
+        |chunk| {
+            hash.update(chunk);
+            output.write_all(chunk)?;
+            Ok(())
+        },
+    )
+    .context("profile-normalization-input-v1 retained input restore")?;
     anyhow::ensure!(
-        format!("{:x}", Sha256::digest(&content)) == artifact.sha256,
+        format!("{:x}", hash.finalize()) == artifact.sha256,
         "retained profile/sidecar integrity mismatch"
     );
-    let path = directory.join(&artifact.name);
-    fs::write(&path, content)?;
+    output.flush()?;
+    checkpoint(deadline)?;
     Ok(path)
+}
+
+fn checkpoint(deadline: Option<Instant>) -> Result<()> {
+    anyhow::ensure!(
+        deadline.is_none_or(|deadline| Instant::now() < deadline),
+        "normalization finishing checkpoint deadline elapsed"
+    );
+    Ok(())
 }
 
 pub(crate) fn source_snapshots(store: &Store, run_id: &str) -> Result<Vec<Value>> {
@@ -241,3 +392,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod input_tests;

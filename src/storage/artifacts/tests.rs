@@ -144,3 +144,32 @@ fn artifact_path_refuses_corrupt_retained_digest_metadata() {
             .contains("canonical SHA-256")
     );
 }
+
+#[test]
+fn exact_artifact_metadata_cannot_redirect_to_a_different_indexed_blob() {
+    let root = tempfile::tempdir().unwrap();
+    let store = store(root.path());
+    let original = store
+        .add_artifact_bytes("raw-budget", "raw.bin", "raw", b"original")
+        .unwrap();
+    let unrelated = store
+        .add_artifact_bytes("raw-budget", "other.bin", "raw", b"unrelated")
+        .unwrap();
+    let mut metadata = serde_json::to_value(&original).unwrap();
+    metadata["sha256"] = json!(unrelated.sha256);
+    store
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE artifacts SET metadata=?1 WHERE run_id=?2 AND id=?3",
+            params![metadata.to_string(), "raw-budget", original.id],
+        )
+        .unwrap();
+    assert!(
+        store
+            .artifact_metadata("raw-budget", &original.id)
+            .unwrap_err()
+            .to_string()
+            .contains("indexed")
+    );
+}
