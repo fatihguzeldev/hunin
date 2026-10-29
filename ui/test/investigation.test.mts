@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Investigations } from '../src/investigation.js';
+import { Investigations, sourceReturnDepth } from '../src/investigation.js';
 
 function session() {
   const values = new Map<string, string>();
@@ -31,6 +31,7 @@ test('source and profile scope survive session reload only against the same know
     path: '/project/work.rs',
     line: 4,
     codeId: 'measured',
+    startLine: 5001,
   };
   first.persist('run');
   const reloaded = new Investigations(storage);
@@ -141,4 +142,19 @@ test('evidence restores observation IDs against result identity and immutable ar
     name: 'input',
     offset: 5000,
   });
+});
+
+test('private source-history depth preserves legacy entries without accepting invalid navigation distances', () => {
+  assert.equal(sourceReturnDepth(true), 1);
+  assert.equal(sourceReturnDepth(3), 3);
+  for (const invalid of [
+    false,
+    undefined,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    '2',
+    {},
+  ])
+    assert.equal(sourceReturnDepth(invalid), 0);
 });

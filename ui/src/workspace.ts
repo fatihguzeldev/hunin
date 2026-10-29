@@ -1,4 +1,9 @@
-import { Investigations, type Investigation } from './investigation';
+import {
+  Investigations,
+  sourceReturnDepth,
+  type Investigation,
+  type SourceSelection,
+} from './investigation';
 import { AnalysisWatch } from './analysis-watch';
 import { runSource } from './run';
 import { operation, type Run, type Summary, type Operations } from './api';
@@ -55,10 +60,9 @@ export class Workspace {
     views: Record<string, View>,
     private sourceView: (
       run: Run,
-      path: string,
-      line?: number,
-      codeId?: string,
-      signal?: AbortSignal,
+      selected: SourceSelection,
+      signal: AbortSignal,
+      page: (startLine: number) => void,
     ) => Promise<HTMLElement>,
   ) {
     let storage: Storage | undefined;
@@ -304,7 +308,7 @@ export class Workspace {
   }
 
   private historyState():
-    | { runId: string; saved: unknown; sourceReturn: boolean }
+    | { runId: string; saved: unknown; sourceReturn: number }
     | undefined {
     const value: unknown = history.state;
     if (!value || typeof value !== 'object' || !('hunin' in value))
@@ -321,7 +325,9 @@ export class Workspace {
     return {
       runId: state.runId,
       saved: state.saved,
-      sourceReturn: 'sourceReturn' in state && state.sourceReturn === true,
+      sourceReturn: sourceReturnDepth(
+        'sourceReturn' in state ? state.sourceReturn : undefined,
+      ),
     };
   }
 
@@ -333,7 +339,7 @@ export class Workspace {
 
   private writeLocation(
     mode: 'push' | 'replace' = 'replace',
-    sourceEntry = false,
+    sourceEntry = 0,
   ): void {
     const url = new URL(location.href);
     if (this.selected) url.searchParams.set('run', this.selected);
@@ -349,13 +355,12 @@ export class Workspace {
         saved: this.selected
           ? this.investigations.capture(this.selected)
           : undefined,
-        sourceReturn: Boolean(
-          source &&
-          (sourceEntry ||
-            (mode === 'replace' &&
-              previous?.runId === this.selected &&
-              previous.sourceReturn)),
-        ),
+        sourceReturn: source
+          ? sourceEntry ||
+            (mode === 'replace' && previous?.runId === this.selected
+              ? previous.sourceReturn
+              : 0)
+          : 0,
       },
     };
     history[mode === 'push' ? 'pushState' : 'replaceState'](state, '', url);
@@ -492,7 +497,9 @@ export class Workspace {
         const back = button(
           `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
           () => {
-            if (this.historyState()?.sourceReturn) history.back();
+            const entry = this.historyState();
+            const depth = entry?.runId === run.id ? entry.sourceReturn : 0;
+            if (depth > 0 && depth < history.length) history.go(-depth);
             else {
               investigation.source = undefined;
               this.returningFromSource = true;
@@ -508,10 +515,15 @@ export class Workspace {
         try {
           const body = await this.sourceView(
             run,
-            selected.path,
-            selected.line,
-            selected.codeId,
+            selected,
             signal,
+            (startLine) => {
+              if (signal.aborted) return;
+              const depth = this.historyState()?.sourceReturn ?? 0;
+              investigation.source = { ...selected, startLine };
+              this.writeLocation('push', depth ? depth + 1 : 0);
+              void this.render();
+            },
           );
           if (epoch !== this.epoch || signal.aborted) return;
           sourceBody.replaceWith(body);
@@ -740,7 +752,7 @@ export class Workspace {
       line,
       codeId,
     };
-    this.writeLocation('push', true);
+    this.writeLocation('push', 1);
     void this.render();
   }
 

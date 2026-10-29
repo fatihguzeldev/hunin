@@ -10,20 +10,22 @@ import { observationLabel, referenceIds } from '../observation';
 import { nativeEvidence } from '../native-evidence';
 import { pagedList } from '../paged-list';
 import { linkedRequest } from '../requests';
+import type { SourceSelection } from '../investigation';
+import { sourceNavigation } from '../source-navigation';
 
 export async function source(
   run: Run,
-  path: string,
-  line?: number,
-  codeId?: string,
-  signal?: AbortSignal,
+  selected: SourceSelection,
+  signal: AbortSignal,
+  page: (startLine: number) => void,
 ): Promise<HTMLElement> {
+  const { path, line, codeId, startLine } = selected;
   const data = await operation(
     'source.read',
     {
       run_id: run.id,
       path,
-      line,
+      line: startLine ?? line,
       code_id: codeId,
       count: 120,
     },
@@ -37,7 +39,12 @@ export async function source(
   const code = el(
     'pre',
     { class: 'source-code', tabindex: 0, 'aria-label': `Source ${data.path}` },
-    ...data.content.split('\n').map((text, index) =>
+    ...(data.content === '' &&
+    data.total_lines !== undefined &&
+    data.start_line > data.total_lines
+      ? []
+      : data.content.split('\n')
+    ).map((text, index) =>
       el(
         'span',
         {
@@ -87,6 +94,7 @@ export async function source(
               'The source bytes are verified. Their relationship to the loaded code has not been verified.',
             )
           : null,
+    sourceNavigation(data, line, page),
     el(
       'section',
       { class: 'panel' },

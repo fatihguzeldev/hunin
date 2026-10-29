@@ -33,6 +33,7 @@ export type SourceSelection = {
   path: string;
   line?: number;
   codeId?: string;
+  startLine?: number;
 };
 
 export type Investigation = {
@@ -165,13 +166,19 @@ function decode(value: unknown): SavedInvestigation | undefined {
       (typeof source.line === 'number' &&
         Number.isInteger(source.line) &&
         source.line >= 1)) &&
-    (source.codeId === undefined || typeof source.codeId === 'string')
+    (source.codeId === undefined || typeof source.codeId === 'string') &&
+    (source.startLine === undefined ||
+      (typeof source.startLine === 'number' &&
+        Number.isSafeInteger(source.startLine) &&
+        source.startLine >= 1))
   ) {
     result.source = {
       view,
       path,
       line: source.line,
       codeId: text(source.codeId),
+      startLine:
+        typeof source.startLine === 'number' ? source.startLine : undefined,
     };
   }
   return {
@@ -179,6 +186,14 @@ function decode(value: unknown): SavedInvestigation | undefined {
     resultIdentity: text(saved.resultIdentity),
     state: result,
   };
+}
+
+/** Older private history entries used a boolean for the first source window. */
+export function sourceReturnDepth(value: unknown): number {
+  if (value === true) return 1;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : 0;
 }
 
 /** Own private investigation preferences; raw observations and source bytes stay in the service. */
