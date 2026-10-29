@@ -1,4 +1,4 @@
-use super::Engine;
+use super::{Engine, blocking};
 use crate::{execution::ownership::is_proven_absent, model::now_us};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -82,8 +82,13 @@ impl Engine {
         Ok(count)
     }
     pub async fn cancel(&self, id: &str) -> Result<Value> {
-        self.recover()?;
-        let document = self.store.request_analysis_cancel(id)?;
+        let engine = self.clone();
+        let query_id = id.to_owned();
+        let document = blocking(move || {
+            engine.recover()?;
+            engine.store.request_analysis_cancel(&query_id)
+        })
+        .await?;
         if let Some(sender) = self.active.lock().await.get(id) {
             let _ = sender.send(true);
         }
@@ -93,8 +98,13 @@ impl Engine {
     }
     pub async fn wait(&self, id: &str) -> Result<Value> {
         loop {
-            self.recover()?;
-            let document = self.store.document("analysis-results", id)?;
+            let engine = self.clone();
+            let query_id = id.to_owned();
+            let document = blocking(move || {
+                engine.recover()?;
+                engine.store.document("analysis-results", &query_id)
+            })
+            .await?;
             if document["status"] != "running" {
                 return Ok(document);
             }
@@ -129,12 +139,16 @@ impl Engine {
             .map(|(id, sender)| (id.clone(), sender.clone()))
             .collect();
         for (id, sender) in &owned {
-            let _ = self.store.request_analysis_cancel(id);
             let _ = sender.send(true);
+            let store = self.store.clone();
+            let id = id.clone();
+            let _ = blocking(move || store.request_analysis_cancel(&id)).await;
         }
         loop {
             let active = self.active.lock().await;
-            if owned.iter().all(|(id, _)| !active.contains_key(id)) {
+            if owned.iter().all(|(id, _)| !active.contains_key(id))
+                && self.slots.available_permits() == self.maximum_in_flight
+            {
                 return Ok(());
             }
             drop(active);

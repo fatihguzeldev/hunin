@@ -111,8 +111,11 @@ pub async fn prepare(
         command[0] = python.display().to_string();
     }
     if let Some(lock) = declarations["node_lockfile"].as_str() {
-        let npm =
-            super::package::executable(if cfg!(windows) { "npm.cmd" } else { "npm" }, workspace)?;
+        let source = workspace.to_owned();
+        let npm = super::blocking(move || {
+            super::package::executable(if cfg!(windows) { "npm.cmd" } else { "npm" }, &source)
+        })
+        .await?;
         commands.push((
             vec![
                 npm.display().to_string(),
@@ -134,9 +137,18 @@ pub async fn prepare(
     }
     let mut steps = Vec::new();
     for (index, (arguments, cwd)) in commands.iter().enumerate() {
-        let executable = super::package::executable(&arguments[0], cwd)?;
-        let identity =
-            json!({"path":executable,"sha256":super::package::digest(&fs::read(&executable)?)});
+        let program = arguments[0].clone();
+        let source = cwd.clone();
+        let check = control.clone();
+        let identity = super::blocking(move || {
+            check.check()?;
+            let executable = super::package::executable(&program, &source)?;
+            let identity =
+                json!({"path":executable,"sha256":super::package::digest(&fs::read(&executable)?)});
+            check.check()?;
+            Ok(identity)
+        })
+        .await?;
         let status = super::process::execute(
             arguments,
             cwd,
@@ -147,10 +159,15 @@ pub async fn prepare(
         )
         .await?;
         steps.push(json!({"command":arguments,"executable":identity,"exit_code":status.code()}));
-        fs::write(
-            execution.join("dependencies.json"),
-            serde_json::to_vec_pretty(&steps)?,
-        )?;
+        let destination = execution.join("dependencies.json");
+        let metadata = serde_json::to_vec_pretty(&steps)?;
+        let check = control.clone();
+        super::blocking(move || {
+            check.check()?;
+            fs::write(destination, metadata)?;
+            check.check()
+        })
+        .await?;
         if !status.success() {
             bail!(
                 "managed dependency step {index} failed; inspect setup-{index}.stderr for the missing prerequisite or lockfile/install error"

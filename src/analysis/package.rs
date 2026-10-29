@@ -268,3 +268,28 @@ pub fn verify(analysis: &Value) -> Result<PathBuf> {
     }
     Ok(source)
 }
+
+pub(super) fn copy_workspace(
+    analysis: &Value,
+    source: &Path,
+    workspace: &Path,
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    checkpoint()?;
+    fs::create_dir_all(workspace)?;
+    for (path, identity) in analysis["files"]
+        .as_object()
+        .context("package file manifest missing")?
+    {
+        checkpoint()?;
+        let bytes = fs::read(source.join(path))?;
+        if digest(&bytes) != identity["sha256"] {
+            bail!("managed package changed while preparing execution");
+        }
+        let destination = workspace.join(path);
+        fs::create_dir_all(destination.parent().unwrap())?;
+        fs::write(&destination, bytes)?;
+        fs::set_permissions(destination, fs::metadata(source.join(path))?.permissions())?;
+    }
+    Ok(())
+}
