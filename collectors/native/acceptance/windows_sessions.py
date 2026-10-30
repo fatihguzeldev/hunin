@@ -17,6 +17,25 @@ HERE = Path(__file__).resolve().parents[1]
 STOP_RESULTS = frozenset((0, 234, 2402, 4201))
 
 
+def wait_for_report_state(path, state, deadline):
+    """Poll only the published report; readability never substitutes for cleanup."""
+    last_error = None
+    last_state = None
+    while time.monotonic() < deadline:
+        try:
+            observed = json.loads(path.read_text())
+            last_state = observed["state"]
+            if last_state == state:
+                return observed
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError) as error:
+            last_error = error
+        time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+    raise RuntimeError(
+        f"Published report {path} did not reach {state!r} before its deadline; "
+        f"last observed state={last_state!r}; last read error={last_error!r}"
+    ) from last_error
+
+
 def verify_direct_recording(report, wrapper_pid, profile, active_handle):
     assert report.get("schema") == "hunin-xperf-session-v1", report
     assert report.get("state") == "recording", (
@@ -399,19 +418,7 @@ def verify(binary, output, sampler=None):
         direct_pid = direct.pid
         death_report = death / "cpu.samply.xperf-session.json"
         deadline = time.monotonic() + 2
-        before_report = None
-        while time.monotonic() < deadline:
-            try:
-                observed = json.loads(death_report.read_text())
-                if observed["state"] == "recording":
-                    before_report = observed
-                    break
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-            time.sleep(0.02)
-        assert before_report is not None, (
-            "Direct wrapper has no live session ownership report"
-        )
+        before_report = wait_for_report_state(death_report, "recording", deadline)
         direct_handle = execute([control, "query"], output)
         verify_direct_recording(before_report, direct_pid, profile, direct_handle)
         assert direct.poll() is None, (
@@ -433,19 +440,7 @@ def verify(binary, output, sampler=None):
         direct.kill()
         direct.wait(timeout=5)
         deadline = time.monotonic() + 8
-        final_report = None
-        while time.monotonic() < deadline:
-            try:
-                observed = json.loads(death_report.read_text())
-                if observed["state"] == "stopped":
-                    final_report = observed
-                    break
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-            time.sleep(0.02)
-        assert final_report is not None, (
-            "Direct Samply wrapper death left unconfirmed ETW cleanup"
-        )
+        final_report = wait_for_report_state(death_report, "stopped", deadline)
         remaining_handle = execute([control, "query"], output)
         verify_direct_cleanup(
             before_report,
