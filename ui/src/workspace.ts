@@ -7,7 +7,8 @@ import {
 import { AnalysisWatch } from './analysis/watch';
 import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
-import { runSource } from './recordings/presentation';
+import { runSource, runStatusTone } from './recordings/presentation';
+import { RecordingCatalog } from './recordings/catalog';
 import { operation, type Run, type Summary } from './api';
 import {
   recordingDetails,
@@ -20,13 +21,13 @@ import { recordDialog } from './recordings/create';
 import { importRecordingDialog } from './recordings/import';
 import { removeRecordingDialog } from './recordings/remove';
 import { capabilities } from './views/capabilities';
-import { overview, runTone } from './views/overview';
+import { overview } from './views/overview';
 import { scenarios } from './views/scenarios';
 
 export type ViewContext = {
   run: Run;
   summary?: Summary;
-  runs: Run[];
+  runs: readonly Run[];
   investigation: Investigation;
   signal: AbortSignal;
   persist: (mode?: 'push' | 'replace') => void;
@@ -40,7 +41,7 @@ export type View = {
 };
 
 export class Workspace {
-  private runs: Run[] = [];
+  private catalog = new RecordingCatalog();
   private selected = new URLSearchParams(location.search).get('run') ?? '';
   private tab = new URLSearchParams(location.search).get('view') ?? 'overview';
   private rail = el('div', { class: 'run-list', 'aria-label': 'Recordings' });
@@ -48,10 +49,7 @@ export class Workspace {
   private epoch = 0;
   // User navigation owns foreground intent across automatic status rerenders.
   private navigationEpoch = 0;
-  private reloadEpoch = 0;
-  private listController: AbortController | undefined;
   private query = '';
-  private nextCursor: string | undefined;
   private focusSelectedTab = false;
   private poll: ReturnType<typeof setTimeout> | undefined;
   private views: Record<string, View>;
@@ -112,7 +110,7 @@ export class Workspace {
     window.addEventListener('pagehide', () => {
       this.attemptMonitor.pause();
       this.renderController?.abort();
-      this.listController?.abort();
+      this.catalog.pause();
       clearTimeout(this.poll);
     });
     window.addEventListener('pageshow', (event) => {
@@ -268,29 +266,15 @@ export class Workspace {
   }
 
   private async reload(select?: string, preserveView = false): Promise<void> {
-    this.listController?.abort();
-    const controller = new AbortController();
-    this.listController = controller;
-    const generation = ++this.reloadEpoch;
     const navigation = this.navigationEpoch;
+    const read = await this.catalog.refresh(() =>
+      navigation === this.navigationEpoch
+        ? (select ?? this.selected)
+        : this.selected,
+    );
+    if (!read.current()) return;
     try {
-      const data = await operation(
-        'runs.list',
-        { limit: 100 },
-        controller.signal,
-      );
-      if (generation !== this.reloadEpoch || controller.signal.aborted) return;
-      const current = this.runs.find(
-        (run) =>
-          run.id ===
-          (navigation === this.navigationEpoch
-            ? (select ?? this.selected)
-            : this.selected),
-      );
-      this.runs = data.runs;
-      if (current && !this.runs.some((run) => run.id === current.id))
-        this.runs.push(current);
-      this.nextCursor = data.next_cursor ?? undefined;
+      if ('error' in read) throw read.error;
       if (preserveView || navigation !== this.navigationEpoch) {
         this.renderRail();
         return;
@@ -301,15 +285,11 @@ export class Workspace {
         this.writeLocation();
       }
       if (!this.selected && !['capabilities', 'scenarios'].includes(this.tab))
-        this.selected = this.runs[0]?.id ?? '';
+        this.selected = this.catalog.runs[0]?.id ?? '';
       this.renderRail();
       await this.render();
     } catch (error) {
-      if (
-        generation === this.reloadEpoch &&
-        navigation === this.navigationEpoch &&
-        !controller.signal.aborted
-      ) {
+      if (read.current() && navigation === this.navigationEpoch) {
         const feedback = errorView(error, () => {
           void this.reload(undefined, preserveView);
         });
@@ -321,7 +301,7 @@ export class Workspace {
 
   private renderRail(): void {
     this.rail.replaceChildren();
-    const shown = this.runs.filter((run) =>
+    const shown = this.catalog.runs.filter((run) =>
       `${run.name} ${run.runtime} ${run.id}`
         .toLowerCase()
         .includes(this.query.toLowerCase()),
@@ -348,7 +328,7 @@ export class Workspace {
           'span',
           { class: 'run-item-info' },
           el('span', {}, run.runtime),
-          badge(run.status, runTone(run)),
+          badge(run.status, runStatusTone(run.status)),
         ),
         el('span', { class: 'run-item-info mono' }, run.id.slice(0, 12)),
       );
@@ -359,36 +339,27 @@ export class Workspace {
         el(
           'p',
           { class: 'sidebar-empty' },
-          this.runs.length
+          this.catalog.runs.length
             ? 'No matching recordings.'
             : 'No recordings yet. Record a workload to begin.',
         ),
       );
-    if (this.nextCursor) {
+    if (this.catalog.hasOlder) {
       const older = button(
         'Load older recordings',
         () => {
           older.disabled = true;
-          const cursor = this.nextCursor;
-          const generation = this.reloadEpoch;
-          const signal = this.listController?.signal;
-          void operation('runs.list', { limit: 100, cursor }, signal)
-            .then((data) => {
-              if (generation !== this.reloadEpoch || signal?.aborted) return;
-              const unique = new Map(this.runs.map((run) => [run.id, run]));
-              for (const run of data.runs)
-                if (!unique.has(run.id)) unique.set(run.id, run);
-              this.runs = [...unique.values()];
-              this.nextCursor = data.next_cursor ?? undefined;
-              this.renderRail();
-            })
-            .catch((error) => {
-              if (generation === this.reloadEpoch && !signal?.aborted)
+          void this.catalog
+            .older()
+            .then((read) => {
+              if (!read.current()) return;
+              if ('error' in read)
                 this.rail.append(
-                  errorView(error, () => {
+                  errorView(read.error, () => {
                     void this.reload();
                   }),
                 );
+              else this.renderRail();
             })
             .finally(() => {
               older.disabled = false;
@@ -524,10 +495,7 @@ export class Workspace {
       if (investigation.source?.view !== this.tab)
         investigation.source = undefined;
       this.writeLocation('replace');
-      if (!this.runs.some((value) => value.id === run.id)) {
-        this.runs.push(run);
-        this.renderRail();
-      }
+      if (this.catalog.ensure(run)) this.renderRail();
       const view = el(
         'section',
         {
@@ -648,7 +616,7 @@ export class Workspace {
           const body = await renderer.render({
             run,
             summary,
-            runs: this.runs,
+            runs: this.catalog.runs,
             source,
             investigation,
             signal,
@@ -707,9 +675,7 @@ export class Workspace {
         .then((details) => {
           if (epoch !== this.epoch || signal.aborted) return;
           const { run, result_identity } = details;
-          this.runs = this.runs.map((value) =>
-            value.id === run.id ? run : value,
-          );
+          this.catalog.observe(run);
           this.renderRail();
           const invalidation = this.investigations.observeResult(
             id,
@@ -819,7 +785,7 @@ export class Workspace {
         el(
           'div',
           { class: 'run-meta' },
-          badge(run.status, runTone(run)),
+          badge(run.status, runStatusTone(run.status)),
           el('span', {}, run.runtime),
           el(
             'span',

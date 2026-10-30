@@ -1,14 +1,10 @@
 import { weight, weightShare } from '../profile-weight';
-import { runCorrectness, runStatusTone } from '../recordings/presentation';
+import { runCorrectness } from '../recordings/presentation';
 import { operation, type Operations, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
 import { queryFailureMessage } from '../recordings/details';
 import { duration, numeric } from '../format';
 import { hasInspectableSource } from '../source/paths';
-
-export function runTone(run: Run): string {
-  return runStatusTone(run.status);
-}
 
 function stat(label: string, value: string, note: string): HTMLElement {
   return el(
