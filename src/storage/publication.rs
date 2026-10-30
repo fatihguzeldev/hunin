@@ -137,7 +137,7 @@ impl Store {
                     run_id,
                     observation.id.as_str(),
                     r["kind"].as_str(),
-                    r["timestamp_us"].as_u64(),
+                    crate::model::numbers::unsigned_integer(&r["timestamp_us"]),
                     result_id.as_str(),
                     serde_json::to_string(r)?
                 ])?;

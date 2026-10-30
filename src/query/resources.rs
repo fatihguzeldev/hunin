@@ -1,4 +1,5 @@
 use super::WorkBudget;
+use crate::model::numbers::unsigned_integer;
 use anyhow::Result;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,7 +24,7 @@ pub(super) fn resources_page_checked(
     for record in records.iter().filter(|r| r["kind"] == "metric") {
         work.check()?;
         let unmapped = record["attributes"]["clock_alignment"] == "unmapped";
-        let timestamp = record["timestamp_us"].as_u64().unwrap_or(0);
+        let timestamp = unsigned_integer(&record["timestamp_us"]).unwrap_or(0);
         if !unmapped
             && (!params["start_us"]
                 .as_u64()
@@ -61,9 +62,8 @@ pub(super) fn resources_page_checked(
     for (_, points) in groups.values_mut() {
         work.check()?;
         points.sort_by(|a, b| {
-            a["timestamp_us"]
-                .as_u64()
-                .cmp(&b["timestamp_us"].as_u64())
+            unsigned_integer(&a["timestamp_us"])
+                .cmp(&unsigned_integer(&b["timestamp_us"]))
                 .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
         });
         work.check()?;

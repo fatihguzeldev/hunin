@@ -95,7 +95,7 @@ fn resource_value(
             .entry(lifetime)
             .or_insert((value, BTreeSet::new()));
         entry.0 = entry.0.max(value);
-        if let Some(timestamp) = row["timestamp_us"].as_u64()
+        if let Some(timestamp) = crate::model::numbers::unsigned_integer(&row["timestamp_us"])
             && !entry.1.contains(&timestamp)
         {
             work.entry()?;

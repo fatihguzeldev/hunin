@@ -25,6 +25,24 @@ pub(crate) fn validate_ids(
         if let Err(error) = schema.validate(record) {
             bail!("observation schema: {error}");
         }
+        for field in ["timestamp_us", "duration_us", "pid"] {
+            if let Some(value) = record.get(field) {
+                anyhow::ensure!(
+                    crate::model::numbers::unsigned_integer(value).is_some(),
+                    "observation {field} must be an exactly representable unsigned integer"
+                );
+            }
+        }
+        for frame in record["stack"].as_array().into_iter().flatten() {
+            for field in ["line", "column"] {
+                if let Some(value) = frame.get(field) {
+                    anyhow::ensure!(
+                        crate::model::numbers::unsigned_integer(value).is_some(),
+                        "observation frame {field} must be an exactly representable unsigned integer"
+                    );
+                }
+            }
+        }
         if record["run_id"].as_str() != Some(run_id) {
             bail!("observation belongs to another run");
         }

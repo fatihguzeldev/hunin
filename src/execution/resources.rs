@@ -130,7 +130,10 @@ impl Observer {
                         .fetch_add(row_count, Ordering::Relaxed);
                     break;
                 }
-                if let Some(timestamp) = rows.first().and_then(|r| r["timestamp_us"].as_u64()) {
+                if let Some(timestamp) = rows
+                    .first()
+                    .and_then(|r| crate::model::numbers::unsigned_integer(&r["timestamp_us"]))
+                {
                     for row in &mut rows {
                         row["attributes"]["interval_us"] =
                             json!(previous.map(|last: u64| timestamp.saturating_sub(last)));
