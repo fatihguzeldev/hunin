@@ -1,9 +1,12 @@
 mod applicability;
+mod attempt;
 mod dependencies;
 mod engine;
 mod files;
+mod finishing;
 mod input;
 mod lifecycle;
+mod output;
 mod package;
 mod process;
 mod retention;
