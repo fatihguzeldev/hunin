@@ -109,7 +109,7 @@ pub(super) fn write_document(
 ) -> Result<()> {
     let owner = if matches!(
         namespace,
-        "analysis-results" | "cancellations" | "profile-inputs"
+        "analysis-results" | "cancellations" | "profile-inputs" | "call-count-requests"
     ) {
         Some(
             value["run_id"]

@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at_us INTEGER NOT NULL,
     manifest TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS run_count_request ON runs(json_extract(manifest,'$.source.call_counting.request_key')) WHERE json_valid(manifest);
+CREATE INDEX IF NOT EXISTS run_count_parent ON runs(json_extract(manifest,'$.source.call_counting.parent_run_id'),started_at_us DESC,id DESC) WHERE json_valid(manifest);
 CREATE TABLE IF NOT EXISTS result_sets (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,

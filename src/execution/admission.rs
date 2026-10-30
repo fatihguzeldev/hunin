@@ -1,5 +1,5 @@
 //! Recording-family admission, preparation and durable ownership handoff.
-use super::{Engine, StartRequest, blocking, correctness, identity};
+use super::{CountOrigin, Engine, StartRequest, blocking, correctness, identity};
 use crate::collection;
 use crate::model::{
     now_us,
@@ -18,7 +18,34 @@ struct Prepared {
 
 impl Engine {
     pub async fn start(&self, request: StartRequest) -> Result<Run> {
+        self.start_with_origin(request, None).await
+    }
+
+    pub(crate) async fn start_counted(
+        &self,
+        request: StartRequest,
+        parent_run_id: String,
+        request_key: String,
+    ) -> Result<Run> {
+        self.start_with_origin(
+            request,
+            Some(CountOrigin {
+                parent_run_id,
+                request_key,
+            }),
+        )
+        .await
+    }
+
+    async fn start_with_origin(
+        &self,
+        request: StartRequest,
+        origin: Option<CountOrigin>,
+    ) -> Result<Run> {
         self.check_admission()?;
+        if let Some(counting) = &request.call_counting {
+            counting.validate()?;
+        }
         if request.command.is_empty() || request.command[0].is_empty() {
             bail!("a nonempty command is required");
         }
@@ -38,7 +65,7 @@ impl Engine {
         let engine = self.clone();
         // A disconnected acknowledgement must not detach a committed recording
         // from its owner, nor release capacity while preparation still runs.
-        tokio::spawn(async move { engine.prepare_and_admit(request, permit).await })
+        tokio::spawn(async move { engine.prepare_and_admit(request, origin, permit).await })
             .await
             .context("recording admission task failed")?
     }
@@ -50,7 +77,7 @@ impl Engine {
         Ok(())
     }
 
-    fn prepare(&self, request: StartRequest) -> Result<Prepared> {
+    fn prepare(&self, request: StartRequest, origin: Option<CountOrigin>) -> Result<Prepared> {
         self.check_admission()?;
         let cwd = request
             .cwd
@@ -109,6 +136,14 @@ impl Engine {
             Sha256::digest(serde_json::to_vec(&recipe)?)
         ));
         run.source["owner"] = serde_json::to_value(&self.owner)?;
+        if let Some(counting) = &request.call_counting {
+            run.source["call_counting"] = json!({
+                "options":counting,
+                "parent_run_id":origin.as_ref().map(|value| &value.parent_run_id),
+                "request_key":origin.as_ref().map(|value| &value.request_key),
+                "requested_scope":if counting.functions.is_empty(){"all"}else{"selected"},
+            });
+        }
         run.source["target_outcome"] = json!({"status":"not_started","exit_code":null});
         run.source["admission"] = json!({"scope":"shared_recording_engine_family","maximum_in_flight":self.maximum_in_flight,"permit_scope":"preparation_execution_terminal_retention_and_active_cleanup","limitations":"Separate Engine instances and processes are independent; this is not a memory or store-wide quota"});
         Ok(Prepared { run, request })
@@ -129,10 +164,11 @@ impl Engine {
     async fn prepare_and_admit(
         &self,
         request: StartRequest,
+        origin: Option<CountOrigin>,
         permit: OwnedSemaphorePermit,
     ) -> Result<Run> {
         let engine = self.clone();
-        let prepared = blocking(move || engine.prepare(request)).await?;
+        let prepared = blocking(move || engine.prepare(request, origin)).await?;
         let active = self.active.clone().lock_owned().await;
         let engine = self.clone();
         let (prepared, sender, cancellation) = blocking(move || {

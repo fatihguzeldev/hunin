@@ -112,7 +112,11 @@ impl Engine {
         } = capture;
         let directory = capture.artifact_dir.clone();
         let stdout = directory.join("stdout.txt");
-        let native_collection = native::handles_runtime(&run.runtime);
+        let native_collection = native::handles_runtime(&run.runtime)
+            && !matches!(
+                plan.output,
+                collection::CaptureOutput::FunctionCounts { .. }
+            );
         let (metrics, retention) = metrics.finish();
         if retention.truncated {
             run.diagnostics.push(format!("Resource retention safety budget reached; {} received observation rows were not retained. Target correctness is independent; see resource_observation.retention",retention.discarded_rows));

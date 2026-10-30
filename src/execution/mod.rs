@@ -33,6 +33,13 @@ pub struct StartRequest {
     pub input_files: Vec<PathBuf>,
     pub expected_stdout: Option<String>,
     pub expected_stdout_sha256: Option<String>,
+    /// Explicit opt-in; absence preserves ordinary automatic CPU sampling.
+    pub call_counting: Option<crate::model::calls::CountRequest>,
+}
+
+struct CountOrigin {
+    parent_run_id: String,
+    request_key: String,
 }
 
 /// Owned blocking units settle before their recording releases admission.

@@ -1,4 +1,5 @@
 mod analyses;
+mod calls;
 mod capabilities;
 mod comparison;
 mod contracts;
@@ -109,6 +110,27 @@ impl Operations {
             .unwrap_or(0);
         let read_response = definition["_meta"]["hunin/lifecycle"]["kind"] == "read";
         let result: Result<Value> = match name {
+            "calls.plan" | "calls.measure" => {
+                let planning_store = store.clone();
+                let planning_params = params.clone();
+                let prepared = self
+                    .aggregate_work
+                    .read(move |_| calls::plan(&planning_store, &planning_params))
+                    .await?;
+                if name == "calls.plan" {
+                    Ok(json!({"plan":prepared.2}))
+                } else {
+                    let engine = self.engine.clone();
+                    tokio::spawn(async move { calls::measure(engine, params, prepared).await })
+                        .await?
+                }
+            }
+            "calls.query" => {
+                let store = store.clone();
+                self.aggregate_work
+                    .read(move |interest| calls::query(&store, &params, move || interest.check()))
+                    .await
+            }
             "storage.inspect" => {
                 let store = store.clone();
                 self.aggregate_work

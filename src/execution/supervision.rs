@@ -55,9 +55,14 @@ impl Engine {
         // Failure to retain that evidence must not stop or replace the target.
         #[cfg(windows)]
         let native_wrapper_birth = crate::host::process::identity::birth(pid);
-        let native_collection = native::handles_runtime(&run.runtime);
-        let collector_wrapper = plan.command[0] != capture.command[0]
-            || matches!(run.runtime.as_str(), "go-test" | "go-trace");
+        let function_counts = matches!(
+            plan.output,
+            crate::collection::CaptureOutput::FunctionCounts { .. }
+        );
+        let native_collection = native::handles_runtime(&run.runtime) && !function_counts;
+        let collector_wrapper = !function_counts
+            && (plan.command[0] != capture.command[0]
+                || matches!(run.runtime.as_str(), "go-test" | "go-trace"));
         let store = self.store.clone();
         let started_capture = capture.clone();
         let started = blocking(move || {
