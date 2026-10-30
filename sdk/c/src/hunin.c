@@ -239,7 +239,8 @@ static void number(double value) {
 #endif
 }
 static void finish(void) {
-    fputs(",\"attributes\":{\"clock\":\"unix_epoch\",\"clock_alignment\":\"direct_epoch\",\"clock_source\":\"epoch clock with monotonic "
+    fputs(",\"attributes\":{\"clock\":\"unix_epoch\",\"clock_alignment\":\"direct_epoch\",\"clock_"
+          "source\":\"epoch clock with monotonic "
           "duration\",\"thread_id_source\":",
           output);
 #ifdef _WIN32
