@@ -21,6 +21,7 @@ export class InvestigationHistory {
   constructor(
     private investigations: Investigations,
     private browser: Browser = window,
+    private storageScope?: string,
   ) {}
 
   state(): { runId: string; saved: unknown; sourceReturn: number } | undefined {
@@ -33,7 +34,10 @@ export class InvestigationHistory {
       typeof state !== 'object' ||
       !('runId' in state) ||
       typeof state.runId !== 'string' ||
-      !('saved' in state)
+      !('saved' in state) ||
+      (this.storageScope !== undefined &&
+        (!('storageScope' in state) ||
+          state.storageScope !== this.storageScope))
     )
       return undefined;
     return {
@@ -75,6 +79,7 @@ export class InvestigationHistory {
     const source = runId ? this.investigations.forRun(runId).source : undefined;
     const state = {
       hunin: {
+        storageScope: this.storageScope,
         runId,
         saved: runId ? this.investigations.capture(runId) : undefined,
         sourceReturn: source

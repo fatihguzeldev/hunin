@@ -108,3 +108,23 @@ test('leaving source clears its return distance while keeping unrelated URL stat
     assert.equal(navigation.state(), undefined);
   }
 });
+
+test('history from another project cannot restore or traverse a same-ID recording', () => {
+  const binding = browser();
+  const one = new Investigations();
+  one.forRun('same').profile.query = 'project one';
+  one.forRun('same').source = { view: 'profile', path: 'one.ts' };
+  new InvestigationHistory(one, binding, 'project:one').write(
+    { runId: 'same', view: 'profile' },
+    'push',
+    1,
+  );
+  const two = new Investigations();
+  const otherHistory = new InvestigationHistory(two, binding, 'project:two');
+  otherHistory.restore('same');
+  assert.equal(two.forRun('same').profile.query, '');
+  assert.equal(otherHistory.returnToView('same'), false);
+  const restored = new Investigations();
+  new InvestigationHistory(restored, binding, 'project:one').restore('same');
+  assert.equal(restored.forRun('same').profile.query, 'project one');
+});
