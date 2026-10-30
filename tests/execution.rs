@@ -205,7 +205,7 @@ async fn cancellation_allows_graceful_cleanup_and_stops_owned_descendants() {
     let command = vec![
         "/bin/sh".to_owned(),
         "-c".to_owned(),
-        "trap 'echo graceful > \"$2\"; wait; exit 0' TERM; sleep 30 & echo $! > \"$1\"; wait"
+        "trap 'echo graceful > \"$2\"; wait; exit 0' TERM; sleep 30 & child_pid=$!; printf '%s\\n' \"$child_pid\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; wait"
             .to_owned(),
         "control".to_owned(),
         pid_file.display().to_string(),
