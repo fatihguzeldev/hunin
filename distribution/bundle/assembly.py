@@ -14,7 +14,7 @@ import zipfile
 from . import inventory
 from .metadata import build_metadata, sdk_versions
 
-from ..installation.bundle import check_product, probe_binary
+from ..installation.hunin_install import contracts, probe
 
 PLATFORMS = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64")
 RUST_TARGETS = {
@@ -116,12 +116,12 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
                 f"Preserving existing bundle output: {path}. Choose a fresh --output directory."
             )
     files = contents(root, binary, target)
-    product_info = probe_binary(binary)
+    product_info = probe.probe_binary(binary)
     file_metadata = {
         name: {"sha256": sha256(data), "size": len(data)}
         for name, data in sorted(files.items())
     }
-    check_product(
+    contracts.check_product(
         product_info,
         version,
         file_metadata,

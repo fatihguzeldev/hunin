@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from . import bundle as installer
+from .hunin_install import activation, probe, verification
 
 
 def product_fixture(root):
@@ -78,7 +78,7 @@ class ProductContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             baseline = product_fixture(root)
-            installer.verify(root)
+            verification.verify(root)
             for path, value in [
                 (("contracts", "record", "sha256"), "0" * 64),
                 (("contracts", "record", "id"), "https://different/record"),
@@ -95,7 +95,7 @@ class ProductContractTests(unittest.TestCase):
                     target[path[-1]] = value
                     (root / "manifest.json").write_text(json.dumps(manifest))
                     with self.assertRaisesRegex(ValueError, "[Cc]ontract|[Pp]roduct"):
-                        installer.verify(root)
+                        verification.verify(root)
 
     def test_staged_executable_descriptor_is_rechecked_before_publication(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -106,13 +106,13 @@ class ProductContractTests(unittest.TestCase):
             different = json.loads(json.dumps(manifest["product_build_info"]))
             different["storage"]["maximum_schema_version"] = 99
             with (
-                patch.object(installer, "host_platform", return_value="linux-x64"),
+                patch.object(verification, "host_platform", return_value="linux-x64"),
                 patch.object(
-                    installer, "probe_binary", return_value=different, create=True
+                    probe, "probe_binary", return_value=different, create=True
                 ),
             ):
                 with self.assertRaisesRegex(ValueError, "[Dd]escriptor"):
-                    installer.install(source, root / "installed")
+                    activation.install(source, root / "installed")
             self.assertFalse((root / "installed/0.1.0-linux-x64").exists())
             self.assertFalse(list((root / "installed").glob(".hunin-install-*")))
 
@@ -126,15 +126,15 @@ class ProductContractTests(unittest.TestCase):
             data = root / "invalid-store.sqlite"
             data.write_bytes(b"not a database")
             with (
-                patch.object(installer, "host_platform", return_value="linux-x64"),
+                patch.object(verification, "host_platform", return_value="linux-x64"),
                 patch.object(
-                    installer,
+                    probe,
                     "probe_binary",
                     return_value=manifest["product_build_info"],
                     create=True,
                 ),
             ):
-                activated = installer.activate(
+                activated = activation.activate(
                     root / "installed", "0.1.0", root / "bin"
                 )
             self.assertEqual(
@@ -148,10 +148,11 @@ class ProductContractTests(unittest.TestCase):
             manifest = product_fixture(root)
             del manifest["product_build_info"]["app"]["target"]
             (root / "manifest.json").write_text(json.dumps(manifest))
-            installer.verify(root)
+            verification.verify(root)
             with patch.object(
-                installer, "probe_binary", return_value=manifest["product_build_info"]
+                probe, "probe_binary", return_value=manifest["product_build_info"]
             ):
                 self.assertEqual(
-                    installer.verify_executable(root, manifest), "legacy_unknown_target"
+                    verification.verify_executable(root, manifest),
+                    "legacy_unknown_target",
                 )

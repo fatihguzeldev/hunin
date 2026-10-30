@@ -1,21 +1,23 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from . import bundle as installer
+from .hunin_install import activation, verification
 
-HOST_PLATFORM = installer.host_platform
+HOST_PLATFORM = verification.host_platform
 
 
 class InstalledBundleTests(unittest.TestCase):
     def setUp(self):
         # These integrity/link fixtures model Linux bundles, not executable
         # host acceptance. Host identity has separate positive/negative controls.
-        host = patch.object(installer, "host_platform", return_value="linux-x64")
+        host = patch.object(verification, "host_platform", return_value="linux-x64")
         host.start()
         self.addCleanup(host.stop)
 
@@ -45,6 +47,56 @@ class InstalledBundleTests(unittest.TestCase):
         )
         return root
 
+    def test_shipped_installer_runs_outside_the_checkout_with_only_adjacent_assets(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = self.bundle(root / "extracted bundle", "0.2.0", HOST_PLATFORM())
+            repository = Path(__file__).resolve().parents[2]
+            inventory = json.loads(
+                (repository / "distribution/bundle/assets.json").read_text()
+            )
+            component = next(
+                item
+                for item in inventory["components"]
+                if item["name"] == "installation"
+            )
+            manifest_path = bundle / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            for name, source in component["files"].items():
+                data = (repository / component["source_root"] / source).read_bytes()
+                target = bundle / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                manifest["files"][name] = {
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            manifest_path.write_text(json.dumps(manifest))
+            environment = dict(os.environ)
+            environment.pop("PYTHONPATH", None)
+            prefix = root / "installed"
+            result = subprocess.run(
+                [sys.executable, str(bundle / "install.py"), "--prefix", str(prefix)],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installed = prefix / f"0.2.0-{manifest['platform']}"
+            executable = (
+                "hunin.exe" if manifest["platform"].startswith("windows") else "hunin"
+            )
+            self.assertEqual((installed / executable).read_bytes(), b"test-binary")
+            self.assertIn("Legacy installation", result.stdout)
+            for name in component["files"]:
+                self.assertEqual(
+                    (installed / name).read_bytes(), (bundle / name).read_bytes()
+                )
+
     def test_manifest_rejects_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -61,20 +113,22 @@ class InstalledBundleTests(unittest.TestCase):
                 )
             )
             with self.assertRaisesRegex(ValueError, "Unsafe package path"):
-                installer.verify(root / "bundle")
+                verification.verify(root / "bundle")
 
     def test_wrong_host_fails_before_creating_an_installation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = self.bundle(root / "bundle", "0.2.0")
-            with patch.object(installer, "host_platform", return_value="macos-arm64"):
+            with patch.object(
+                verification, "host_platform", return_value="macos-arm64"
+            ):
                 with self.assertRaisesRegex(ValueError, "host.*macos-arm64"):
-                    installer.install(bundle, root / "installed", root / "bin")
+                    activation.install(bundle, root / "installed", root / "bin")
             self.assertFalse((root / "installed").exists())
             self.assertFalse((root / "bin").exists())
 
     def test_host_identity_recognizes_selected_platforms_and_architecture_aliases(self):
-        with patch.object(installer, "host_platform", wraps=HOST_PLATFORM):
+        with patch.object(verification, "host_platform", wraps=HOST_PLATFORM):
             for system, machine, expected in [
                 ("Linux", "x86_64", "linux-x64"),
                 ("Linux", "aarch64", "linux-arm64"),
@@ -84,18 +138,20 @@ class InstalledBundleTests(unittest.TestCase):
             ]:
                 with (
                     self.subTest(system=system, machine=machine),
-                    patch.object(installer.platform, "system", return_value=system),
-                    patch.object(installer.platform, "machine", return_value=machine),
+                    patch.object(verification.platform, "system", return_value=system),
+                    patch.object(
+                        verification.platform, "machine", return_value=machine
+                    ),
                 ):
-                    self.assertEqual(installer.host_platform(), expected)
+                    self.assertEqual(verification.host_platform(), expected)
             with (
-                patch.object(installer.platform, "system", return_value="Windows"),
-                patch.object(installer.platform, "machine", return_value="ARM64"),
+                patch.object(verification.platform, "system", return_value="Windows"),
+                patch.object(verification.platform, "machine", return_value="ARM64"),
             ):
                 with self.assertRaisesRegex(
                     ValueError, "Unsupported installation host"
                 ):
-                    installer.host_platform()
+                    verification.host_platform()
 
     def test_changed_staged_bytes_never_publish_an_installation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,7 +161,7 @@ class InstalledBundleTests(unittest.TestCase):
             prefix.mkdir()
             unrelated = prefix / "keep.txt"
             unrelated.write_text("preserve unrelated data")
-            copy = installer.shutil.copy2
+            copy = activation.shutil.copy2
 
             def changed_copy(source, target):
                 result = copy(source, target)
@@ -114,11 +170,11 @@ class InstalledBundleTests(unittest.TestCase):
                 return result
 
             with (
-                patch.object(installer, "host_platform", return_value="linux-x64"),
-                patch.object(installer.shutil, "copy2", side_effect=changed_copy),
+                patch.object(verification, "host_platform", return_value="linux-x64"),
+                patch.object(activation.shutil, "copy2", side_effect=changed_copy),
             ):
                 with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-                    installer.install(bundle, prefix)
+                    activation.install(bundle, prefix)
             self.assertEqual(list(prefix.iterdir()), [unrelated])
             self.assertEqual(unrelated.read_text(), "preserve unrelated data")
 
@@ -135,21 +191,23 @@ class InstalledBundleTests(unittest.TestCase):
             missing = root / "missing-version"
             destination.symlink_to(missing)
             with self.assertRaisesRegex(ValueError, "already exists"):
-                installer.install(bundle, prefix)
+                activation.install(bundle, prefix)
             self.assertEqual(destination.readlink(), missing)
 
     def test_windows_selects_an_explicit_executable_path_without_bin_activation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = self.bundle(root / "bundle", "0.2.0", "windows-x64")
-            with patch.object(installer, "host_platform", return_value="windows-x64"):
+            with patch.object(
+                verification, "host_platform", return_value="windows-x64"
+            ):
                 with self.assertRaisesRegex(ValueError, "Unix-only"):
-                    installer.install(bundle, root / "refused", root / "bin")
+                    activation.install(bundle, root / "refused", root / "bin")
                 self.assertFalse((root / "refused").exists())
-                installed = installer.install(bundle, root / "installed")
+                installed = activation.install(bundle, root / "installed")
                 self.assertEqual(installed.name, "hunin.exe")
                 with self.assertRaisesRegex(ValueError, "Unix-only"):
-                    installer.activate(root / "installed", "0.2.0", root / "bin")
+                    activation.activate(root / "installed", "0.2.0", root / "bin")
                 self.assertFalse((root / "bin").exists())
 
     @unittest.skipIf(os.name == "nt", "The optional bin symlink is Unix-only")
@@ -169,7 +227,7 @@ class InstalledBundleTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, "Preserving existing executable"
                     ):
-                        installer.install(bundle, case / "installed", case / "bin")
+                        activation.install(bundle, case / "installed", case / "bin")
                     self.assertEqual(link.readlink(), target)
                     if kind == "unrelated":
                         self.assertEqual(target.read_bytes(), b"unrelated executable")
@@ -184,14 +242,14 @@ class InstalledBundleTests(unittest.TestCase):
             (root / "bin").mkdir()
             link = root / "bin/hunin"
             link.symlink_to(previous / "hunin")
-            executable = installer.install(bundle, prefix, root / "bin")
+            executable = activation.install(bundle, prefix, root / "bin")
             self.assertEqual(link.resolve(), executable.resolve())
             self.assertTrue((previous / "hunin").is_file())
             # A valid-looking directory name does not establish ownership if its bytes changed.
             (previous / "hunin").write_bytes(b"modified")
             link.unlink()
             link.symlink_to(previous / "hunin")
-            self.assertFalse(installer.owned_link(link, prefix))
+            self.assertFalse(activation.owned_link(link, prefix))
 
     @unittest.skipIf(os.name == "nt", "Activation through a bin symlink is Unix-only")
     def test_activation_switches_verified_versions_without_touching_old_bytes_or_data(
@@ -208,13 +266,11 @@ class InstalledBundleTests(unittest.TestCase):
             link = root / "bin/hunin"
             link.symlink_to(newer / "hunin")
             with (newer / "hunin").open("rb") as already_open:
-                activation = installer.activate(prefix, "0.1.0", root / "bin")
+                selected = activation.activate(prefix, "0.1.0", root / "bin")
                 self.assertEqual(link.resolve(), (older / "hunin").resolve())
                 self.assertEqual(already_open.read(), b"test-binary")
-            self.assertEqual(activation["component_compatibility"], "legacy_unknown")
-            self.assertEqual(
-                Path(activation["executable"]), (older / "hunin").resolve()
-            )
+            self.assertEqual(selected["component_compatibility"], "legacy_unknown")
+            self.assertEqual(Path(selected["executable"]), (older / "hunin").resolve())
             self.assertEqual((newer / "hunin").read_bytes(), b"test-binary")
             self.assertEqual(data.read_text(), "not an installer-owned path")
 
@@ -230,14 +286,14 @@ class InstalledBundleTests(unittest.TestCase):
             link.symlink_to(newer / "hunin")
             (older / "hunin").write_bytes(b"changed")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-                installer.activate(prefix, "0.1.0", root / "bin")
+                activation.activate(prefix, "0.1.0", root / "bin")
             self.assertEqual(link.resolve(), (newer / "hunin").resolve())
             unrelated = root / "another executable"
             unrelated.write_bytes(b"preserve")
             link.unlink()
             link.symlink_to(unrelated)
             with self.assertRaisesRegex(ValueError, "Preserving existing executable"):
-                installer.activate(prefix, "0.2.0", root / "bin")
+                activation.activate(prefix, "0.2.0", root / "bin")
             self.assertEqual(link.readlink(), unrelated)
             self.assertEqual(unrelated.read_bytes(), b"preserve")
 
@@ -257,7 +313,7 @@ class InstalledBundleTests(unittest.TestCase):
                 Path, "replace", side_effect=OSError("controlled publication failure")
             ):
                 with self.assertRaisesRegex(OSError, "controlled publication"):
-                    installer.activate(prefix, "0.1.0", root / "bin")
+                    activation.activate(prefix, "0.1.0", root / "bin")
             self.assertEqual(link.resolve(), (newer / "hunin").resolve())
             self.assertEqual(unrelated.read_text(), "an unrelated old staging path")
             self.assertFalse(list((root / "bin").glob(".hunin-activate-*")))

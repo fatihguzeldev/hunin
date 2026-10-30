@@ -140,7 +140,12 @@
       "source_root": "distribution/installation",
       "destination_root": ".",
       "files": {
-        "install.py": "bundle.py"
+        "install.py": "install.py",
+        "hunin_install/__init__.py": "hunin_install/__init__.py",
+        "hunin_install/contracts.py": "hunin_install/contracts.py",
+        "hunin_install/probe.py": "hunin_install/probe.py",
+        "hunin_install/verification.py": "hunin_install/verification.py",
+        "hunin_install/activation.py": "hunin_install/activation.py"
       }
     },
     {

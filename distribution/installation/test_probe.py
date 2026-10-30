@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from . import bundle as installer
+from .hunin_install import probe
 
 
 class ProbeOutputTests(unittest.TestCase):
@@ -21,10 +21,10 @@ class ProbeOutputTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as work,
-            patch.object(installer.subprocess, "Popen", side_effect=tracked_spawn),
+            patch.object(probe.subprocess, "Popen", side_effect=tracked_spawn),
         ):
             try:
-                return installer._probe_output(
+                return probe._probe_output(
                     [sys.executable, "-c", code], work, dict(os.environ), timeout
                 )
             finally:
@@ -60,5 +60,5 @@ class ProbeOutputTests(unittest.TestCase):
             )
             executable.chmod(0o755)
             with self.assertRaisesRegex(ValueError, r"failed \(7\)") as failure:
-                installer.probe_binary(executable)
+                probe.probe_binary(executable)
             self.assertEqual(str(failure.exception).count("Z"), 2000)

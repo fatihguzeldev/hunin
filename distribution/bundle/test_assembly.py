@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from . import assembly as package
 
-from ..installation import bundle as installer
+from ..installation.hunin_install import activation, contracts, probe, verification
 
 
 RUNTIME_FILES = (
@@ -49,6 +49,11 @@ RUNTIME_FILES = (
     "protocol/operations.json",
     "protocol/response.schema.json",
     "install.py",
+    "hunin_install/__init__.py",
+    "hunin_install/contracts.py",
+    "hunin_install/probe.py",
+    "hunin_install/verification.py",
+    "hunin_install/activation.py",
     "fetch_runtime.py",
     "runtime-assets.json",
     "bundle-assets.json",
@@ -59,22 +64,23 @@ class PackageTests(unittest.TestCase):
     def setUp(self):
         # Assembly fixtures use non-executable bytes; only the descriptor probe
         # is substituted. Its hashes still have to match every selected file.
-        for owner in (package, installer):
-            probe = patch.object(owner, "probe_binary", side_effect=self.product_info)
-            probe.start()
-            self.addCleanup(probe.stop)
+        descriptor = patch.object(probe, "probe_binary", side_effect=self.product_info)
+        descriptor.start()
+        self.addCleanup(descriptor.stop)
 
     def product_info(self, binary):
         root = Path(binary).parent
-        paths = installer.CONTRACT_FILES
-        contracts = {
+        paths = contracts.CONTRACT_FILES
+        contract_values = {
             name: {"sha256": package.sha256((root / path).read_bytes())}
             for name, path in paths.items()
         }
         for name in ("record", "responses"):
-            contracts[name]["id"] = json.loads((root / paths[name]).read_bytes())["$id"]
+            contract_values[name]["id"] = json.loads((root / paths[name]).read_bytes())[
+                "$id"
+            ]
         native = json.loads((root / paths["native_manifest"]).read_bytes())
-        contracts["native_manifest"].update(
+        contract_values["native_manifest"].update(
             {"version": native["version"], "extension": native["extension"]}
         )
         return {
@@ -85,7 +91,7 @@ class PackageTests(unittest.TestCase):
                 "source_revision": None,
                 "target": {"os": "linux", "arch": "x86_64"},
             },
-            "contracts": contracts,
+            "contracts": contract_values,
             "storage": {"maximum_schema_version": 2},
         }
 
@@ -117,7 +123,7 @@ class PackageTests(unittest.TestCase):
             old = self.product_info(binary)
             old["contracts"].pop("runtime_inventory", None)
             with (
-                patch.object(package, "probe_binary", return_value=old),
+                patch.object(probe, "probe_binary", return_value=old),
                 self.assertRaisesRegex(ValueError, "runtime inventory"),
             ):
                 package.assemble(root, binary, root / "output", "linux-x64")
@@ -251,7 +257,7 @@ class PackageTests(unittest.TestCase):
             with tarfile.open(archive) as bundle:
                 bundle.extractall(root / "extracted", filter="data")
             extracted = next((root / "extracted").iterdir())
-            manifest = installer.verify(extracted)
+            manifest = verification.verify(extracted)
             self.assertIsNone(manifest["product_build_info"]["app"]["source_revision"])
             self.assertEqual(
                 manifest["sdk_versions"]["javascript"]["declared_version"], "9.1.0"
@@ -260,8 +266,8 @@ class PackageTests(unittest.TestCase):
             self.assertIn("collectors/python/cpu.py", manifest["files"])
             for name in RUNTIME_FILES:
                 self.assertIn(name, manifest["files"])
-            with patch.object(installer, "host_platform", return_value="linux-x64"):
-                installed = installer.install(extracted, root / "installed")
+            with patch.object(verification, "host_platform", return_value="linux-x64"):
+                installed = activation.install(extracted, root / "installed")
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
             if os.name != "nt":
@@ -272,7 +278,7 @@ class PackageTests(unittest.TestCase):
                 )
             (extracted / "hunin").write_bytes(b"modified")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
-                installer.verify(extracted)
+                verification.verify(extracted)
 
     def test_runtime_inventory_does_not_ship_new_tests_sources_or_build_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -404,7 +410,7 @@ class PackageTests(unittest.TestCase):
             binary = self.source_tree(root)
             stale = self.product_info(binary)
             stale["contracts"]["operations"]["sha256"] = "0" * 64
-            with patch.object(package, "probe_binary", return_value=stale):
+            with patch.object(probe, "probe_binary", return_value=stale):
                 with self.assertRaisesRegex(ValueError, "contract hash mismatch"):
                     package.assemble(root, binary, root / "output", "linux-x64")
             self.assertFalse((root / "output").exists())
@@ -415,11 +421,11 @@ class PackageTests(unittest.TestCase):
             binary = self.source_tree(root)
             wrong = self.product_info(binary)
             wrong["app"]["target"] = {"os": "macos", "arch": "aarch64"}
-            with patch.object(package, "probe_binary", return_value=wrong):
+            with patch.object(probe, "probe_binary", return_value=wrong):
                 with self.assertRaisesRegex(ValueError, "compiled target"):
                     package.assemble(root, binary, root / "output", "linux-x64")
             del wrong["app"]["target"]
-            with patch.object(package, "probe_binary", return_value=wrong):
+            with patch.object(probe, "probe_binary", return_value=wrong):
                 with self.assertRaisesRegex(ValueError, "no compiled target"):
                     package.assemble(root, binary, root / "output", "linux-x64")
             self.assertFalse((root / "output").exists())
