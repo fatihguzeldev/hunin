@@ -1,3 +1,4 @@
+use super::projects::ProjectSessions;
 use crate::operations::Operations;
 use anyhow::Result;
 use axum::{
@@ -15,12 +16,14 @@ use tower_http::services::ServeDir;
 
 #[derive(Clone)]
 struct HttpState {
-    operations: Operations,
+    sessions: ProjectSessions,
     host: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
+    #[serde(default)]
+    project_id: Option<String>,
     operation: String,
     #[serde(default = "empty")]
     params: Value,
@@ -30,20 +33,29 @@ fn empty() -> Value {
 }
 
 pub async fn serve(operations: Operations, address: SocketAddr, ui: PathBuf) -> Result<()> {
+    serve_projects(ProjectSessions::direct(operations), address, ui).await
+}
+
+pub async fn serve_projects(
+    sessions: ProjectSessions,
+    address: SocketAddr,
+    ui: PathBuf,
+) -> Result<()> {
     anyhow::ensure!(
         address.ip().is_loopback(),
         "Hunin's local UI must bind to a loopback address"
     );
     let listener = tokio::net::TcpListener::bind(address).await?;
     let local = listener.local_addr()?;
-    let shutdown = operations.clone();
+    let shutdown = sessions.clone();
     let state = HttpState {
-        operations,
+        sessions: sessions.clone(),
         host: local.to_string(),
     };
     let router = Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
         .route("/api/operations", post(call))
+        .route("/api/projects", get(projects))
         .fallback_service(ServeDir::new(ui).append_index_html_on_directories(true))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn(headers))
@@ -57,6 +69,9 @@ pub async fn serve(operations: Operations, address: SocketAddr, ui: PathBuf) -> 
             }
         })
         .await;
+    if result.is_err() {
+        sessions.shutdown().await?;
+    }
     result?;
     Ok(())
 }
@@ -66,24 +81,24 @@ async fn call(
     headers: HeaderMap,
     Json(request): Json<Request>,
 ) -> Response {
-    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
-    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
-    if host != Some(state.host.as_str())
-        || origin.is_some_and(|s| s != format!("http://{}", state.host))
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(
-                json!({"error":{"code":"forbidden_origin","message":"Use the local Hunin origin"}}),
-            ),
-        )
-            .into_response();
+    if !local_origin(&state, &headers) {
+        return forbidden_origin();
     }
-    match state
-        .operations
-        .call(&request.operation, request.params)
+    let operations = match state
+        .sessions
+        .operations(request.project_id.as_deref())
         .await
     {
+        Ok(operations) => operations,
+        Err(error) => return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"error":{"code":"project_selection_failed","message":format!("{error:#}")}}),
+            ),
+        )
+            .into_response(),
+    };
+    match operations.call(&request.operation, request.params).await {
         Ok(result) => Json(json!({"result":result})).into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
@@ -91,6 +106,35 @@ async fn call(
         )
             .into_response(),
     }
+}
+
+async fn projects(State(state): State<HttpState>, headers: HeaderMap) -> Response {
+    if !local_origin(&state, &headers) {
+        return forbidden_origin();
+    }
+    match state.sessions.catalog().await {
+        Ok(catalog) => Json(catalog).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":{"code":"project_lookup_failed","message":format!("{error:#}")}})),
+        )
+            .into_response(),
+    }
+}
+
+fn local_origin(state: &HttpState, headers: &HeaderMap) -> bool {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    host == Some(state.host.as_str())
+        && !origin.is_some_and(|s| s != format!("http://{}", state.host))
+}
+
+fn forbidden_origin() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"error":{"code":"forbidden_origin","message":"Use the local Hunin origin"}})),
+    )
+        .into_response()
 }
 
 async fn headers(request: axum::extract::Request, next: Next) -> Response {
@@ -116,6 +160,65 @@ async fn headers(request: axum::extract::Request, next: Next) -> Response {
 mod tests {
     use super::*;
     use crate::{model::runs::Run, storage::Store};
+
+    fn local_headers(host: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        headers.insert(header::ORIGIN, format!("http://{host}").parse().unwrap());
+        headers
+    }
+
+    #[tokio::test]
+    async fn project_catalog_checks_origin_and_registry_operations_require_a_stable_id() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = crate::projects::ProjectRegistry::open(root.path()).unwrap();
+        let project = registry.create("project", None).unwrap();
+        let host = "127.0.0.1:17879";
+        let state = HttpState {
+            sessions: ProjectSessions::registry(registry, Some(project.id.clone())),
+            host: host.into(),
+        };
+        let response = projects(State(state.clone()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = projects(State(state.clone()), local_headers(host)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let catalog: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(catalog["selected_project_id"], project.id);
+        assert_eq!(catalog["projects"][0]["id"], project.id);
+        for id in [None, Some("project".into()), Some("missing".into())] {
+            let response = call(
+                State(state.clone()),
+                local_headers(host),
+                Json(Request {
+                    project_id: id,
+                    operation: "runs.list".into(),
+                    params: json!({}),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            let failure: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(failure["error"]["code"], "project_selection_failed");
+        }
+        let response = call(
+            State(state.clone()),
+            local_headers(host),
+            Json(Request {
+                project_id: Some(project.id),
+                operation: "runs.list".into(),
+                params: json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        state.sessions.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn operation_failures_have_the_same_typed_origin_in_http_and_mcp() {
@@ -162,11 +265,12 @@ mod tests {
             headers.insert(header::ORIGIN, format!("http://{host}").parse().unwrap());
             let response = call(
                 State(HttpState {
-                    operations: operations.clone(),
+                    sessions: ProjectSessions::direct(operations.clone()),
                     host: host.into(),
                 }),
                 headers,
                 Json(Request {
+                    project_id: None,
                     operation: name.into(),
                     params,
                 }),
