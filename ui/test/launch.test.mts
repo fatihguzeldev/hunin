@@ -1,3 +1,5 @@
+import { parseCommand } from '../src/command.js';
+import { parseWorkloadOptions } from '../src/workload/options.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { launchChoices } from '../src/workload/choices.js';
@@ -64,4 +66,56 @@ test('missing legacy launch metadata and nonselectable modes cannot invent a run
     launchChoices([runtime])[0]?.unavailableReason ?? '',
     /collection modes/,
   );
+});
+
+test('recording commands retain literal arguments and reject ambiguous input', async () => {
+  assert.deepEqual(
+    parseCommand('["node", "file with spaces.js", "$(literal)", ""]'),
+    ['node', 'file with spaces.js', '$(literal)', ''],
+  );
+  for (const invalid of [
+    'node app.js',
+    '[]',
+    '[""]',
+    '["node", 1]',
+    '{}',
+    'null',
+  ])
+    assert.throws(() => parseCommand(invalid));
+});
+
+test('workload recipes preserve exact output bytes and reject invalid environment declarations', async () => {
+  const exact = parseWorkloadOptions(
+    '{"MODE":"literal $(value)"}',
+    '["data/input.json"]',
+    '0',
+    'text',
+    'result\n',
+  );
+  assert.deepEqual(exact, {
+    env: { MODE: 'literal $(value)' },
+    input_files: ['data/input.json'],
+    expected_exit_code: 0,
+    expected_stdout: 'result\n',
+  });
+  assert.equal(
+    parseWorkloadOptions('{}', '[]', '1', 'text', '').expected_stdout,
+    '',
+  );
+  const hash = parseWorkloadOptions('{}', '[]', '0', 'sha256', 'A'.repeat(64));
+  assert.equal(hash.expected_stdout_sha256, 'a'.repeat(64));
+  assert.equal('expected_stdout' in hash, false);
+  assert.equal(
+    'expected_stdout' in
+      parseWorkloadOptions('{}', '[]', '0', 'exit', 'ignored'),
+    false,
+  );
+  for (const environment of ['[]', 'null', '{"EMPTY":1}', '{"A=B":"value"}'])
+    assert.throws(() =>
+      parseWorkloadOptions(environment, '[]', '0', 'exit', ''),
+    );
+  for (const files of ['{}', '[1]', '[""]'])
+    assert.throws(() => parseWorkloadOptions('{}', files, '0', 'exit', ''));
+  assert.throws(() => parseWorkloadOptions('{}', '[]', '0', 'sha256', 'abc'));
+  assert.throws(() => parseWorkloadOptions('{}', '[]', '1.5', 'exit', ''));
 });

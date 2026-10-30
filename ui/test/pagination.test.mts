@@ -80,3 +80,59 @@ test('payload-free page locations restore opaque cursors and previous first-page
   assert.deepEqual(restored.page.items, ['first']);
   assert.deepEqual(restored.location, { cursor: undefined, previous: [] });
 });
+
+test('metadata page navigation retains history, handles failures, and rejects stale refreshes', async () => {
+  const requested: (string | undefined)[] = [];
+  let fail = false;
+  const pages = new PagedQuery(async (cursor) => {
+    requested.push(cursor);
+    if (fail) throw new Error('unavailable');
+    return {
+      items: [cursor ?? 'first'],
+      next_cursor: cursor ? null : 'opaque-next',
+    };
+  });
+  await pages.refresh();
+  await pages.next();
+  assert.deepEqual(pages.page.items, ['opaque-next']);
+  assert.equal(pages.hasPrevious, true);
+  await pages.refresh(); // Polling keeps the historical page selected.
+  assert.equal(requested.at(-1), 'opaque-next');
+  fail = true;
+  await assert.rejects(pages.previous(), /unavailable/);
+  assert.deepEqual(pages.page.items, ['opaque-next']);
+  assert.equal(pages.hasPrevious, true);
+  fail = false;
+  await pages.previous();
+  assert.deepEqual(pages.page.items, ['first']);
+  assert.equal(pages.hasPrevious, false);
+  await pages.next();
+  await pages.refresh(true);
+  assert.deepEqual(pages.page.items, ['first']);
+  assert.equal(pages.hasPrevious, false);
+
+  const pending: {
+    resolve: (page: Page<string>) => void;
+    reject: (error: Error) => void;
+  }[] = [];
+  const concurrent = new PagedQuery<string>(
+    () =>
+      new Promise<Page<string>>((resolve, reject) =>
+        pending.push({ resolve, reject }),
+      ),
+  );
+  const old = concurrent.refresh();
+  const current = concurrent.refresh(true);
+  pending[1].resolve({ items: ['current'] });
+  assert.equal(await current, true);
+  pending[0].resolve({ items: ['stale'] });
+  assert.equal(await old, false);
+  assert.deepEqual(concurrent.page.items, ['current']);
+  const staleFailure = concurrent.refresh();
+  const latest = concurrent.refresh();
+  pending[3].resolve({ items: ['latest'] });
+  await latest;
+  pending[2].reject(new Error('stale failure'));
+  assert.equal(await staleFailure, false);
+  assert.deepEqual(concurrent.page.items, ['latest']);
+});

@@ -1,8 +1,14 @@
+import {
+  observationLabel,
+  referenceIds,
+  nativeEvidenceRows,
+} from '../src/observation.js';
+import type { Observation } from '../src/record.generated.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { operation } from '../src/api.js';
-import { numeric } from '../src/format.js';
+import { numeric, duration, bytes, percentage } from '../src/format.js';
 import { weight, weightShare, totalWeight } from '../src/profile-weight.js';
 
 test('observation responses enforce the canonical record shape at precision and variant boundaries', async () => {
@@ -120,4 +126,82 @@ test('recursive tree nodes keep explicit null positions and validate nested chil
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('weight formatting keeps sample counts separate from elapsed durations', async () => {
+  assert.equal(duration(1_000_000), '1 ms');
+  assert.equal(duration(1_500_000_000), '1.5 s');
+  assert.equal(bytes(1024), '1 KiB');
+  assert.equal(percentage(null), '—');
+  assert.equal(percentage(undefined), '—');
+  assert.equal(percentage(0), '0%');
+  assert.equal(percentage(50), '+50%');
+});
+
+test('native lifetime labels retain instance identity and unknown mapping evidence', async () => {
+  const first: Observation = {
+    schema_version: 1,
+    kind: 'event',
+    id: 'module',
+    run_id: 'r',
+    producer_id: 'p',
+    tid: '7',
+    timestamp_us: 0,
+    basis: 'observed',
+    name: 'module.observed_lifetime',
+    pid: 7,
+    attributes: {
+      scope: 'module',
+      module: '/tmp/libA.dylib',
+      process_instance_id: 'p1',
+      mapping_instance_id: 'load1',
+      start_censored: true,
+      end_censored: false,
+      start_window_ms: [null, 3],
+      exact_event_timestamps: false,
+    },
+  };
+  const again = {
+    ...first,
+    attributes: { ...first.attributes, mapping_instance_id: 'load3' },
+  };
+  assert.equal(observationLabel(first), 'libA.dylib · p1/load1');
+  assert.notEqual(observationLabel(first), observationLabel(again));
+  assert.ok(
+    nativeEvidenceRows(first).some(
+      ([name, value]) =>
+        name.startsWith('Start window') && value === '[null,3]',
+    ),
+  );
+  assert.ok(
+    nativeEvidenceRows(first).some(
+      ([name, value]) => name === 'Exact event timestamps' && value === 'false',
+    ),
+  );
+  const sample: Observation = {
+    ...first,
+    name: 'mapping-control',
+    evidence: ['raw'],
+    attributes: {
+      native_load_instances: [
+        { record_id: 'module-1', load_id: 'load1' },
+        { record_id: null, reason: 'mapping_unresolved' },
+        { record_id: 'module-1' },
+      ],
+    },
+  };
+  assert.deepEqual(referenceIds(sample), ['raw', 'module-1']);
+  assert.ok(
+    nativeEvidenceRows(sample).some(([, value]) =>
+      value.includes('mapping_unresolved'),
+    ),
+  );
+  assert.deepEqual(
+    nativeEvidenceRows({
+      ...first,
+      name: 'mapping-control',
+      attributes: { native_mapping_status: 'sample_link_unavailable' },
+    }),
+    [['Native mapping status', 'sample_link_unavailable']],
+  );
 });
