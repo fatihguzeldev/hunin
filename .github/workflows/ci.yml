@@ -212,7 +212,7 @@ jobs:
         run: sudo sysctl kernel.perf_event_paranoid=1
       - name: Verify automatic native collection
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime native --output collector-evidence/native
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime native --output collector-evidence/native
       - name: Verify native target correctness separately from collector exit
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python -m collectors.native.acceptance.outcome --binary ${{ matrix.binary }} --output collector-evidence/native-outcome
@@ -224,20 +224,20 @@ jobs:
         run: python -m collectors.native.acceptance.windows_sessions --binary ${{ matrix.binary }} --output collector-evidence/windows-sessions
       - name: Verify automatic Node collection
         if: always() && steps.build.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node
       - name: Verify Go CPU profiling
         if: always() && steps.build.outcome == 'success'
         id: go_test
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-test --output collector-evidence/go-test
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime go-test --output collector-evidence/go-test
       - name: Verify pinned PE symbol-reader source against the measured Go test binary
         if: always() && runner.os == 'Windows' && steps.samply.outcome == 'success' && steps.go_test.outcome == 'success'
         run: python -m collectors.native.downstream.verification --cache "${{ runner.temp }}/hunin-native-cache" --pe-recording collector-evidence/go-test --output collector-evidence/native-source
       - name: Verify ordinary Go executable native stacks and source
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go --output collector-evidence/go-native
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime go --output collector-evidence/go-native
       - name: Verify Go execution tracing
         if: always() && steps.build.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-trace --output collector-evidence/go-trace
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime go-trace --output collector-evidence/go-trace
       - name: Install target Python sampling dependency
         id: vmprof
         if: always() && steps.build.outcome == 'success' && runner.os != 'Windows'
@@ -249,14 +249,14 @@ jobs:
         run: python -m unittest discover -s collectors/python -p test_cpu.py
       - name: Verify automatic CPython collection
         if: always() && steps.build.outcome == 'success' && (runner.os == 'Windows' || steps.vmprof.outcome == 'success')
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime cpython --executable python --output collector-evidence/cpython
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime cpython --executable python --output collector-evidence/cpython
       - name: Install checksum-pinned Bun
         id: bun
         if: always() && steps.build.outcome == 'success'
         run: python -m distribution.provisioning.runtime bun --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/bun" --github-env
       - name: Verify automatic Bun collection
         if: always() && steps.bun.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime bun --executable "${{ env.HUNIN_TEST_BUN }}" --output collector-evidence/bun
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime bun --executable "${{ env.HUNIN_TEST_BUN }}" --output collector-evidence/bun
       - name: Verify Bun SDK public API
         if: always() && steps.bun.outcome == 'success'
         env:
@@ -277,7 +277,7 @@ jobs:
         run: python -m distribution.provisioning.runtime deno --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/deno" --github-env
       - name: Verify automatic Deno collection
         if: always() && steps.deno.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime deno --executable "${{ env.HUNIN_TEST_DENO }}" --output collector-evidence/deno
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime deno --executable "${{ env.HUNIN_TEST_DENO }}" --output collector-evidence/deno
       - name: Verify Deno SDK public API
         if: always() && steps.deno.outcome == 'success'
         env:
@@ -308,7 +308,7 @@ jobs:
           python -c "import os,subprocess; subprocess.run([os.environ['HUNIN_TEST_PYPY'],'-m','pip','install','vmprof==0.6.0'],check=True)"
       - name: Verify automatic PyPy collection
         if: always() && steps.pypy.outcome == 'success' && (runner.os == 'Windows' || steps.pypy-vmprof.outcome == 'success')
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime pypy --executable "${{ env.HUNIN_TEST_PYPY }}" --output collector-evidence/pypy
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime pypy --executable "${{ env.HUNIN_TEST_PYPY }}" --output collector-evidence/pypy
       - name: Verify CPU-progress stack sampling with the actual PyPy interpreter
         if: always() && steps.pypy.outcome == 'success'
         env:
@@ -330,7 +330,7 @@ jobs:
         run: python -m distribution.provisioning.runtime graalpy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/graalpy" --github-env
       - name: Verify automatic GraalPy collection
         if: always() && steps.graalpy.outcome == 'success'
-        run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime graalpy --executable "${{ env.HUNIN_TEST_GRAALPY }}" --output collector-evidence/graalpy
+        run: python -m collectors.acceptance.smoke --binary ${{ matrix.binary }} --runtime graalpy --executable "${{ env.HUNIN_TEST_GRAALPY }}" --output collector-evidence/graalpy
       - name: Verify GraalPy native target entry forms
         if: always() && steps.graalpy.outcome == 'success'
         env:

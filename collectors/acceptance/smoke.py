@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 
+from . import workloads
+
 
 @contextmanager
 def workspace(output):
@@ -88,89 +90,12 @@ def main():
         data = work / "recordings"
         env = dict(os.environ)
         runtime = args.runtime
-        expected = "huninSmokeHotspot"
-        if runtime == "native":
-            source = work / "cpu.rs"
-            source.write_text(
-                '#[inline(never)] fn huninSmokeHotspot()->u64 {let mut x=1u64;for n in 0..250_000_000u64{x=(x^n).wrapping_mul(6364136223846793005).wrapping_add(1);}std::hint::black_box(x)} fn main(){println!("{}",huninSmokeHotspot());}'
-            )
-            target = work / ("cpu.exe" if os.name == "nt" else "cpu")
-            execute(
-                [
-                    executable,
-                    "-C",
-                    "opt-level=1",
-                    "-C",
-                    "debuginfo=2",
-                    "-C",
-                    "force-frame-pointers=yes",
-                    str(source),
-                    "-o",
-                    str(target),
-                ]
-            )
-            command = [str(target)]
-        elif runtime in ("cpython", "pypy", "python-cpu", "graalpy"):
-            source = work / "cpu.py"
-            # GraalPy CE Native currently reports zero for thread_time(). Keep
-            # its existing iteration control; do not claim a thread CPU budget.
-            source.write_text(
-                "def huninSmokeHotspot():\n    x=1\n    for n in range(10_000_000):\n        x=((x^n)*1664525+1013904223)&0xffffffff\n    return x\nprint(huninSmokeHotspot())\n"
-                if runtime == "graalpy"
-                else """import json,time
-from pathlib import Path
-def huninSmokeHotspot():
-    cpu_start=time.thread_time()
-    wall_start=time.perf_counter()
-    x=1
-    iterations=0
-    while time.thread_time()-cpu_start<0.6:
-        for n in range(10000):
-            x=((x^n)*1664525+1013904223)&0xffffffff
-        iterations+=10000
-    window={'function':'huninSmokeHotspot','thread_cpu_seconds':time.thread_time()-cpu_start,'wall_seconds':time.perf_counter()-wall_start,'iterations':iterations}
-    return x,window
-value,window=huninSmokeHotspot()
-Path(__file__).with_name('workload.json').write_text(json.dumps(window))
-print(value)
-"""
-            )
-            command = [executable, str(source)]
-            if runtime != "graalpy":
-                env["HUNIN_VMPROF_PYTHON"] = executable
-        elif runtime in ("go", "go-test", "go-trace"):
-            expected = "huninSmokeHotspot"
-            (work / "go.mod").write_text("module hunin-collector-proof\n\ngo 1.22\n")
-            body = "//go:noinline\nfunc huninSmokeHotspot()uint64{x:=uint64(1);for n:=uint64(0);n<250000000;n++{x=(x^n)*6364136223846793005+1};return x}\n"
-            if runtime == "go":
-                source = work / "main.go"
-                source.write_text(
-                    'package main\nimport "fmt"\n'
-                    + body
-                    + "func main(){fmt.Println(huninSmokeHotspot())}\n"
-                )
-                target = work / ("cpu.exe" if os.name == "nt" else "cpu")
-                execute([executable, "build", "-o", str(target), str(source)], cwd=work)
-                command = [str(target)]
-            else:
-                source = work / "cpu_test.go"
-                source.write_text(
-                    'package control\nimport "testing"\n'
-                    + body
-                    + "var Result uint64\nfunc TestCPU(t *testing.T){Result=huninSmokeHotspot();if Result!=12795955527751812353{t.Fatal(Result)}}\n"
-                )
-                command = [executable, "test", "-count=1", "."]
-                env["HUNIN_GO"] = executable
-        else:
-            source = work / "cpu.mjs"
-            source.write_text(
-                "function huninSmokeHotspot(){const end=Date.now()+400;let x=0;while(Date.now()<end)for(let n=1;n<10000;n++)x+=Math.sqrt(n);return x;}console.log(huninSmokeHotspot());\n"
-            )
-            command = (
-                [executable, "run", str(source)]
-                if runtime == "deno"
-                else [executable, str(source)]
-            )
+        control = workloads.prepare(runtime, executable, work, env, execute)
+        source, command, expected = (
+            control.source,
+            control.command,
+            control.expected_hotspot,
+        )
         result = json.loads(
             execute(
                 [
