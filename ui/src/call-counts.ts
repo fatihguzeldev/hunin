@@ -79,3 +79,31 @@ export function appendCountPage(
     );
   return { ...next, counts: [...previous.counts, ...next.counts] };
 }
+
+/** Admission and its exact child stay busy independently of unrelated report refreshes. */
+export class CountActivity {
+  private admitting = false;
+  private child: string | undefined;
+  get busy(): boolean {
+    return this.admitting || this.child !== undefined;
+  }
+  get runId(): string | undefined {
+    return this.child;
+  }
+  begin(): boolean {
+    if (this.busy) return false;
+    this.admitting = true;
+    return true;
+  }
+  accepted(runId?: string): void {
+    this.admitting = false;
+    this.child = runId;
+  }
+  rejected(): void {
+    this.admitting = false;
+  }
+  observed(runId: string, status: CountReport['status']): void {
+    if (this.admitting || (this.child && this.child !== runId)) return;
+    this.child = status === 'running' ? runId : undefined;
+  }
+}

@@ -148,3 +148,43 @@ test('typed call transports retain not-collected and measured zeros without star
     globalThis.fetch = original;
   }
 });
+
+test('an old completed read cannot unlock a pending or newly admitted measurement', async () => {
+  const { CountActivity } = await import('../src/call-counts.js');
+  const activity = new CountActivity();
+  let accept!: (id: string) => void;
+  const admission = new Promise<string>((resolve) => {
+    accept = resolve;
+  });
+  assert.equal(activity.begin(), true);
+  const accepted = admission.then((id) => activity.accepted(id));
+  activity.observed('old-child', 'complete');
+  assert.equal(activity.busy, true);
+  assert.equal(activity.begin(), false);
+  accept('new-child');
+  await accepted;
+  activity.observed('old-child', 'complete');
+  assert.equal(activity.runId, 'new-child');
+  assert.equal(activity.busy, true);
+  assert.equal(activity.begin(), false);
+  activity.observed('new-child', 'running');
+  assert.equal(activity.busy, true);
+  activity.observed('new-child', 'incomplete');
+  assert.equal(activity.busy, false);
+  assert.equal(activity.begin(), true);
+});
+
+test('rejected acceptance releases activity without discarding the uncertain retry identity', async () => {
+  const { CountActivity } = await import('../src/call-counts.js');
+  const activity = new CountActivity();
+  const attempt = new (await import('../src/call-counts.js')).CountAttempt(
+    () => 'same-request',
+  );
+  const params = { run_id: 'parent' };
+  assert.equal(activity.begin(), true);
+  const first = attempt.request(params);
+  activity.rejected();
+  assert.equal(activity.busy, false);
+  assert.equal(activity.begin(), true);
+  assert.equal(attempt.request(params).request_id, first.request_id);
+});

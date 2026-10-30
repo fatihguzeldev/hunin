@@ -5,8 +5,8 @@ import type {
   OperationInputs,
   OperationOutputs,
 } from '../operations.generated';
-import { appendCountPage, CountAttempt } from '../call-counts';
-import { el, errorView, loading } from '../dom';
+import { appendCountPage, CountActivity, CountAttempt } from '../call-counts';
+import { button, el, errorView, loading } from '../dom';
 import { linkedRequest } from '../requests';
 import type { ViewContext } from '../workspace';
 
@@ -30,7 +30,7 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
   let pending: AbortController | undefined;
   let poll: ReturnType<typeof setTimeout> | undefined;
   let planning = 0;
-  let busy = false;
+  const activity = new CountActivity();
   const attempt = new CountAttempt();
   async function inspectPlan(): Promise<void> {
     const generation = ++planning;
@@ -49,11 +49,14 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
         );
     }
   }
-  function setBusy(value: boolean): void {
-    busy = value;
-    form.setBusy(value);
+  function syncBusy(): void {
+    form.setBusy(activity.busy);
   }
   async function load(runId: string, cursor?: string): Promise<void> {
+    if (activity.runId && activity.runId !== runId) {
+      runId = activity.runId;
+      cursor = undefined;
+    }
     clearTimeout(poll);
     pending?.abort();
     pending = new AbortController();
@@ -76,39 +79,49 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
         context.persist();
       }
       renderReport(report);
-      setBusy(report.status === 'running');
+      activity.observed(report.run_id, report.status);
+      syncBusy();
       if (report.status === 'running')
         poll = setTimeout(() => {
           void load(report!.run_id);
         }, 1000);
     } catch (error) {
-      if (!linked.signal.aborted && generation === request)
+      if (!linked.signal.aborted && generation === request) {
         reportBody.replaceChildren(
           errorView(error, () => {
             void load(runId);
           }),
         );
+        const child = activity.runId;
+        if (child)
+          reportBody.append(
+            button('Cancel counting run', () => {
+              void cancelRun(child).catch(() => {});
+            }),
+          );
+      }
     } finally {
       linked.finish();
+    }
+  }
+  async function cancelRun(runId: string): Promise<void> {
+    try {
+      await operation('runs.cancel', { run_id: runId });
+      if (!context.signal.aborted) await load(runId);
+    } catch (error) {
+      if (!context.signal.aborted)
+        feedback.replaceChildren(
+          errorView(error, () => {
+            void cancelRun(runId).catch(() => {});
+          }),
+        );
+      throw error;
     }
   }
   function renderReport(data: CountReport): void {
     reportBody.replaceChildren(
       countReport(data, {
-        cancel: async () => {
-          try {
-            await operation('runs.cancel', { run_id: data.run_id });
-            if (!context.signal.aborted) await load(data.run_id);
-          } catch (error) {
-            if (!context.signal.aborted)
-              feedback.replaceChildren(
-                errorView(error, () => {
-                  void load(data.run_id);
-                }),
-              );
-            throw error;
-          }
-        },
+        cancel: () => cancelRun(data.run_id),
         refresh: () => {
           void load(data.run_id);
         },
@@ -120,8 +133,8 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
   }
   form.element.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (busy) return;
-    setBusy(true);
+    if (!activity.begin()) return;
+    syncBusy();
     planning++;
     feedback.replaceChildren(
       loading('Starting a separate counting recording…'),
@@ -132,11 +145,13 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
       params = attempt.request(params);
     } catch (error) {
       feedback.replaceChildren(errorView(error, () => measure.click()));
-      setBusy(false);
+      activity.rejected();
+      syncBusy();
       return;
     }
     void operation('calls.measure', params)
       .then((result) => {
+        activity.accepted(result.run?.id);
         attempt.accepted();
         if (result.run) state.measurementRunId = result.run.id;
         if (context.signal.aborted) return;
@@ -152,7 +167,7 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
         );
         renderPlan(result.plan);
         if (!result.run) {
-          setBusy(false);
+          syncBusy();
           return;
         }
         void load(result.run.id);
@@ -160,7 +175,8 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
       .catch((error) => {
         if (!context.signal.aborted) {
           feedback.replaceChildren(errorView(error, () => measure.click()));
-          setBusy(false);
+          activity.rejected();
+          syncBusy();
         }
       });
   });
