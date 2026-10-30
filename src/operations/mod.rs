@@ -1,3 +1,4 @@
+mod analyses;
 mod capabilities;
 mod comparison;
 mod contracts;
@@ -5,19 +6,19 @@ mod errors;
 mod inputs;
 mod inspection;
 mod reads;
+mod recordings;
 mod responses;
 mod workers;
 pub(crate) use errors::operation_failure;
 
 use crate::{
     execution::{Engine, StartRequest},
-    model::{now_us, runs::Run},
     query,
     storage::Store,
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::OnceLock};
+use std::sync::OnceLock;
 
 /// Project a typed operation failure without changing a transport's default output.
 pub fn describe_failure(operation: &str, error: &anyhow::Error) -> Value {
@@ -274,86 +275,6 @@ impl Operations {
         if read_response {
             responses::check(&result)?;
         }
-        Ok(result)
-    }
-
-    fn analysis_results(&self, params: &Value, limit: usize, cursor: usize) -> Result<Value> {
-        self.analyses.recover()?;
-        let store = self.engine.store();
-        let run_id = params["run_id"].as_str().context("run_id required")?;
-        store.run(run_id)?;
-        let mut results = if let Some(execution_id) = params["execution_id"].as_str() {
-            if cursor == 0 {
-                store
-                    .document_for_run("analysis-results", execution_id, run_id)?
-                    .into_iter()
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            store.documents_page("analysis-results", Some(run_id), limit + 1, cursor)?
-        };
-        for row in &mut results {
-            let selected = store.selected_result_id(
-                run_id,
-                &format!("analysis:{}", row["analysis_id"].as_str().unwrap_or("")),
-            )?;
-            let result_id = row["result_set_id"].as_str().or_else(|| row["id"].as_str());
-            row["selected"] = json!(result_id.is_some() && selected.as_deref() == result_id);
-        }
-        Ok(metadata_page("results", results, limit, cursor))
-    }
-
-    fn import(&self, params: &Value) -> Result<Value> {
-        let deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(120));
-        let store = self.engine.store();
-        let path = PathBuf::from(params["path"].as_str().unwrap()).canonicalize()?;
-        anyhow::ensure!(path.is_file(), "recording import requires a regular file");
-        let format = params["format"].as_str().unwrap();
-        let run = if let Some(id) = params["run_id"].as_str() {
-            let run = store.run(id)?;
-            anyhow::ensure!(
-                run.status != "running",
-                "cannot import into a running recording"
-            );
-            run
-        } else {
-            let run=Run{id:uuid::Uuid::new_v4().to_string(),name:params["name"].as_str().unwrap_or("Imported recording").into(),status:"failed".into(),command:vec![],cwd:path.parent().unwrap().display().to_string(),runtime:"imported".into(),started_at_us:now_us(),finished_at_us:Some(now_us()),exit_code:None,diagnostics:vec!["Imported data retains its original collection limits; execution correctness is unknown".into()],source:json!({"fingerprint":"unknown","build_source_verified":false}),correctness:json!({"passed":null,"reason":"imported"})};
-            store.save_run(&run)?;
-            run
-        };
-        let imported = (|| {
-            store.add_artifact_controlled(
-                &run.id,
-                &path,
-                format,
-                crate::importers::NormalizationInputLimits::default().raw_bytes,
-                &mut 0,
-                || crate::publication::check_deadline(deadline),
-            )?;
-            let profile = crate::importers::import_controlled(&path, format, &run.id, deadline)?;
-            crate::recordings::publish_controlled(store, &run.id, profile, deadline)
-        })();
-        let publication = match imported {
-            Ok(publication) => publication,
-            Err(error) => {
-                if params["run_id"].is_null() {
-                    let diagnostic =
-                        format!("Import failed; any preserved inputs remain available: {error:#}");
-                    store.finish_recording_import(&run.id, &[diagnostic], false)?;
-                }
-                return Err(error);
-            }
-        };
-        let run = store.finish_recording_import(
-            &run.id,
-            &publication.diagnostics,
-            params["run_id"].is_null(),
-        )?;
-        let mut result = reads::summary_after_mutation(store, &run.id, deadline);
-        result["run"] = json!(run);
-        result["accepted"] = json!(publication.accepted);
         Ok(result)
     }
 }
