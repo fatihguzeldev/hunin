@@ -1,3 +1,4 @@
+mod cli;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use hunin::{interfaces, model::runs::RunStatus, operations::Operations, storage::Store};
@@ -42,6 +43,8 @@ enum Command {
         #[arg(required = true, last = true)]
         command: Vec<String>,
     },
+    /// Rerun a recording with automatic function counts (sampling remains the recording default).
+    Count(cli::count::CountOptions),
     List,
     Inspect {
         run_id: String,
@@ -163,6 +166,7 @@ async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             }
             return Ok(());
         }
+        Command::Count(options) => cli::count::measure(&operations, options).await?,
         Command::List => operations.call("runs.list", json!({})).await?,
         Command::Inspect { run_id } => {
             operations
@@ -200,8 +204,10 @@ async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
                 })
                 .context("parameters must be a JSON object")?;
             let mut result = operations.call(&operation, parameters).await?;
-            if matches!(operation.as_str(), "runs.start" | "scenarios.run")
-                && result["run"]["status"] == "running"
+            if matches!(
+                operation.as_str(),
+                "runs.start" | "scenarios.run" | "calls.measure"
+            ) && result["run"]["status"] == "running"
             {
                 let id = result["run"]["id"].as_str().unwrap().to_owned();
                 let run = tokio::select! {
