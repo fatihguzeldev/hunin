@@ -93,6 +93,35 @@ fn historical_integral_float_records_keep_time_and_pid_semantics_without_rewriti
         .unwrap();
     assert_eq!(retained, raw);
 }
+
+#[test]
+fn unbounded_schema_integer_metadata_remains_accepted_without_lossy_conversion() {
+    let (root, store) = setup();
+    let mut record = span();
+    let beyond_u64: Value = serde_json::from_str("18446744073709551616.0").unwrap();
+    record["pid"] = beyond_u64.clone();
+    record["stack"] = json!([{
+        "function": "opaque_location",
+        "line": beyond_u64,
+        "column": beyond_u64,
+    }]);
+    let raw = serde_json::to_string(&record).unwrap();
+    assert!(
+        store
+            .accept("numbers", "input", std::slice::from_ref(&record))
+            .unwrap()
+    );
+    assert_eq!(store.records("numbers").unwrap(), vec![record.clone()]);
+    drop(store);
+    let store = Store::open(root.path()).unwrap();
+    assert_eq!(store.records("numbers").unwrap(), vec![record]);
+    let connection = rusqlite::Connection::open(root.path().join("hunin.sqlite")).unwrap();
+    let retained: String = connection
+        .query_row("SELECT record FROM observations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(retained, raw);
+}
+
 #[test]
 fn invalid_numeric_replacement_leaves_selected_observations_unchanged() {
     let (_root, store) = setup();
