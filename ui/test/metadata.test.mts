@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {
   analysisMetadata,
   analysisAttemptMetadata,
-  scenarioMetadata,
-} from '../src/metadata.js';
+} from '../src/analysis/metadata.js';
+import { scenarioMetadata } from '../src/metadata.js';
 import { operation } from '../src/api.js';
 
 test('legacy document results retain arbitrary rows while checking their page envelope', async () => {

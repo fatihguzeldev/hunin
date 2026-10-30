@@ -4,7 +4,7 @@ import { timeline } from './views/timeline';
 import { resources } from './views/resources';
 import { evidence } from './views/evidence';
 import { source } from './source/view';
-import { analyses } from './views/analyses';
+import { analyses } from './analysis/view';
 import { comparison } from './views/comparison';
 import './style.css';
 
