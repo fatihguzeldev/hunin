@@ -50,3 +50,31 @@ pub(crate) fn resolve_launch_executable(
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|p| p.is_file())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn launch_resolution_rejects_directories_and_keeps_relative_path_search() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("programs")).unwrap();
+        let binary = if cfg!(windows) { "work.EXE" } else { "work" };
+        let launch = root.path().join("programs").join(binary);
+        fs::write(&launch, "controlled executable bytes").unwrap();
+        let overrides = BTreeMap::from([
+            ("PATH".into(), "programs".into()),
+            ("PATHEXT".into(), ".EXE;.COM".into()),
+        ]);
+        assert_eq!(
+            resolve_launch_executable("work", root.path(), &overrides),
+            Some(launch)
+        );
+        assert!(resolve_launch_executable("./programs", root.path(), &overrides).is_none());
+        assert!(
+            resolve_launch_executable(root.path().to_str().unwrap(), root.path(), &overrides)
+                .is_none()
+        );
+    }
+}

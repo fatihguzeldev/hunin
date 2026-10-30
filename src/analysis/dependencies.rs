@@ -74,7 +74,7 @@ pub async fn prepare(
     let declarations = &analysis["dependencies"];
     let mut commands: Vec<(Vec<String>, std::path::PathBuf)> = Vec::new();
     if let Some(requirements) = declarations["python_requirements"].as_str() {
-        let environment = super::process::tool_path(&workspace.join(".hunin-python"));
+        let environment = crate::host::tool_path(&workspace.join(".hunin-python"));
         commands.push((
             vec![
                 command[0].clone(),
@@ -102,7 +102,7 @@ pub async fn prepare(
                 "--disable-pip-version-check".into(),
                 "--no-input".into(),
                 "-r".into(),
-                super::process::tool_path(&workspace.join(requirements))
+                crate::host::tool_path(&workspace.join(requirements))
                     .display()
                     .to_string(),
             ],

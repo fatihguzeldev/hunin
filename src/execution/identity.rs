@@ -1,3 +1,4 @@
+use crate::host::resolve_launch_executable;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -52,7 +53,7 @@ pub fn source(cwd: &Path, command: &[String], data_root: Option<&Path>) -> Value
     }
     let launch_executable = command
         .first()
-        .and_then(|s| resolve_with_environment(s, cwd, &BTreeMap::new()));
+        .and_then(|s| resolve_launch_executable(s, cwd, &BTreeMap::new()));
     let executable = command.first().and_then(|s| resolve(s, cwd));
     let executable_hash = executable.as_ref().and_then(|p| file_hash(p).ok());
     let mut snapshot_complete = true;
@@ -164,16 +165,7 @@ fn snapshot(
 }
 
 pub fn resolve(name: &str, cwd: &Path) -> Option<PathBuf> {
-    resolve_with_environment(name, cwd, &BTreeMap::new()).and_then(|path| path.canonicalize().ok())
-}
-
-/// Preserve launcher spelling; physical source identity is resolved separately.
-pub fn resolve_with_environment(
-    name: &str,
-    cwd: &Path,
-    overrides: &BTreeMap<String, String>,
-) -> Option<PathBuf> {
-    crate::host::resolve_launch_executable(name, cwd, overrides)
+    resolve_launch_executable(name, cwd, &BTreeMap::new()).and_then(|path| path.canonicalize().ok())
 }
 
 pub fn environment(overrides: &BTreeMap<String, String>) -> anyhow::Result<Value> {
@@ -320,28 +312,6 @@ mod tests {
         assert_ne!(
             changed_module["fingerprint"],
             source(root.path(), &[], None)["fingerprint"]
-        );
-    }
-
-    #[test]
-    fn launch_resolution_rejects_directories_and_keeps_relative_path_search() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("programs")).unwrap();
-        let binary = if cfg!(windows) { "work.EXE" } else { "work" };
-        let launch = root.path().join("programs").join(binary);
-        fs::write(&launch, "controlled executable bytes").unwrap();
-        let overrides = BTreeMap::from([
-            ("PATH".into(), "programs".into()),
-            ("PATHEXT".into(), ".EXE;.COM".into()),
-        ]);
-        assert_eq!(
-            resolve_with_environment("work", root.path(), &overrides),
-            Some(launch)
-        );
-        assert!(resolve_with_environment("./programs", root.path(), &overrides).is_none());
-        assert!(
-            resolve_with_environment(root.path().to_str().unwrap(), root.path(), &overrides)
-                .is_none()
         );
     }
 

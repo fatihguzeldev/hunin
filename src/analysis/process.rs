@@ -1,3 +1,4 @@
+use crate::host::tool_path;
 use anyhow::{Context, Result, bail};
 use std::{
     path::Path,
@@ -15,8 +16,6 @@ use tokio::{
 };
 
 pub(super) const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
-
-pub(super) use crate::host::tool_path;
 
 #[derive(Clone)]
 pub struct Control {

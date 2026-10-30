@@ -67,7 +67,7 @@ impl Engine {
         self.check_admission()?;
         let mut resolved_command = request.command.clone();
         if let Some(executable) =
-            identity::resolve_with_environment(&request.command[0], &cwd, &request.env)
+            crate::host::resolve_launch_executable(&request.command[0], &cwd, &request.env)
         {
             resolved_command[0] = executable.display().to_string();
         }
