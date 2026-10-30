@@ -1,0 +1,483 @@
+--- a/samply/src/linux/mod.rs
++++ b/samply/src/linux/mod.rs
+@@ -1,3 +1,4 @@
++mod observer_health;
+ mod perf_event;
+ mod perf_group;
+ mod proc_maps;
+--- /dev/null
++++ b/samply/src/linux/observer_health.rs
+@@ -0,0 +1,268 @@
++//! Temporary fixed-size observer diagnostics. No event ownership or capture policy changes.
++use std::fs::File;
++use std::io::{Read, Write};
++use std::time::{Duration, Instant};
++
++use serde_derive::Serialize;
++
++#[derive(Clone, Copy)]
++pub enum CallbackKind {
++    Mmap2,
++    CommExec,
++    Sample,
++    Other,
++}
++
++#[derive(Default, Serialize)]
++struct CallbackTiming {
++    count: u64,
++    total_wall_ns: u64,
++    max_wall_ns: u64,
++    slowest_raw_timestamp: Option<u64>,
++    slowest_observer_offset_ns: u64,
++}
++
++impl CallbackTiming {
++    fn observe(&mut self, wall_ns: u64, offset_ns: u64, raw_timestamp: Option<u64>) -> bool {
++        self.count = self.count.saturating_add(1);
++        self.total_wall_ns = self.total_wall_ns.saturating_add(wall_ns);
++        let slowest = self.count == 1 || wall_ns > self.max_wall_ns;
++        if slowest {
++            self.max_wall_ns = wall_ns;
++            self.slowest_raw_timestamp = raw_timestamp;
++            self.slowest_observer_offset_ns = offset_ns;
++        }
++        slowest
++    }
++}
++
++#[derive(Clone, Copy, Serialize)]
++struct BatchTiming {
++    wall_ns: u64,
++    events: u64,
++    observer_offset_ns: u64,
++}
++
++#[derive(Default, Serialize)]
++pub struct ObserverHealth {
++    #[serde(skip)]
++    started: Option<Instant>,
++    #[serde(skip)]
++    cpu_start: Option<CpuTicks>,
++    batches: u64,
++    events: u64,
++    first_batch: Option<BatchTiming>,
++    first_nonempty_batch: Option<BatchTiming>,
++    max_batch: Option<BatchTiming>,
++    mmap2: CallbackTiming,
++    comm_exec: CallbackTiming,
++    sample: CallbackTiming,
++    slowest_mmap_path: Option<String>,
++    slowest_mmap_path_truncated: bool,
++    observer_wall_ns: u64,
++    finish_wall_ns: u64,
++    cpu_start_ticks: Option<CpuTicks>,
++    cpu_end_ticks: Option<CpuTicks>,
++    cpu_elapsed_ticks: Option<CpuTicks>,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++struct CpuTicks {
++    user: u64,
++    system: u64,
++}
++
++fn nanoseconds(duration: Duration) -> u64 {
++    duration.as_nanos().min(u64::MAX as u128) as u64
++}
++
++fn cpu_ticks_from_stat(stat: &str) -> Option<CpuTicks> {
++    // comm can contain spaces and parentheses; fields after the final ')' start at field 3.
++    let tail = stat.rsplit_once(')')?.1;
++    let mut fields = tail.split_whitespace();
++    let user = fields.nth(11)?.parse().ok()?;
++    let system = fields.next()?.parse().ok()?;
++    Some(CpuTicks { user, system })
++}
++
++fn cpu_ticks() -> Option<CpuTicks> {
++    let mut stat = String::new();
++    File::open("/proc/thread-self/stat")
++        .ok()?
++        .take(8193)
++        .read_to_string(&mut stat)
++        .ok()?;
++    if stat.len() > 8192 {
++        return None;
++    }
++    cpu_ticks_from_stat(&stat)
++}
++
++impl ObserverHealth {
++    pub fn start() -> Self {
++        let started = Instant::now();
++        let cpu_start = cpu_ticks();
++        Self {
++            started: Some(started),
++            cpu_start,
++            ..Self::default()
++        }
++    }
++
++    pub fn offset_ns(&self, instant: Instant) -> u64 {
++        self.started
++            .map(|started| nanoseconds(instant.saturating_duration_since(started)))
++            .unwrap_or(0)
++    }
++
++    pub fn callback(
++        &mut self,
++        kind: CallbackKind,
++        started: Instant,
++        raw_timestamp: Option<u64>,
++        mmap_path: Option<(&[u8], &[u8])>,
++    ) {
++        let wall_ns = nanoseconds(started.elapsed());
++        let offset_ns = self.offset_ns(started);
++        self.events = self.events.saturating_add(1);
++        let slowest_mmap = match kind {
++            CallbackKind::Mmap2 => self.mmap2.observe(wall_ns, offset_ns, raw_timestamp),
++            CallbackKind::CommExec => {
++                self.comm_exec.observe(wall_ns, offset_ns, raw_timestamp);
++                false
++            }
++            CallbackKind::Sample => {
++                self.sample.observe(wall_ns, offset_ns, raw_timestamp);
++                false
++            }
++            CallbackKind::Other => false,
++        };
++        if slowest_mmap {
++            self.slowest_mmap_path = mmap_path.map(|(first, second)| {
++                let prefix: Vec<u8> = first
++                    .iter()
++                    .chain(second.iter())
++                    .take(256)
++                    .copied()
++                    .collect();
++                String::from_utf8_lossy(&prefix).into_owned()
++            });
++            self.slowest_mmap_path_truncated = mmap_path
++                .is_some_and(|(first, second)| first.len().saturating_add(second.len()) > 256);
++        }
++    }
++
++    pub fn batch(&mut self, started: Instant, events_before: u64) {
++        let batch = BatchTiming {
++            wall_ns: nanoseconds(started.elapsed()),
++            events: self.events.saturating_sub(events_before),
++            observer_offset_ns: self.offset_ns(started),
++        };
++        self.batches = self.batches.saturating_add(1);
++        self.first_batch.get_or_insert(batch);
++        if batch.events > 0 {
++            self.first_nonempty_batch.get_or_insert(batch);
++        }
++        if self
++            .max_batch
++            .is_none_or(|maximum| batch.wall_ns > maximum.wall_ns)
++        {
++            self.max_batch = Some(batch);
++        }
++    }
++
++    pub fn event_count(&self) -> u64 {
++        self.events
++    }
++
++    pub fn emit(mut self, finish_started: Instant) {
++        self.finish_wall_ns = nanoseconds(finish_started.elapsed());
++        self.observer_wall_ns = self
++            .started
++            .map(|start| nanoseconds(start.elapsed()))
++            .unwrap_or(0);
++        self.cpu_start_ticks = self.cpu_start;
++        self.cpu_end_ticks = cpu_ticks();
++        self.cpu_elapsed_ticks = self
++            .cpu_start
++            .zip(self.cpu_end_ticks)
++            .and_then(|(start, end)| {
++                Some(CpuTicks {
++                    user: end.user.checked_sub(start.user)?,
++                    system: end.system.checked_sub(start.system)?,
++                })
++            });
++        // Fixed counters + one clipped path keep the JSON bounded; output is best-effort.
++        let summary = serde_json::json!({
++            "schema_version": 1,
++            "diagnostic": "linux_perf_observer",
++            "kernel_ring_occupancy": null,
++            "kernel_ring_occupancy_diagnostic": "no safe accessor; not measured",
++            "cpu_tick_source": "/proc/thread-self/stat fields 14/15",
++            "timing_scope": "observer loop through converter.finish; callback wall includes parse/conversion",
++            "metrics": self,
++        });
++        if let Ok(json) = serde_json::to_string(&summary) {
++            let _ = writeln!(
++                std::io::stderr().lock(),
++                "HUNIN_NATIVE_OBSERVER_HEALTH {json}"
++            );
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn counters_keep_totals_maximum_and_first_nonempty_batch() {
++        let mut timing = CallbackTiming::default();
++        assert!(timing.observe(10, 2, Some(50)));
++        assert!(!timing.observe(3, 4, Some(60)));
++        assert!(timing.observe(20, 6, Some(70)));
++        assert_eq!(
++            (timing.count, timing.total_wall_ns, timing.max_wall_ns),
++            (3, 33, 20)
++        );
++        assert_eq!(timing.slowest_raw_timestamp, Some(70));
++        timing.total_wall_ns = u64::MAX;
++        timing.observe(1, 8, None);
++        assert_eq!(timing.total_wall_ns, u64::MAX);
++        let mut health = ObserverHealth::default();
++        health.batch(Instant::now(), 0);
++        health.events = 5;
++        health.batch(Instant::now(), 0);
++        assert_eq!(health.first_batch.unwrap().events, 0);
++        assert_eq!(health.first_nonempty_batch.unwrap().events, 5);
++    }
++
++    #[test]
++    fn slowest_path_and_json_remain_bounded_for_hostile_names() {
++        let path = vec![0xff; 100_000];
++        let mut health = ObserverHealth::default();
++        health.callback(
++            CallbackKind::Mmap2,
++            Instant::now(),
++            Some(1),
++            Some((&path, &[])),
++        );
++        assert!(health.slowest_mmap_path_truncated);
++        assert!(health.slowest_mmap_path.as_ref().unwrap().len() <= 768);
++        assert!(serde_json::to_vec(&health).unwrap().len() < 8192);
++        assert_eq!(health.mmap2.count, 1);
++    }
++
++    #[test]
++    fn cpu_parser_handles_parentheses_and_unavailable_counters() {
++        assert_eq!(
++            cpu_ticks_from_stat("1 (name ) with spaces) R 1 2 3 4 5 6 7 8 9 10 123 456 9"),
++            Some(CpuTicks {
++                user: 123,
++                system: 456
++            })
++        );
++        assert_eq!(cpu_ticks_from_stat("missing"), None);
++        assert_eq!(cpu_ticks_from_stat("1 (x) R 1"), None);
++    }
++}
+--- a/samply/src/linux/profiler.rs
++++ b/samply/src/linux/profiler.rs
+@@ -15,6 +15,7 @@
+ use nix::sys::wait::WaitStatus;
+ use tokio::sync::oneshot;
+ 
++use super::observer_health::{CallbackKind, ObserverHealth};
+ use super::perf_event::EventSource;
+ use super::perf_group::{AttachMode, PerfGroup};
+ use super::proc_maps;
+@@ -703,6 +704,7 @@
+     let mut total_lost_events = 0;
+     let mut last_timestamp = 0;
+     let mut hunin_last_maps = std::time::Instant::now() - Duration::from_secs(1);
++    let mut hunin_health = ObserverHealth::start();
+     loop {
+         if stop_receiver.try_recv().is_ok() {
+             break;
+@@ -754,83 +756,106 @@
+             break;
+         }
+ 
++        let batch_started = std::time::Instant::now();
++        let events_before = hunin_health.event_count();
+         perf.consume_events(&mut |event_ref| {
++            let callback_started = std::time::Instant::now();
+             let record = event_ref.get();
+             let parsed_record = record.parse().unwrap();
+-            // debug!("Recording parsed_record: {:#?}", parsed_record);
+-
+-            if let Some(timestamp) = record.timestamp() {
+-                if timestamp < last_timestamp {
+-                    // eprintln!(
+-                    //     "bad timestamp ordering; {timestamp} is earlier but arrived after {last_timestamp}"
+-                    // );
++            // Only fixed metadata is retained; conversion and kernel-tail ownership stay ordered.
++            let kind = match &parsed_record {
++                EventRecord::Mmap2(_) => CallbackKind::Mmap2,
++                EventRecord::Comm(event) if event.is_execve => CallbackKind::CommExec,
++                EventRecord::Sample(_) => CallbackKind::Sample,
++                _ => CallbackKind::Other,
++            };
++            let raw_timestamp = record.timestamp();
++            let mmap_path = match &parsed_record {
++                EventRecord::Mmap2(event) => Some(event.path),
++                _ => None,
++            };
++            (|| {
++                // debug!("Recording parsed_record: {:#?}", parsed_record);
++
++                if let Some(timestamp) = record.timestamp() {
++                    if timestamp < last_timestamp {
++                        // eprintln!(
++                        //     "bad timestamp ordering; {timestamp} is earlier but arrived after {last_timestamp}"
++                        // );
++                    }
++                    last_timestamp = timestamp;
+                 }
+-                last_timestamp = timestamp;
+-            }
+-
+-            match parsed_record {
+-                EventRecord::Sample(e) => {
+-                    converter.handle_main_event_sample::<ConvertRegsNative>(&e);
+-                    /*
+-                    } else if interpretation.sched_switch_attr_index == Some(attr_index) {
+-                        converter.handle_sched_switch_sample::<C>(e);
+-                    }*/
++
++                match parsed_record {
++                    EventRecord::Sample(e) => {
++                        converter.handle_main_event_sample::<ConvertRegsNative>(&e);
++                        /*
++                        } else if interpretation.sched_switch_attr_index == Some(attr_index) {
++                            converter.handle_sched_switch_sample::<C>(e);
++                        }*/
++                    }
++                    EventRecord::Fork(e) => {
++                        converter.handle_fork(e);
++                    }
++                    EventRecord::Comm(e) => {
++                        if e.is_execve {
++                            // Try to get the command line arguments for this process.
++                            let exec_name_and_cmdline =
++                                if let Some(initial) = initial_exec_name_and_cmdline.take() {
++                                    // This COMM event is the first exec that we're processing. If we get
++                                    // here, it means we're in the "launch process" case and we're seeing
++                                    // the exec for that initial launched process.
++                                    Some(initial)
++                                } else {
++                                    // Attempt to get the process cmdline from /proc/{pid}/cmdline.
++                                    // This isn't very reliable because we're processing the perf event records
++                                    // in batches, with a delay, so the COMM record may be old enough that the
++                                    // pid no longer exists, or the pid may even refer to a different process now.
++                                    // Unfortunately there are no perf event records that give us the process
++                                    // command line.
++                                    get_process_cmdline(e.pid as u32).ok()
++                                };
++                            converter.handle_exec(e, record.timestamp(), exec_name_and_cmdline);
++                        } else {
++                            converter.handle_thread_rename(e, record.timestamp());
++                        }
++                    }
++                    EventRecord::Exit(e) => {
++                        converter.handle_exit(e);
++                    }
++                    EventRecord::Mmap(e) => {
++                        converter.handle_mmap(e, last_timestamp);
++                    }
++                    EventRecord::Mmap2(e) => {
++                        converter.handle_mmap2(e, last_timestamp);
++                    }
++                    EventRecord::ContextSwitch(e) => {
++                        let common = match record.common_data() {
++                            Ok(common) => common,
++                            Err(_) => return,
++                        };
++                        converter.handle_context_switch(e, common);
++                    }
++                    EventRecord::Lost(event) => {
++                        pending_lost_events += event.count;
++                        total_lost_events += event.count;
++                        return;
++                    }
++                    _ => {}
+                 }
+-                EventRecord::Fork(e) => {
+-                    converter.handle_fork(e);
++
++                if pending_lost_events > 0 {
++                    // eprintln!("Pending lost events: {pending_lost_events}");
++                    pending_lost_events = 0;
+                 }
+-                EventRecord::Comm(e) => {
+-                    if e.is_execve {
+-                        // Try to get the command line arguments for this process.
+-                        let exec_name_and_cmdline =
+-                            if let Some(initial) = initial_exec_name_and_cmdline.take() {
+-                                // This COMM event is the first exec that we're processing. If we get
+-                                // here, it means we're in the "launch process" case and we're seeing
+-                                // the exec for that initial launched process.
+-                                Some(initial)
+-                            } else {
+-                                // Attempt to get the process cmdline from /proc/{pid}/cmdline.
+-                                // This isn't very reliable because we're processing the perf event records
+-                                // in batches, with a delay, so the COMM record may be old enough that the
+-                                // pid no longer exists, or the pid may even refer to a different process now.
+-                                // Unfortunately there are no perf event records that give us the process
+-                                // command line.
+-                                get_process_cmdline(e.pid as u32).ok()
+-                            };
+-                        converter.handle_exec(e, record.timestamp(), exec_name_and_cmdline);
+-                    } else {
+-                        converter.handle_thread_rename(e, record.timestamp());
+-                    }
+-                }
+-                EventRecord::Exit(e) => {
+-                    converter.handle_exit(e);
+-                }
+-                EventRecord::Mmap(e) => {
+-                    converter.handle_mmap(e, last_timestamp);
+-                }
+-                EventRecord::Mmap2(e) => {
+-                    converter.handle_mmap2(e, last_timestamp);
+-                }
+-                EventRecord::ContextSwitch(e) => {
+-                    let common = match record.common_data() {
+-                        Ok(common) => common,
+-                        Err(_) => return,
+-                    };
+-                    converter.handle_context_switch(e, common);
+-                }
+-                EventRecord::Lost(event) => {
+-                    pending_lost_events += event.count;
+-                    total_lost_events += event.count;
+-                    return;
+-                }
+-                _ => {}
+-            }
+-
+-            if pending_lost_events > 0 {
+-                // eprintln!("Pending lost events: {pending_lost_events}");
+-                pending_lost_events = 0;
+-            }
++            })();
++            let path = mmap_path.map(|path| match path {
++                RawData::Single(bytes) => (bytes, &[][..]),
++                RawData::Split(first, second) => (first, second),
++            });
++            hunin_health.callback(kind, callback_started, raw_timestamp, path);
+         });
++        hunin_health.batch(batch_started, events_before);
+ 
+         if hunin_last_maps.elapsed() >= Duration::from_millis(20) {
+             let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+@@ -847,7 +872,9 @@
+         eprintln!("Lost {total_lost_events} events.");
+     }
+ 
++    let finish_started = std::time::Instant::now();
+     let profile = converter.finish();
++    hunin_health.emit(finish_started);
+ 
+     save_profile_to_file(&profile, output_filename).expect("Couldn't write JSON");
+ 

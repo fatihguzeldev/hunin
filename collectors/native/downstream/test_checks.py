@@ -58,6 +58,13 @@ class RequiredSourceChecksTest(unittest.TestCase):
             ]
             self.assertEqual(len(wakeups), 1)
             self.assertEqual(wakeups[0].expected_passed, 1)
+            diagnostics = [
+                check
+                for check in checks.required_checks(target)
+                if check.filter == "linux::observer_health::tests"
+            ]
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(diagnostics[0].expected_passed, 3)
 
     def test_zero_passing_or_merely_ignored_tests_cannot_pass_a_required_guard(self):
         for stdout in (

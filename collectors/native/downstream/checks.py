@@ -61,6 +61,9 @@ def required_checks(target, extra_filters=()):
                 SourceCheck(
                     "samply", "linux::perf_event::hunin_wakeup_tests", expected_passed=1
                 ),
+                SourceCheck(
+                    "samply", "linux::observer_health::tests", expected_passed=3
+                ),
             ]
         )
     checks.extend(SourceCheck("samply", value) for value in extra_filters)
