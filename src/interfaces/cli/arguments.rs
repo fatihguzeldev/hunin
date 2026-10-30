@@ -11,6 +11,9 @@ pub(super) struct Cli {
     #[arg(long, env = "HUNIN_DATA_DIR", global = true)]
     pub(super) data_dir: Option<PathBuf>,
     /// Select a project by stable ID or unambiguous name.
+    ///
+    /// Defaults to the launch workspace (run --cwd uses that workspace).
+    /// Generic call parameters and MCP workloads do not switch projects.
     #[arg(
         long,
         env = "HUNIN_PROJECT",
@@ -105,6 +108,7 @@ pub(super) enum ProjectCommand {
         workspace: Option<PathBuf>,
     },
     /// Register an existing store; its recording data is kept in place.
+    /// Stop processes using that store before adoption or moving it; restart after registration.
     Register {
         name: String,
         #[arg(long)]
