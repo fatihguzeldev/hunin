@@ -115,3 +115,45 @@ fn invalid_numeric_replacement_leaves_selected_observations_unchanged() {
         assert_eq!(store.records("numbers").unwrap(), vec![record.clone()]);
     }
 }
+
+#[tokio::test]
+async fn equivalent_pid_encodings_share_resource_series_and_process_lifetime_cost() {
+    let (_root, store) = setup();
+    let rows: Vec<_> = [(100.0, 2.0, 5), (120.0, 2.0, 7)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (time, pid, value))| {
+            let mut record = span();
+            record["id"] = json!(format!("point-{index}"));
+            record["kind"] = json!("metric");
+            record["name"] = json!("process.cpu_time");
+            record.as_object_mut().unwrap().remove("duration_us");
+            record["timestamp_us"] = json!(time);
+            record["pid"] = if index == 0 { json!(2) } else { json!(pid) };
+            record["value"] = json!(value);
+            record["unit"] = json!("milliseconds");
+            record["scope"] = json!("process");
+            record["attributes"]["process_lifetime_id"] = json!("one");
+            record["attributes"]["temporality"] = json!("cumulative");
+            record
+        })
+        .collect();
+    store.accept("numbers", "resources", &rows).unwrap();
+    let resources = query::resources(&rows);
+    assert_eq!(resources["series"].as_array().unwrap().len(), 1);
+    let result = hunin::operations::Operations::new(store)
+        .call(
+            "comparisons.create",
+            json!({"before":"numbers","after":"numbers"}),
+        )
+        .await
+        .unwrap();
+    let cpu = result["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "process.cpu_time.observed_total")
+        .unwrap();
+    assert_eq!(cpu["before"], 7.0);
+    assert_eq!(cpu["before_process_lifetimes"], 1);
+}

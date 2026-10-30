@@ -77,16 +77,19 @@ fn resource_value(
             continue;
         };
         let attrs = &row["attributes"];
+        let pid = crate::model::numbers::unsigned_integer(&row["pid"])
+            .map(Value::from)
+            .unwrap_or_else(|| row["pid"].clone());
         let lifetime = if let Some(id) = attrs["process_lifetime_id"].as_str() {
-            json!([row["pid"], id]).to_string()
+            json!([pid, id]).to_string()
         } else if let Some(start) = attrs["process_started_at_seconds"]
             .as_u64()
             .filter(|t| *t > 0)
         {
-            json!([row["pid"], start]).to_string()
+            json!([pid, start]).to_string()
         } else {
             identity_known = false;
-            json!(["unknown lifetime", row["pid"], row["producer_id"]]).to_string()
+            json!(["unknown lifetime", pid, row["producer_id"]]).to_string()
         };
         if !lifetimes.contains_key(&lifetime) {
             work.entry()?;

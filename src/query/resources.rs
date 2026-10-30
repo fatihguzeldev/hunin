@@ -44,7 +44,10 @@ pub(super) fn resources_page_checked(
             .as_str()
             .or_else(|| attrs["tid_kind"].as_str())
             .unwrap_or("producer-local");
-        let metadata = json!({"name":record["name"],"unit":record["unit"],"scope":record["scope"],"pid":record["pid"],"tid":record["tid"],"producer_id":record["producer_id"],"context_id":record["context_id"],"thread_id_source":thread_source,"clock":clock,"clock_alignment":if unmapped{"unmapped"}else{"aligned"},"time_mapping":mapping,"process_started_at_seconds":attrs["process_started_at_seconds"],"process_lifetime_id":attrs["process_lifetime_id"],"process_role":attrs["process_role"],"temporality":attrs["temporality"]});
+        let pid = unsigned_integer(&record["pid"])
+            .map(Value::from)
+            .unwrap_or_else(|| record["pid"].clone());
+        let metadata = json!({"name":record["name"],"unit":record["unit"],"scope":record["scope"],"pid":pid,"tid":record["tid"],"producer_id":record["producer_id"],"context_id":record["context_id"],"thread_id_source":thread_source,"clock":clock,"clock_alignment":if unmapped{"unmapped"}else{"aligned"},"time_mapping":mapping,"process_started_at_seconds":attrs["process_started_at_seconds"],"process_lifetime_id":attrs["process_lifetime_id"],"process_role":attrs["process_role"],"temporality":attrs["temporality"]});
         let key = metadata.to_string();
         if !groups.contains_key(&key) {
             work.entry()?;
