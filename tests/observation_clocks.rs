@@ -109,7 +109,7 @@ fn concrete_legacy_epoch_sources_retain_provenance_and_malformed_history_stays_u
     store
         .accept("clocks", "legacy", std::slice::from_ref(&legacy))
         .unwrap();
-    let resources = query::resources(&[legacy.clone()]);
+    let resources = query::resources(std::slice::from_ref(&legacy));
     assert_eq!(resources["series"][0]["clock_alignment"], "aligned");
     assert_eq!(
         resources["series"][0]["clock"],

@@ -80,62 +80,95 @@ impl PublicationMetadata<'_> {
 pub(crate) fn validate_relations(
     proposed: &[ObservationLinks],
     selected: &HashMap<ObservationId, SelectedObservation>,
+    mut checkpoint: impl FnMut() -> Result<()>,
 ) -> Result<HashSet<ResultId>> {
-    validate_ownership(proposed, selected)?;
-    dependencies(proposed, selected)
+    validate_ownership_checked(proposed, selected, &mut checkpoint)?;
+    dependencies(proposed, selected, checkpoint)
 }
 
 pub(crate) fn validate_ownership(
     proposed: &[ObservationLinks],
     selected: &HashMap<ObservationId, SelectedObservation>,
 ) -> Result<()> {
-    let own: HashMap<&ObservationId, &Ownership> = proposed
-        .iter()
-        .map(|row| (&row.id, &row.ownership))
-        .collect();
+    validate_ownership_checked(proposed, selected, || Ok(()))
+}
+
+const MAXIMUM_OWNERSHIP_NODES: usize = 1_000_000;
+
+fn validate_ownership_checked(
+    proposed: &[ObservationLinks],
+    selected: &HashMap<ObservationId, SelectedObservation>,
+    checkpoint: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    validate_ownership_bounded(proposed, selected, MAXIMUM_OWNERSHIP_NODES, checkpoint)
+}
+
+/// Each parent/context graph has one outgoing edge per node. Gray nodes detect
+/// cycles; black nodes memoize complete paths, including shared selected
+/// ancestors. An iterative walk avoids recursive stack growth. The named limit
+/// counts distinct nodes across both graph walks, not bytes or wall time.
+fn validate_ownership_bounded(
+    proposed: &[ObservationLinks],
+    selected: &HashMap<ObservationId, SelectedObservation>,
+    maximum_nodes: usize,
+    mut checkpoint: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let mut own = HashMap::new();
+    for row in proposed {
+        checkpoint()?;
+        own.insert(&row.id, &row.ownership);
+    }
     let lookup = |id: &ObservationId| {
         own.get(id)
             .copied()
             .or_else(|| selected.get(id).map(|row| &row.ownership))
     };
-    for row in proposed {
-        for (field, id, kind, name) in [
-            (
-                "parent_id",
-                row.ownership.parent_id.as_ref(),
-                OwnershipKind::Span,
-                "span",
-            ),
-            (
-                "context_id",
-                row.ownership.context_id.as_ref(),
-                OwnershipKind::Context,
-                "context",
-            ),
-        ] {
-            if let Some(id) = id
-                && lookup(id).is_none_or(|parent| parent.kind != kind)
-            {
-                bail!("{field} must reference a {name}: {id}");
-            }
-        }
-        for (field, target) in [
-            (
-                "parent_id",
-                parent_id as fn(&Ownership) -> Option<&ObservationId>,
-            ),
-            (
-                "context_id",
-                context_id as fn(&Ownership) -> Option<&ObservationId>,
-            ),
-        ] {
-            let mut seen = HashSet::new();
+    let mut visited = 0usize;
+    for (field, target, kind, name) in [
+        (
+            "parent_id",
+            parent_id as fn(&Ownership) -> Option<&ObservationId>,
+            OwnershipKind::Span,
+            "span",
+        ),
+        (
+            "context_id",
+            context_id as fn(&Ownership) -> Option<&ObservationId>,
+            OwnershipKind::Context,
+            "context",
+        ),
+    ] {
+        let mut colors: HashMap<&ObservationId, bool> = HashMap::new();
+        for row in proposed {
+            let mut path = Vec::new();
             let mut current = Some((&row.id, &row.ownership));
             while let Some((id, ownership)) = current {
-                if !seen.insert(id) {
-                    bail!("cyclic {field} ownership");
+                checkpoint()?;
+                if let Some(active) = colors.get(id) {
+                    if *active {
+                        bail!("cyclic {field} ownership");
+                    }
+                    break;
                 }
-                current = target(ownership).and_then(|id| lookup(id).map(|node| (id, node)));
+                visited += 1;
+                anyhow::ensure!(
+                    visited <= maximum_nodes,
+                    "ownership-graph-v1 node limit exceeded: maximum {maximum_nodes}, observed {visited}"
+                );
+                colors.insert(id, true);
+                path.push(id);
+                current = if let Some(reference) = target(ownership) {
+                    let parent = lookup(reference)
+                        .filter(|parent| parent.kind == kind)
+                        .with_context(|| format!("{field} must reference a {name}: {reference}"))?;
+                    Some((reference, parent))
+                } else {
+                    None
+                };
+            }
+            for id in path {
+                checkpoint()?;
+                colors.insert(id, false);
             }
         }
     }
@@ -152,11 +185,14 @@ fn context_id(ownership: &Ownership) -> Option<&ObservationId> {
 fn dependencies(
     proposed: &[ObservationLinks],
     selected: &HashMap<ObservationId, SelectedObservation>,
+    mut checkpoint: impl FnMut() -> Result<()>,
 ) -> Result<HashSet<ResultId>> {
     let own: HashSet<&ObservationId> = proposed.iter().map(|row| &row.id).collect();
     let mut dependencies = HashSet::new();
     for row in proposed {
+        checkpoint()?;
         for reference in &row.references {
+            checkpoint()?;
             if own.contains(reference) {
                 continue;
             }
@@ -167,4 +203,130 @@ fn dependencies(
         }
     }
     Ok(dependencies)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn chain(n: usize, context: bool) -> Vec<ObservationLinks> {
+        (0..n)
+            .map(|index| ObservationLinks {
+                id: format!("node-{index}").into(),
+                ownership: Ownership {
+                    kind: if context {
+                        OwnershipKind::Context
+                    } else {
+                        OwnershipKind::Span
+                    },
+                    parent_id: (!context && index > 0)
+                        .then(|| format!("node-{}", index - 1).into()),
+                    context_id: (context && index > 0)
+                        .then(|| format!("node-{}", index - 1).into()),
+                },
+                references: vec![],
+            })
+            .collect()
+    }
+    #[test]
+    fn long_parent_and_context_chains_have_linear_checkpoint_work() {
+        for (context, reverse) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut proposed = chain(1000, context);
+            if reverse {
+                proposed.reverse();
+            }
+            let mut work = 0;
+            validate_ownership_checked(&proposed, &HashMap::new(), || {
+                work += 1;
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                work <= 8 * proposed.len(),
+                "{work} ownership steps for {} nodes",
+                proposed.len()
+            );
+        }
+    }
+    #[test]
+    fn shared_selected_ancestors_are_walked_once_and_keep_kind_and_cycle_checks() {
+        let old = chain(400, false);
+        let selected = old
+            .into_iter()
+            .map(|row| {
+                (
+                    row.id,
+                    SelectedObservation {
+                        ownership: row.ownership,
+                        result_set_id: "selected".into(),
+                    },
+                )
+            })
+            .collect();
+        let mut proposed = chain(400, false);
+        for (index, row) in proposed.iter_mut().enumerate() {
+            row.id = format!("leaf-{index}").into();
+            row.ownership.parent_id = Some("node-399".into());
+        }
+        let mut work = 0;
+        validate_ownership_checked(&proposed, &selected, || {
+            work += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert!(work <= 8 * 800, "{work} shared-ancestor steps");
+        let mut cyclic = chain(2, false);
+        cyclic[0].ownership.parent_id = Some("node-1".into());
+        assert!(
+            validate_ownership(&cyclic, &HashMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("cyclic")
+        );
+        let mut wrong = chain(2, true);
+        wrong[1].ownership.parent_id = Some("node-0".into());
+        assert!(
+            validate_ownership(&wrong, &HashMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("span")
+        );
+    }
+    #[test]
+    fn cooperative_work_expiry_interrupts_ancestry_instead_of_finishing_the_chain() {
+        let proposed = chain(1000, false);
+        let mut work = 0;
+        let error = validate_ownership_checked(&proposed, &HashMap::new(), || {
+            work += 1;
+            anyhow::ensure!(work < proposed.len() + 32, "injected traversal work limit");
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(work, proposed.len() + 32);
+        assert!(error.to_string().contains("work limit"));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn explicit_node_budget_rejects_distinct_work_even_with_a_live_deadline() {
+        let records: Vec<_> = (0..100)
+            .map(|i| ObservationLinks {
+                id: format!("node-{i}").into(),
+                ownership: Ownership {
+                    kind: OwnershipKind::Span,
+                    parent_id: None,
+                    context_id: None,
+                },
+                references: vec![],
+            })
+            .collect();
+        let error =
+            validate_ownership_bounded(&records, &HashMap::new(), 20, || Ok(())).unwrap_err();
+        assert!(
+            error.to_string().contains("maximum 20, observed 21"),
+            "{error}"
+        );
+    }
 }

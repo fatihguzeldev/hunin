@@ -41,6 +41,15 @@ impl Store {
     }
 
     pub(crate) fn publish_result(&self, request: PublicationRequest<'_>) -> Result<bool> {
+        let deadline = request.deadline;
+        self.publish_result_checked(request, || publication::check_deadline(deadline))
+    }
+
+    fn publish_result_checked(
+        &self,
+        request: PublicationRequest<'_>,
+        mut checkpoint: impl FnMut() -> Result<()>,
+    ) -> Result<bool> {
         use crate::model::identity::{ObservationId, ResultId};
         let PublicationRequest {
             run_id,
@@ -48,12 +57,12 @@ impl Store {
             input_identity,
             records,
             metadata,
-            deadline,
+            deadline: _,
         } = request;
         self.run(run_id)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        publication::check_deadline(deadline)?;
+        checkpoint()?;
         if let Some(id) =
             metadata.and_then(|value| value.analysis_execution_id().map(str::to_owned))
         {
@@ -81,31 +90,39 @@ impl Store {
             if let Some(metadata) = metadata {
                 write_publication_metadata(&tx, metadata, &metadata.replayed_document(&id))?;
             }
-            publication::check_deadline(deadline)?;
+            checkpoint()?;
             tx.commit()?;
             return Ok(false);
         }
         deactivate_source(&tx, run_id, source_key)?;
         // The write transaction owns this selected snapshot through insertion.
         // Acceptance only needs relationship projections, never whole stack/source payloads.
-        let selected: HashMap<ObservationId, SelectedObservation> = tx
-            .prepare("SELECT o.id,o.kind,json_extract(o.record,'$.parent_id'),json_extract(o.record,'$.context_id'),o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?
-            .query_map([run_id], |row| {
+        let selected: HashMap<ObservationId, SelectedObservation> = {
+            let mut statement = tx.prepare("SELECT o.id,o.kind,json_extract(o.record,'$.parent_id'),json_extract(o.record,'$.context_id'),o.result_set_id FROM observations o JOIN result_sets r ON r.id=o.result_set_id WHERE o.run_id=?1 AND r.active=1")?;
+            let mut rows = statement.query([run_id])?;
+            let mut selected = HashMap::new();
+            while let Some(row) = rows.next()? {
+                checkpoint()?;
                 let kind: String = row.get(1)?;
-                Ok((ObservationId::from(row.get::<_, String>(0)?), SelectedObservation {
-                    ownership: Ownership {
-                        kind: OwnershipKind::from_wire(&kind),
-                        parent_id: row.get::<_, Option<String>>(2)?.map(ObservationId::from),
-                        context_id: row.get::<_, Option<String>>(3)?.map(ObservationId::from),
+                selected.insert(
+                    ObservationId::from(row.get::<_, String>(0)?),
+                    SelectedObservation {
+                        ownership: Ownership {
+                            kind: OwnershipKind::from_wire(&kind),
+                            parent_id: row.get::<_, Option<String>>(2)?.map(ObservationId::from),
+                            context_id: row.get::<_, Option<String>>(3)?.map(ObservationId::from),
+                        },
+                        result_set_id: ResultId::from(row.get::<_, String>(4)?),
                     },
-                    result_set_id: ResultId::from(row.get::<_, String>(4)?),
-                }))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
+                );
+            }
+            selected
+        };
         let existing = selected.keys().cloned().collect();
         ingestion::validate_ids(run_id, records, existing)?;
         let proposed = ingestion::links(records);
-        let mut dependencies = publication::validate_relations(&proposed, &selected)?;
+        let mut dependencies =
+            publication::validate_relations(&proposed, &selected, &mut checkpoint)?;
         if let Some(metadata) = metadata {
             dependencies.extend(metadata.declared_inputs()?);
         }
@@ -146,7 +163,7 @@ impl Store {
         if let Some(metadata) = metadata {
             write_publication_metadata(&tx, metadata, metadata.document())?;
         }
-        publication::check_deadline(deadline)?;
+        checkpoint()?;
         tx.commit()?;
         Ok(true)
     }
