@@ -2,6 +2,17 @@
   "schema_version": 1,
   "components": [
     {
+      "name": "automatic-call-count-collectors",
+      "source_root": "collectors/counts",
+      "destination_root": "collectors/counts",
+      "files": {
+        "build.py": "build.py",
+        "python.py": "python.py",
+        "nativecounter.c": "nativecounter.c",
+        "hooks.c": "hooks.c"
+      }
+    },
+    {
       "name": "javascript-collector",
       "source_root": "collectors/javascript",
       "destination_root": "collectors/javascript",
