@@ -1,4 +1,4 @@
-use super::super::finalization::{CaptureProducer, ProducerCoverage};
+use super::super::{CaptureProducer, finalization::ProducerCoverage};
 use super::ValidationReads;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;

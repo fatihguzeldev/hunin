@@ -1,87 +1,16 @@
-use super::{CapturePlan, CaptureRequest, javascript, profile_format, python};
-use crate::host::walk_files;
-use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-/// What this adapter promises to finalize, rather than a claim about all target work.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum CaptureOutput {
-    #[default]
-    Unspecified,
-    Profiles {
-        format: String,
-    },
-    GraalCpuSampler,
-    DenoWorkers {
-        producer_id: String,
-    },
-    BunProducers {
-        session_id: String,
-        root_registration_id: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CaptureArtifact {
-    pub path: PathBuf,
-    pub format: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RawProfile {
-    pub path: PathBuf,
-    pub format: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CaptureProducer {
-    pub id: String,
-    pub process_id: u64,
-    pub runtime_id: String,
-    pub profiles: Vec<PathBuf>,
-}
+//! Validate the selected retained inventory against a prepared capture promise.
+use super::{
+    CaptureArtifact, CaptureCompletion, CaptureOutput, CapturePlan, CaptureProducer,
+    CaptureRequest, CompletionState, RawCaptureBundle, RawProfile,
+    artifacts::{capture_artifacts, profile_format},
+    javascript, python,
+};
+use anyhow::Result;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ProducerCoverage {
     pub expected: Vec<String>,
     pub observed: Vec<CaptureProducer>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompletionState {
-    Complete,
-    Incomplete,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CaptureCompletion {
-    pub state: CompletionState,
-    pub scope: String,
-    /// None means the adapter did not establish a producer inventory.
-    pub expected_producers: Option<Vec<String>>,
-    pub observed_producers: Option<Vec<CaptureProducer>>,
-    pub diagnostics: Vec<String>,
-    pub limitations: Vec<String>,
-}
-
-impl CaptureCompletion {
-    pub fn ensure_complete(&self) -> Result<()> {
-        if matches!(self.state, CompletionState::Incomplete) {
-            bail!("{}", self.diagnostics.join("; "));
-        }
-        Ok(())
-    }
-}
-
-/// Raw evidence and collection conditions; no decoding or accepted observations.
-#[derive(Debug, Clone, Serialize)]
-pub struct RawCaptureBundle {
-    pub artifacts: Vec<CaptureArtifact>,
-    pub profiles: Vec<RawProfile>,
-    pub completion: CaptureCompletion,
 }
 
 impl CapturePlan {
@@ -209,47 +138,11 @@ impl CapturePlan {
     }
 }
 
-/// Preserve these artifacts before checking completeness or decoding profile bytes.
-pub fn capture_artifacts(directory: &Path) -> Result<Vec<CaptureArtifact>> {
-    let mut files = Vec::new();
-    walk_files(directory, &mut files)?;
-    files.sort();
-    Ok(artifacts_from_paths(files))
-}
-
-pub(crate) fn artifacts_from_paths(files: Vec<PathBuf>) -> Vec<CaptureArtifact> {
-    files
-        .into_iter()
-        .map(|path| {
-            let name = path.file_name().unwrap().to_string_lossy();
-            let format = profile_format(&path)
-                .unwrap_or_else(|| {
-                    if name.ends_with(".jsonl") {
-                        "hunin-jsonl"
-                    } else if name.ends_with(".meta.json")
-                        || name.ends_with(".syms.json")
-                        || name == "go-tool.json"
-                    {
-                        "profile-sidecar"
-                    } else if name == "stdout.txt" {
-                        "stdout"
-                    } else if name == "stderr.txt" {
-                        "stderr"
-                    } else {
-                        "collector-artifact"
-                    }
-                })
-                .to_owned();
-            CaptureArtifact { path, format }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::{collections::BTreeMap, fs};
+    use std::{collections::BTreeMap, fs, path::Path};
 
     fn request(directory: &Path) -> CaptureRequest {
         CaptureRequest {

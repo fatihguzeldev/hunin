@@ -1,4 +1,4 @@
-use super::super::finalization::{CaptureProducer, ProducerCoverage};
+use super::super::{CaptureProducer, finalization::ProducerCoverage};
 use super::ValidationReads;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
@@ -231,7 +231,7 @@ pub(super) fn validate_with_reads(
     }
     for path in files
         .iter()
-        .filter(|path| super::super::profile_format(path) == Some("v8-cpuprofile"))
+        .filter(|path| super::super::artifacts::profile_format(path) == Some("v8-cpuprofile"))
     {
         ensure!(
             claimed_profiles.contains(path),
