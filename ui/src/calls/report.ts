@@ -97,6 +97,17 @@ export function countReport(
                     { class: 'source-label mono' },
                     `${row.function.file ?? 'Source unavailable'}${row.function.line == null ? '' : `:${row.function.line}`}`,
                   ),
+                  'code_id' in row.function &&
+                    typeof row.function.code_id === 'string'
+                    ? el(
+                        'small',
+                        {
+                          class: 'source-label mono',
+                          title: 'Code instance identity',
+                        },
+                        row.function.code_id,
+                      )
+                    : null,
                 ),
                 el('td', { class: 'numeric' }, countLabel(row.calls)),
                 el('td', { class: 'numeric' }, countLabel(row.resumes)),
