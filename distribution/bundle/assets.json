@@ -54,7 +54,7 @@
       "name": "native-collector",
       "source_root": "collectors/native",
       "destination_root": "collectors/native",
-      "build": "python collectors/native/build.py --output collectors/native/bin/samply[.exe] --cache /your/build-cache",
+      "build": "python -m collectors.native.downstream.build --output collectors/native/bin/samply[.exe] --cache /your/build-cache",
       "files": {
         "manifest.json": "manifest.json",
         "bin/{native_executable}": "bin/{native_executable}",

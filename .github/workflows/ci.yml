@@ -206,7 +206,7 @@ jobs:
       - name: Build pinned native lifetime collector
         if: always() && steps.build.outcome == 'success'
         id: samply
-        run: python collectors/native/build.py --output "collectors/native/bin/samply${{ runner.os == 'Windows' && '.exe' || '' }}" --cache "${{ runner.temp }}/hunin-native-cache" --github-env ${{ runner.os == 'Windows' && '--test-filter=windows::sample_correlation --test-filter=sample_stack_tests' || runner.os == 'macOS' && '--test-filter=mac::image_snapshot --test-filter=mac::process_launcher' || '' }}
+        run: python -m collectors.native.downstream.build --output "collectors/native/bin/samply${{ runner.os == 'Windows' && '.exe' || '' }}" --cache "${{ runner.temp }}/hunin-native-cache" --github-env ${{ runner.os == 'Windows' && '--test-filter=windows::sample_correlation --test-filter=sample_stack_tests' || runner.os == 'macOS' && '--test-filter=mac::image_snapshot --test-filter=mac::process_launcher' || '' }}
       - name: Enable process profiling in the ephemeral Linux runner
         if: always() && runner.os == 'Linux' && steps.build.outcome == 'success'
         run: sudo sysctl kernel.perf_event_paranoid=1
@@ -215,13 +215,13 @@ jobs:
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime native --output collector-evidence/native
       - name: Verify native target correctness separately from collector exit
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python collectors/native/verify_outcome.py --binary ${{ matrix.binary }} --output collector-evidence/native-outcome
+        run: python -m collectors.native.acceptance.outcome --binary ${{ matrix.binary }} --output collector-evidence/native-outcome
       - name: Verify native load reuse, concurrent instances and offline evidence
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python collectors/native/verify_lifetimes.py --binary ${{ matrix.binary }} --output collector-evidence/native-lifetimes
+        run: python -m collectors.native.acceptance.lifetimes --binary ${{ matrix.binary }} --output collector-evidence/native-lifetimes
       - name: Verify Windows ETW session ownership and cancellation cleanup
         if: always() && runner.os == 'Windows' && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python collectors/native/verify_windows_sessions.py --binary ${{ matrix.binary }} --output collector-evidence/windows-sessions
+        run: python -m collectors.native.acceptance.windows_sessions --binary ${{ matrix.binary }} --output collector-evidence/windows-sessions
       - name: Verify automatic Node collection
         if: always() && steps.build.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime node --output collector-evidence/node
@@ -231,7 +231,7 @@ jobs:
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go-test --output collector-evidence/go-test
       - name: Verify pinned PE symbol-reader source against the measured Go test binary
         if: always() && runner.os == 'Windows' && steps.samply.outcome == 'success' && steps.go_test.outcome == 'success'
-        run: python collectors/native/verify_source.py --cache "${{ runner.temp }}/hunin-native-cache" --pe-recording collector-evidence/go-test --output collector-evidence/native-source
+        run: python -m collectors.native.downstream.verification --cache "${{ runner.temp }}/hunin-native-cache" --pe-recording collector-evidence/go-test --output collector-evidence/native-source
       - name: Verify ordinary Go executable native stacks and source
         if: always() && steps.build.outcome == 'success' && steps.samply.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime go --output collector-evidence/go-native

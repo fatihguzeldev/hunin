@@ -303,3 +303,7 @@ def main():
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
             environment.write(f"HUNIN_SAMPLY={binary}\n")
     print(binary)
+
+
+if __name__ == "__main__":
+    main()

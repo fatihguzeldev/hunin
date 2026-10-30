@@ -44,7 +44,7 @@ def verify_native_collector(files, target):
     )
     if any(name not in files for name in required):
         raise ValueError(
-            "Build the native collector before packaging: python collectors/native/build.py --output collectors/native/bin/samply[.exe] --cache /your/build-cache"
+            "Build the native collector before packaging: python -m collectors.native.downstream.build --output collectors/native/bin/samply[.exe] --cache /your/build-cache"
         )
     receipt = json.loads(files[executable + ".provenance.json"])
     manifest = json.loads(files[base + "manifest.json"])
