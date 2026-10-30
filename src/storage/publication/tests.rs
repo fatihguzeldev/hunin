@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::runs::{Run, RunStatus};
 use serde_json::{Value, json};
 use std::time::Duration;
 
