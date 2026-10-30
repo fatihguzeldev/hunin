@@ -58,7 +58,9 @@ def _emit(kind, **fields):
         row.update(fields)
         row["attributes"] = {
             "thread_id_source": "threading.get_ident",
-            "clock": "time.time_ns",
+            "clock": "unix_epoch",
+            "clock_alignment": "direct_epoch",
+            "clock_source": "time.time_ns",
             **row.get("attributes", {}),
         }
         payload = (
@@ -149,7 +151,9 @@ class Span:
             attributes={
                 **self.attributes,
                 **(attributes or {}),
-                "clock": "time.time_ns/perf_counter_ns",
+                "clock": "unix_epoch",
+                "clock_alignment": "direct_epoch",
+                "clock_source": "time.time_ns/perf_counter_ns",
             },
         )
         for key in ("parent_id", "context_id"):

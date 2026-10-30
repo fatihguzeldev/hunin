@@ -109,7 +109,9 @@ function append<K extends keyof Fields>(
       ...fields,
       attributes: {
         thread_id_source: 'node:worker_threads.threadId',
-        clock: 'performance.timeOrigin+performance.now',
+        clock: 'unix_epoch',
+        clock_alignment: 'direct_epoch',
+        clock_source: 'performance.timeOrigin+performance.now',
         ...('attributes' in fields ? fields.attributes : {}),
       },
     };
@@ -209,7 +211,9 @@ export function startSpan(name: string, attributes: Attributes = {}): Span {
         attributes: {
           ...attributes,
           ...extra,
-          clock: 'performance.timeOrigin+performance.now',
+          clock: 'unix_epoch',
+          clock_alignment: 'direct_epoch',
+          clock_source: 'performance.timeOrigin+performance.now',
         },
       });
     },

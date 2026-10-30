@@ -23,8 +23,9 @@ pub(crate) fn validate_ids(
     });
     for record in records {
         if let Err(error) = schema.validate(record) {
-            bail!("observation schema: {error}");
+            bail!("observation schema at {}: {error}", error.instance_path);
         }
+        crate::model::clocks::validate(&record["attributes"])?;
         for field in ["timestamp_us", "duration_us", "pid"] {
             if let Some(value) = record.get(field) {
                 anyhow::ensure!(

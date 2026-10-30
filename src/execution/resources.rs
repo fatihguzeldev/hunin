@@ -307,7 +307,7 @@ fn observe(
                     "milliseconds",
                 ),
             ] {
-                records.push(json!({"schema_version":1,"kind":"metric","id":format!("{producer}:{sequence}:{name}"),"run_id":run_id,"producer_id":producer,"pid":pid.as_u32(),"tid":"process","timestamp_us":now,"basis":"observed","name":name,"value":value,"unit":unit,"scope":"process","attributes":{"process_started_at_seconds":p.start_time(),"process_lifetime_id":birth,"requested_interval_us":100000,"observation_refresh_elapsed_us":refresh_elapsed_us,"temporality":if name=="process.rss" {"gauge"}else{"cumulative"},"process_role":if collector_wrapper&&pid.as_u32()==root{"collector"}else{"measured"},"process_name":p.name().to_string_lossy(),"lifetime_basis":"native_birth_identity_brackets_resource_refresh"}}));
+                records.push(json!({"schema_version":1,"kind":"metric","id":format!("{producer}:{sequence}:{name}"),"run_id":run_id,"producer_id":producer,"pid":pid.as_u32(),"tid":"process","timestamp_us":now,"basis":"observed","name":name,"value":value,"unit":unit,"scope":"process","attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch","clock_source":"SystemTime epoch at OS resource refresh","process_started_at_seconds":p.start_time(),"process_lifetime_id":birth,"requested_interval_us":100000,"observation_refresh_elapsed_us":refresh_elapsed_us,"temporality":if name=="process.rss" {"gauge"}else{"cumulative"},"process_role":if collector_wrapper&&pid.as_u32()==root{"collector"}else{"measured"},"process_name":p.name().to_string_lossy(),"lifetime_basis":"native_birth_identity_brackets_resource_refresh"}}));
             }
         }
     }

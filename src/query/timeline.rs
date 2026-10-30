@@ -54,7 +54,7 @@ pub(super) fn read(
         {
             return Ok(());
         }
-        let unmapped = row.attributes["clock_alignment"] == "unmapped";
+        let unmapped = !crate::model::clocks::inspect(&row.attributes).aligned;
         if unmapped {
             unaligned += 1;
         } else if let Some(timestamp) = unsigned_integer(&row.timestamp_us) {
@@ -125,7 +125,7 @@ pub fn timeline(records: &[Value], params: &Value) -> Value {
                     .is_none_or(|pid| unsigned_integer(&r["pid"]) == Some(pid))
         })
         .collect::<Vec<_>>();
-    let is_unmapped = |r: &Value| r["attributes"]["clock_alignment"] == "unmapped";
+    let is_unmapped = |r: &Value| !crate::model::clocks::inspect(&r["attributes"]).aligned;
     let unaligned = relevant.iter().filter(|r| is_unmapped(r)).count();
     let aligned = relevant
         .iter()

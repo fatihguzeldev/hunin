@@ -32,7 +32,7 @@ fn inclusive_stack_weights_do_not_duplicate_total_or_merge_different_units() {
 fn unaligned_cpu_clocks_do_not_become_wall_timeline_positions() {
     let records = vec![
         json!({"kind":"sample","timestamp_us":20,"attributes":{"clock_alignment":"unmapped"}}),
-        json!({"kind":"span","timestamp_us":100,"duration_us":10,"pid":1}),
+        json!({"kind":"span","timestamp_us":100,"duration_us":10,"pid":1,"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}}),
     ];
     let result = query::timeline(&records, &json!({}));
     assert_eq!(result["records"].as_array().unwrap().len(), 1);
@@ -69,7 +69,7 @@ fn function_totals_merge_sample_locations_but_keep_build_identity() {
 fn unmapped_view_ignores_epoch_window_and_all_view_keeps_separate_arrays() {
     let records = vec![
         json!({"kind":"event","timestamp_us":20,"pid":1,"attributes":{"clock":"process_cpu","clock_alignment":"unmapped"}}),
-        json!({"kind":"span","timestamp_us":100,"duration_us":10,"pid":1}),
+        json!({"kind":"span","timestamp_us":100,"duration_us":10,"pid":1,"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}}),
     ];
     let unmapped = query::timeline(
         &records,
@@ -97,7 +97,7 @@ fn resource_series_keep_scope_thread_namespaces_lifetimes_and_clocks() {
         let attrs = if clock == "cpu" {
             json!({"clock":"process_cpu","clock_alignment":"unmapped","process_started_at_seconds":start})
         } else {
-            json!({"process_started_at_seconds":start})
+            json!({"process_started_at_seconds":start,"clock":"unix_epoch","clock_alignment":"direct_epoch"})
         };
         records.push(json!({"id":id,"kind":"metric","name":"allocated","value":1,"unit":"bytes","scope":"context","pid":4,"tid":tid,"producer_id":producer,"context_id":context,"timestamp_us":100,"attributes":attrs}));
     }
@@ -125,7 +125,7 @@ fn resource_series_keep_scope_thread_namespaces_lifetimes_and_clocks() {
 
 #[test]
 fn resource_points_page_within_series_and_apply_epoch_window() {
-    let records=(0..6).map(|i|json!({"id":format!("point-{i}"),"kind":"metric","name":"rss","value":i,"unit":"bytes","scope":"process","pid":1,"tid":"process","producer_id":"lifetime","timestamp_us":100+i})).collect::<Vec<_>>();
+    let records=(0..6).map(|i|json!({"id":format!("point-{i}"),"kind":"metric","name":"rss","value":i,"unit":"bytes","scope":"process","pid":1,"tid":"process","producer_id":"lifetime","timestamp_us":100+i,"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}})).collect::<Vec<_>>();
     let first = query::resources_page(
         &records,
         &json!({"point_limit":2,"start_us":101,"end_us":104}),

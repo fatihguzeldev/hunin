@@ -23,7 +23,8 @@ pub(super) fn resources_page_checked(
     let mut unmapped_points = 0;
     for record in records.iter().filter(|r| r["kind"] == "metric") {
         work.check()?;
-        let unmapped = record["attributes"]["clock_alignment"] == "unmapped";
+        let interpreted = crate::model::clocks::inspect(&record["attributes"]);
+        let unmapped = !interpreted.aligned;
         let timestamp = unsigned_integer(&record["timestamp_us"]).unwrap_or(0);
         if !unmapped
             && (!params["start_us"]
@@ -37,13 +38,8 @@ pub(super) fn resources_page_checked(
             unmapped_points += 1;
         }
         let attrs = &record["attributes"];
-        let clock =
-            attrs["clock"]
-                .as_str()
-                .unwrap_or(if unmapped { "unknown" } else { "unix_epoch" });
-        let mapping = attrs["clock_alignment"]
-            .as_str()
-            .unwrap_or("default_epoch_contract");
+        let clock = interpreted.domain.as_str().unwrap_or("unknown");
+        let mapping = interpreted.mapping;
         let thread_source = attrs["thread_id_source"]
             .as_str()
             .or_else(|| attrs["tid_kind"].as_str())
