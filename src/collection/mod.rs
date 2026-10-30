@@ -1,6 +1,7 @@
 //! Collector selection and adapter composition over one raw-delivery contract.
 mod artifacts;
 mod contract;
+pub(crate) mod discovery;
 mod finalization;
 mod go;
 mod javascript;
@@ -16,7 +17,6 @@ pub use contract::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CapturePlan, CaptureProducer,
     CaptureRequest, CompletionState, RawCaptureBundle, RawProfile,
 };
-pub(crate) use python::cpu_progress::prerequisite as python_cpu_prerequisite;
 pub use selection::{
     CaptureAdapter, CaptureModeRegistration, LaunchExecutableKind, RuntimeRegistration,
     capture_modes, registered_runtimes, select_runtime,
