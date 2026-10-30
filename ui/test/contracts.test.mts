@@ -14,7 +14,7 @@ import { operation, ApiError } from '../src/api.js';
 import { duration, bytes, percentage } from '../src/format.js';
 import { parseCommand } from '../src/command.js';
 import { parseWorkloadOptions } from '../src/workload.js';
-import { hasLocalSource, hasInspectableSource } from '../src/source-path.js';
+import { hasLocalSource, hasInspectableSource } from '../src/source/paths.js';
 import { canReanalyze } from '../src/artifact.js';
 import {
   observationLabel,

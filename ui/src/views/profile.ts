@@ -4,7 +4,7 @@ import { button, el, empty, errorView, loading } from '../dom';
 import { numeric } from '../format';
 import type { ViewContext } from '../workspace';
 import { weight, weightShare, totalWeight } from '../profile-weight';
-import { hasInspectableSource } from '../source-path';
+import { hasInspectableSource } from '../source/paths';
 
 export async function profile(
   context: ViewContext,

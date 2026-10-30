@@ -3,7 +3,7 @@ import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { duration, numeric } from '../format';
 import type { Observation } from '../record.generated';
 import type { ViewContext } from '../workspace';
-import { hasInspectableSource } from '../source-path';
+import { hasInspectableSource } from '../source/paths';
 import {
   isModuleLifetime,
   observationLabel,

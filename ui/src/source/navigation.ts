@@ -1,5 +1,5 @@
-import type { OperationOutputs } from './operations.generated';
-import { button, el, field } from './dom';
+import type { OperationOutputs } from '../operations.generated';
+import { button, el, field } from '../dom';
 
 export function sourceNavigation(
   data: OperationOutputs['source.read'],
