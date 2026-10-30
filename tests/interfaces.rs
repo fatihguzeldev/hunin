@@ -1,4 +1,4 @@
-use hunin::storage::Store;
+use hunin::{operations::Operations, storage::Store};
 use serde_json::{Value, json};
 use std::{process::Stdio, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -60,4 +60,17 @@ async fn mcp_eof_finalizes_its_owned_live_recording() {
     let recording = store.run(id).unwrap();
     assert_eq!(recording.status, "canceled");
     assert!(recording.finished_at_us.is_some());
+}
+
+#[tokio::test]
+async fn mcp_rejects_non_scalar_request_ids_before_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let ops = Operations::new(Store::open(root.path()).unwrap());
+    let response = hunin::interfaces::mcp::handle(
+        &ops,
+        &json!({"jsonrpc":"2.0","id":{},"method":"ping"}),
+        true,
+    )
+    .await;
+    assert_eq!(response["error"]["code"], -32600);
 }

@@ -528,16 +528,3 @@ async fn absent_sample_units_remain_unavailable_and_missing_identity_is_rejected
         .unwrap();
     assert_eq!(result["comparable"], false);
 }
-
-#[tokio::test]
-async fn mcp_rejects_non_scalar_request_ids_before_dispatch() {
-    let root = tempfile::tempdir().unwrap();
-    let ops = Operations::new(Store::open(root.path()).unwrap());
-    let response = hunin::interfaces::mcp::handle(
-        &ops,
-        &json!({"jsonrpc":"2.0","id":{},"method":"ping"}),
-        true,
-    )
-    .await;
-    assert_eq!(response["error"]["code"], -32600);
-}
