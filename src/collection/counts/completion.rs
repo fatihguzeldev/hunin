@@ -109,3 +109,56 @@ pub(in crate::collection) fn validate(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fixture() -> (tempfile::TempDir, CaptureRequest, Vec<PathBuf>, Value) {
+        let root = tempfile::tempdir().unwrap();
+        let request = CaptureRequest {
+            command: vec!["target".into()],
+            cwd: root.path().into(),
+            artifact_dir: root.path().into(),
+            run_id: "control".into(),
+            runtime: "c".into(),
+            env: Default::default(),
+        };
+        let profile = root.path().join("calls.calls.jsonl");
+        let manifest = root.path().join("calls.complete.json");
+        let data = format!(
+            "{}\n",
+            json!({"kind":"event","name":"function.counts.complete","run_id":"control","producer_id":"calls:control","attributes":{"status":"complete","method":"compiler-hooks"}})
+        );
+        std::fs::write(&profile, &data).unwrap();
+        let report = json!({"schema_version":1,"run_id":"control","method":"compiler-hooks","status":"complete","bytes":data.len(),"records":1,"sha256":format!("{:x}",Sha256::digest(data.as_bytes())),"dropped_events":0,"counter_overflow":false,"output_truncated":false,"loss":"none_observed"});
+        std::fs::write(&manifest, serde_json::to_vec(&report).unwrap()).unwrap();
+        (root, request, vec![profile, manifest], report)
+    }
+
+    #[test]
+    fn complete_empty_selection_is_valid_but_mutated_output_is_not() {
+        let (_root, request, files, _) = fixture();
+        validate(&request, &files, "compiler-hooks", 8192).unwrap();
+        let data = std::fs::read_to_string(&files[0])
+            .unwrap()
+            .replace("calls:control", "calls:another");
+        std::fs::write(&files[0], data).unwrap();
+        assert!(validate(&request, &files, "compiler-hooks", 8192).is_err());
+    }
+
+    #[test]
+    fn a_complete_label_never_overrides_loss_or_missing_inventory() {
+        let (_root, request, files, mut report) = fixture();
+        report["dropped_events"] = json!(1);
+        std::fs::write(&files[1], serde_json::to_vec(&report).unwrap()).unwrap();
+        assert!(
+            validate(&request, &files, "compiler-hooks", 8192)
+                .unwrap_err()
+                .to_string()
+                .contains("loss")
+        );
+        assert!(validate(&request, &files[..1], "compiler-hooks", 8192).is_err());
+    }
+}

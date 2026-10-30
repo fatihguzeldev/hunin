@@ -1,12 +1,41 @@
 use crate::{
     collection::{CaptureOutput, CapturePlan, CaptureRequest},
-    host::{assets, probe},
+    host::{assets, probe, visit_regular},
     model::calls::CountRequest,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, path::Path, process::Command, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    process::Command,
+    time::{Duration, Instant},
+};
+
+fn digest(path: &Path, maximum: u64) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut read_bytes = 0;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    visit_regular(
+        path,
+        maximum,
+        &mut read_bytes,
+        || {
+            ensure!(
+                Instant::now() < deadline,
+                "count collector provenance read exceeded its 10s budget"
+            );
+            Ok(())
+        },
+        |bytes| {
+            hash.update(bytes);
+            Ok(())
+        },
+    )?;
+    Ok(format!("{:x}", hash.finalize()))
+}
 
 pub(super) fn limitations() -> Vec<String> {
     ["A declared Unix C/C++ compiler invocation with -o {output} and explicit rebuild permission is required; the original executable is preserved", "Compiler entry and exit hooks change execution; only entry counters are aggregated and no per-call timestamps or I/O are collected", "Counts cover the rebuilt image's instrumented functions; linked libraries not compiled with the flags, child processes, inlined source calls without emitted hooks and pre-initializer work are not a complete program inventory", "Functions use exact raw linker names where dladdr exposes them, otherwise address identity; source file and line are unknown", "Selectors filter aggregated observations; every instrumented entry still executes a callback. Concurrent process shutdown and all platform/compiler combinations are not verified"].map(str::to_owned).into()
@@ -196,7 +225,7 @@ pub(super) fn prepare(request: &CaptureRequest, options: &CountRequest) -> Resul
         diagnostics: limitations(),
         runtime_version: Some(version),
         collector_identity: Some(
-            json!({"name":"compiler-hooks","hook_source_sha256":format!("{:x}",Sha256::digest(fs::read(source)?)),"target_sha256":format!("{:x}",Sha256::digest(fs::read(&binary)?)),"build_command":build}),
+            json!({"name":"compiler-hooks","hook_source_sha256":digest(&source, 1024 * 1024)?,"target_sha256":digest(&binary, 256 * 1024 * 1024)?,"build_command":build}),
         ),
         session_identity: BTreeMap::new(),
         output: CaptureOutput::FunctionCounts {
