@@ -64,9 +64,9 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
         CaptureAdapter::PythonVmprof => python::vmprof::prepare(&canonical),
         CaptureAdapter::PythonCpuProgress => python::cpu_progress::prepare(&canonical),
         CaptureAdapter::GraalCpuSampler => python::graal::prepare(&canonical),
-        CaptureAdapter::GoTestCpu => go::test(&canonical, false),
-        CaptureAdapter::GoTrace => go::test(&canonical, true),
-        CaptureAdapter::Native if canonical.runtime == "go" => go::native(&canonical),
+        CaptureAdapter::GoTestCpu => go::test::prepare(&canonical, false),
+        CaptureAdapter::GoTrace => go::test::prepare(&canonical, true),
+        CaptureAdapter::Native if canonical.runtime == "go" => go::native::prepare(&canonical),
         CaptureAdapter::Native => native::prepare(&canonical),
     }
 }
