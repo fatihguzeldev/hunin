@@ -86,9 +86,7 @@ class InstalledControlTests(unittest.TestCase):
             self.assertTrue(
                 control.adjacent_import(f'--import "{preload.as_uri()}"', installed)
             )
-            outside = (
-                installed.with_name(installed.name + "-other") / "clock.mjs"
-            )
+            outside = installed.with_name(installed.name + "-other") / "clock.mjs"
             self.assertFalse(
                 control.adjacent_import(f'--import="{outside.as_uri()}"', installed)
             )
