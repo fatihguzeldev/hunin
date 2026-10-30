@@ -1,35 +1,14 @@
 use super::*;
-
-fn fixture() -> (tempfile::TempDir, Store, std::path::PathBuf) {
-    let root = tempfile::tempdir().unwrap();
-    let store = Store::open(&root.path().join("store")).unwrap();
-    store.save_run(&serde_json::from_value(json!({"id":"bounded-import","name":"raw","status":"completed","command":[],"cwd":".","runtime":"imported","started_at_us":1,"finished_at_us":2,"exit_code":0,"diagnostics":[],"source":{},"correctness":{}})).unwrap()).unwrap();
-    let path = root.path().join("raw.jsonl");
-    fs::write(&path, format!("{}\n", json!({"schema_version":1,"kind":"event","id":"event","run_id":"bounded-import","producer_id":"fixture","pid":1,"tid":"main","timestamp_us":1,"basis":"observed","name":"bounded"}))).unwrap();
-    (root, store, path)
-}
-
-#[test]
-fn publication_rehash_and_expired_deadline_never_accept_a_valid_prefix() {
-    let (_root, store, path) = fixture();
-    for deadline in [None, Some(std::time::Instant::now())] {
-        let profile = crate::importers::import(&path, "jsonl", "bounded-import").unwrap();
-        let mut limits = crate::importers::NormalizationInputLimits::default();
-        if deadline.is_none() {
-            limits.raw_bytes = fs::metadata(&path).unwrap().len() - 1;
-        }
-        assert!(publish_with_limits(&store, "bounded-import", profile, limits, deadline).is_err());
-        assert!(store.records("bounded-import").unwrap().is_empty());
-        assert_eq!(store.documents("profile-inputs").unwrap().len(), 0);
-    }
-    assert!(path.is_file());
-}
+use crate::recordings::{
+    publication::publish_controlled,
+    reanalysis::{ReanalysisSidecarLimit, reanalyze_controlled, reanalyze_with_limits},
+};
 
 #[test]
 fn reanalysis_restore_byte_limit_preserves_the_original_reference_and_result() {
     let (_root, store, path) = fixture();
     let profile = crate::importers::import(&path, "jsonl", "bounded-import").unwrap();
-    publish(&store, "bounded-import", profile).unwrap();
+    publish_controlled(&store, "bounded-import", profile, None).unwrap();
     let before = store.records_snapshot("bounded-import").unwrap();
     let raw = store
         .artifacts("bounded-import")
@@ -56,10 +35,11 @@ fn reanalysis_restore_byte_limit_preserves_the_original_reference_and_result() {
 #[test]
 fn restore_bounds_manifest_file_work_and_refuses_conflicting_names() {
     let (_root, store, path) = fixture();
-    publish(
+    publish_controlled(
         &store,
         "bounded-import",
         crate::importers::import(&path, "jsonl", "bounded-import").unwrap(),
+        None,
     )
     .unwrap();
     let raw = store
@@ -77,7 +57,7 @@ fn restore_bounds_manifest_file_work_and_refuses_conflicting_names() {
         .save_document("profile-inputs", &key, &duplicate)
         .unwrap();
     assert!(
-        !reanalyze(&store, "bounded-import", &raw.id)
+        !reanalyze_controlled(&store, "bounded-import", &raw.id, None)
             .unwrap()
             .accepted
     );
@@ -85,7 +65,9 @@ fn restore_bounds_manifest_file_work_and_refuses_conflicting_names() {
     store
         .save_document("profile-inputs", &key, &duplicate)
         .unwrap();
-    let error = reanalyze(&store, "bounded-import", &raw.id).err().unwrap();
+    let error = reanalyze_controlled(&store, "bounded-import", &raw.id, None)
+        .err()
+        .unwrap();
     let error = error.downcast_ref::<ReanalysisSidecarLimit>().unwrap();
     assert_eq!(error.maximum, 1024);
     assert_eq!(error.observed, 1025);
@@ -103,7 +85,7 @@ fn restore_bounds_manifest_file_work_and_refuses_conflicting_names() {
         .save_document("profile-inputs", &key, &conflicting)
         .unwrap();
     assert!(
-        reanalyze(&store, "bounded-import", &raw.id)
+        reanalyze_controlled(&store, "bounded-import", &raw.id, None)
             .err()
             .unwrap()
             .to_string()
