@@ -2,6 +2,7 @@
 """Prove mapping generations/gaps/threads and immutable native replay on this host."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 
 from .clock import verify_linux_epoch_windows
+from .health import verify_capture_health
 
 HERE = Path(__file__).resolve().parents[1]
 
@@ -141,7 +143,8 @@ def verify(binary, output, sampler=None):
         ] == [False, True, False], phases
         assert len({r["id"] for r in phases}) == len(phases) >= 5, phases
         capture = data / "captures" / run["id"]
-        sidecar = json.loads((capture / "cpu.samply.lifetimes.json").read_text())
+        sidecar_bytes = (capture / "cpu.samply.lifetimes.json").read_bytes()
+        sidecar = json.loads(sidecar_bytes)
         epoch_alignment = None
         if sidecar["collector"]["os"] == "linux":
             markers = [
@@ -157,7 +160,6 @@ def verify(binary, output, sampler=None):
                 "Clock alignment receipt exceeds 8 KiB"
             )
             (output / "clock-alignment.json").write_bytes(alignment_receipt)
-        assert all(r["attributes"]["evidence_complete"] for r in phases), phases
         assert tuple(
             sequential[0]["attributes"]["library"].get(field)
             for field in ("codeId", "breakpadId")
@@ -196,12 +198,21 @@ def verify(binary, output, sampler=None):
             for r in (simultaneous_alias, simultaneous_a)
         ) - max(r["timestamp_us"] for r in (simultaneous_alias, simultaneous_a))
         assert overlap > 100_000, (overlap, phases)
-        related = {
-            r["to"]
+        relations = [
+            r
             for r in rows("relation")
             if r.get("relation") == "sampled_in_code_instance"
-        }
+        ]
+        related = {r["to"] for r in relations}
         assert all(r["id"] in related for r in phases), phases
+        capture_health = verify_capture_health(sidecar, phases, relations, run)
+        with (capture / "cpu.samply.json").open("rb") as raw_profile:
+            raw_sha256 = hashlib.file_digest(raw_profile, "sha256").hexdigest()
+        assert raw_sha256 == sidecar["raw_profile_sha256"], (
+            "Lifetime evidence does not identify the retained raw profile"
+        )
+        capture_health["sidecar_sha256"] = hashlib.sha256(sidecar_bytes).hexdigest()
+        capture_health["raw_profile_sha256"] = raw_sha256
         threads = [r for r in spans if r.get("name") == "thread.observed_lifetime"]
         assert len(threads) >= 4, threads
         # Remove original code and binaries; replay must use managed profile, sidecar and image blobs.
@@ -249,6 +260,7 @@ def verify(binary, output, sampler=None):
             "thread_instances": len(threads),
             "offline_replay": replay,
             "linux_epoch_alignment": epoch_alignment,
+            "capture_health": capture_health,
             "limitation": "Snapshot transitions have observation windows; loads entirely between snapshots remain unobserved.",
         }
         (output / "evidence.json").write_text(json.dumps(proof, indent=2))

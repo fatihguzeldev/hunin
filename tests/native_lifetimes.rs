@@ -179,6 +179,50 @@ fn unrelated_or_tampered_sample_mapping_cannot_be_accepted() {
 }
 
 #[test]
+fn reported_perf_loss_marks_lifetimes_and_links_incomplete_without_truncation() {
+    let (_directory, path) = fixture();
+    let sidecar = path.with_extension("lifetimes.json");
+    let mut input: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!(input["truncated"], false);
+    input["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"kind":"loss","basis":"perf_lost_events","count":181}));
+    let raw = serde_json::to_vec(&input).unwrap();
+    fs::write(&sidecar, &raw).unwrap();
+
+    let profile = importers::import(&path, "samply", "reported-loss").unwrap();
+    assert!(profile.diagnostics.iter().any(|d| d.contains("incomplete")));
+    for records in [
+        profile
+            .records
+            .iter()
+            .filter(|r| r["name"] == "module.observed_lifetime")
+            .collect::<Vec<_>>(),
+        profile
+            .records
+            .iter()
+            .filter(|r| r["relation"] == "sampled_in_code_instance")
+            .collect::<Vec<_>>(),
+    ] {
+        assert!(
+            !records.is_empty(),
+            "loss does not erase the observed evidence"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|r| r["attributes"]["evidence_complete"] == false)
+        );
+    }
+    assert_eq!(fs::read(&sidecar).unwrap(), raw);
+    assert_eq!(
+        profile.sidecar_sha256[&sidecar],
+        format!("{:x}", Sha256::digest(&raw))
+    );
+}
+
+#[test]
 fn root_exit_two_survives_normalization_and_unknown_outcome_stays_unknown() {
     let (_directory, path) = fixture();
     let sidecar = path.with_extension("lifetimes.json");
