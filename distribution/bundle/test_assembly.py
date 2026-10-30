@@ -42,6 +42,7 @@ RUNTIME_FILES = (
     "sdk/rust/src/recording.rs",
     "sdk/go/go.mod",
     "sdk/go/hunin.go",
+    "sdk/go/writer.go",
     "sdk/c/CMakeLists.txt",
     "sdk/c/include/hunin.h",
     "sdk/c/src/hunin.c",

@@ -105,7 +105,8 @@
       "destination_root": "sdk/go",
       "files": {
         "go.mod": "go.mod",
-        "hunin.go": "hunin.go"
+        "hunin.go": "hunin.go",
+        "writer.go": "writer.go"
       }
     },
     {
