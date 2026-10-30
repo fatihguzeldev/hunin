@@ -36,6 +36,14 @@ pub struct CountOptions {
 }
 
 impl CountOptions {
+    fn measurement_parameters(&self) -> Value {
+        let mut params = self.parameters();
+        if self.request_id.is_none() {
+            params["request_id"] = json!(uuid::Uuid::new_v4().to_string());
+        }
+        params
+    }
+
     pub fn parameters(&self) -> Value {
         let mut params = json!({"run_id":self.run_id,"allow_rebuild":self.allow_rebuild});
         if !self.functions.is_empty() {
@@ -72,7 +80,11 @@ impl CountOptions {
 
 /// CLI owns waiting and presentation; the operation owns method selection and jobs.
 pub async fn measure(operations: &Operations, options: CountOptions) -> Result<Value> {
-    let mut params = options.parameters();
+    let mut params = if options.plan {
+        options.parameters()
+    } else {
+        options.measurement_parameters()
+    };
     if options.plan {
         params.as_object_mut().unwrap().remove("timeout_seconds");
         params.as_object_mut().unwrap().remove("request_id");
@@ -201,6 +213,30 @@ mod tests {
         assert_eq!(
             cli.options.parameters(),
             json!({"run_id":"parent","allow_rebuild":true,"functions":[{"name":"work","file":"src/main.c","line":12},{"name":"parse","file":"src/main.c","line":12}],"build_command":["cc","-O2","source with spaces.c","-o","app"]})
+        );
+    }
+
+    #[test]
+    fn each_intentional_measurement_has_a_fresh_key_but_an_explicit_retry_keeps_its_key() {
+        let fresh = CountCli::try_parse_from(["count", "parent", "--function", "leaf"]).unwrap();
+        let first = fresh.options.measurement_parameters();
+        let next = fresh.options.measurement_parameters();
+        assert_ne!(first["request_id"], next["request_id"]);
+        assert!(uuid::Uuid::parse_str(first["request_id"].as_str().unwrap()).is_ok());
+        assert_eq!(first["functions"], next["functions"]);
+        assert!(
+            fresh.options.parameters().get("request_id").is_none(),
+            "planning must not acquire a measurement key"
+        );
+        let retry =
+            CountCli::try_parse_from(["count", "parent", "--request-id", "stable-retry"]).unwrap();
+        assert_eq!(
+            retry.options.measurement_parameters()["request_id"],
+            "stable-retry"
+        );
+        assert_eq!(
+            retry.options.measurement_parameters()["request_id"],
+            "stable-retry"
         );
     }
 
