@@ -154,7 +154,10 @@ __attribute__((destructor(101), no_instrument_function)) static void finish(void
         dladdr((void *)address, &symbol);
         char fallback[32];
         snprintf(fallback, sizeof(fallback), "0x%" PRIxPTR, address);
-        const char *name = symbol.dli_sname ? symbol.dli_sname : fallback;
+        /* dladdr may name a preceding exported symbol for a stripped private
+           function. Only an exact entry address establishes symbol identity. */
+        const char *name =
+            symbol.dli_sname && symbol.dli_saddr == (void *)address ? symbol.dli_sname : fallback;
         if (!selected(name))
             continue;
         char escaped_name[8192];

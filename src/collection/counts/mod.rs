@@ -255,4 +255,107 @@ mod tests {
         );
         assert_eq!(std::fs::read(original).unwrap(), before);
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn stripped_private_functions_keep_distinct_identities_and_exact_global_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("symbol_identity.cpp");
+        let original = root.path().join("original");
+        std::fs::write(&source, r#"#include <cstdio>
+extern "C" __attribute__((noinline, used)) unsigned global_leaf(unsigned x) { return x + 3; }
+static __attribute__((noinline, used)) unsigned static_leaf(unsigned x) { return x + 5; }
+extern "C" __attribute__((noinline, used, visibility("hidden"))) unsigned hidden_leaf(unsigned x) { return x + 7; }
+int main() {
+    unsigned sum = 0;
+    for (unsigned i = 0; i < 7; ++i) sum += global_leaf(i);
+    for (unsigned i = 0; i < 11; ++i) sum += static_leaf(i);
+    for (unsigned i = 0; i < 13; ++i) sum += hidden_leaf(i);
+    std::printf("%u\n", sum);
+}
+"#).unwrap();
+        let output = crate::host::probe::standard(
+            std::process::Command::new("clang++")
+                .arg("-O2")
+                .arg(&source)
+                .arg("-o")
+                .arg(&original),
+        )
+        .unwrap();
+        assert!(output.status.success());
+        for selected in [false, true] {
+            let mut request = request(root.path(), "cpp");
+            request.command = vec![original.to_string_lossy().into_owned()];
+            request.artifact_dir = root.path().join(if selected { "selected" } else { "all" });
+            let options: CountRequest = serde_json::from_value(json!({"allow_rebuild":true,"build_command":["clang++","-O2","-Wl,-x",source,"-o","{output}"],"functions":if selected {json!([{"name":"global_leaf"}])}else{json!([])}})).unwrap();
+            let capture = prepare(&request, &options).unwrap();
+            let output = crate::host::probe::output(
+                std::process::Command::new(&capture.command[0])
+                    .args(&capture.command[1..])
+                    .envs(&capture.env)
+                    .current_dir(&request.cwd),
+                None,
+                std::time::Duration::from_secs(10),
+                65536,
+            )
+            .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, b"321\n");
+            let data =
+                std::fs::read_to_string(request.artifact_dir.join("calls.calls.jsonl")).unwrap();
+            if let Some(directory) = std::env::var_os("HUNIN_TEST_COUNT_SYMBOL_EVIDENCE") {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                let scope = if selected { "selected" } else { "all" };
+                std::fs::write(directory.join(format!("{scope}.calls.jsonl")), &data).unwrap();
+                std::fs::copy(
+                    request.artifact_dir.join("calls.complete.json"),
+                    directory.join(format!("{scope}.complete.json")),
+                )
+                .unwrap();
+                std::fs::copy(&source, directory.join("symbol_identity.cpp")).unwrap();
+                std::fs::write(
+                    directory.join(format!("{scope}.plan.json")),
+                    serde_json::to_vec_pretty(&capture).unwrap(),
+                )
+                .unwrap();
+            }
+            let completion = capture.finalize(&request).unwrap().completion;
+            assert!(
+                completion.ensure_complete().is_ok(),
+                "{:?}\n{data}",
+                completion.diagnostics
+            );
+            let rows = data
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|row| row["kind"] == "metric")
+                .collect::<Vec<_>>();
+            assert!(
+                rows.iter()
+                    .any(|row| row["attributes"]["function"]["name"] == "global_leaf"
+                        && row["value"] == 7),
+                "{rows:?}"
+            );
+            if selected {
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "private entries must not be attributed to a neighboring exported function: {rows:?}"
+                );
+            } else {
+                for (name, count) in [("static_leaf", 11), ("hidden_leaf", 13)] {
+                    let row = rows
+                        .iter()
+                        .find(|row| row["value"] == count)
+                        .unwrap_or_else(|| panic!("missing {name}: {rows:?}"));
+                    let identity = row["attributes"]["function"]["name"].as_str().unwrap();
+                    assert!(
+                        identity.contains(name) || row["attributes"]["address"] == identity,
+                        "non-exact symbol must fall back to its own address, never another function: {row}"
+                    );
+                }
+            }
+        }
+    }
 }
