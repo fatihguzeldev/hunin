@@ -1,6 +1,6 @@
 //! Mapping-instance evidence retained before Samply converts absolute stacks.
-use super::checked_us;
-use super::output::{RecordBatch, ReservedRecord, StackBuilder};
+use crate::importers::checked_us;
+use crate::importers::output::{RecordBatch, ReservedRecord, StackBuilder};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use std::{
 };
 
 const UPSTREAM: &str = "da75c28f367454c621e690eeb4e44ec2ebb29a78";
-pub(super) const MAX_SIDECAR: u64 = 160 * 1024 * 1024;
+use super::MAX_LIFETIME_SIDECAR;
 
 #[derive(Default)]
 pub(super) struct Timeline {
@@ -28,7 +28,7 @@ pub(super) struct Timeline {
     instances_by_id: HashMap<String, Vec<usize>>,
     complete: bool,
     diagnostics: Vec<String>,
-    sampling: super::native_sampling::Evidence,
+    sampling: super::sampling::Evidence,
 }
 
 #[cfg(test)]
@@ -57,21 +57,22 @@ mod tests {
             &raw_sha,
             Some(&sha),
             &raw,
-            &mut super::super::OutputBudget::default(),
+            &mut crate::importers::OutputBudget::default(),
         )
         .unwrap()
         .unwrap();
         assert_eq!(full.instances.len(), 21);
-        let mut budget = super::super::OutputBudget::with_limits(super::super::output::Limits {
-            attachment_bytes: 40_000,
-            ..Default::default()
-        });
+        let mut budget =
+            crate::importers::OutputBudget::with_limits(crate::importers::output::Limits {
+                attachment_bytes: 40_000,
+                ..Default::default()
+            });
         let error = match Timeline::load(&path, &raw_sha, Some(&sha), &raw, &mut budget) {
             Ok(_) => panic!("auxiliary copies must be bounded before record emission"),
             Err(error) => error,
         };
         let error = error
-            .downcast_ref::<super::super::NormalizationOutputLimit>()
+            .downcast_ref::<crate::importers::NormalizationOutputLimit>()
             .unwrap();
         assert_eq!(error.dimension.as_str(), "attachment_bytes");
         assert_eq!(error.maximum, 40_000);
@@ -102,7 +103,7 @@ mod tests {
             &raw_sha,
             Some(&sha),
             &raw,
-            &mut super::super::OutputBudget::default(),
+            &mut crate::importers::OutputBudget::default(),
         )
         .unwrap()
         .unwrap();
@@ -186,13 +187,13 @@ impl Timeline {
         raw_sha: &str,
         expected_sha: Option<&str>,
         raw: &Value,
-        budget: &mut super::OutputBudget,
+        budget: &mut crate::importers::OutputBudget,
     ) -> Result<Option<Self>> {
         if !path.is_file() {
             return Ok(None);
         }
         ensure!(
-            fs::metadata(path)?.len() <= MAX_SIDECAR,
+            fs::metadata(path)?.len() <= MAX_LIFETIME_SIDECAR,
             "native lifetime sidecar exceeds read budget"
         );
         let bytes = fs::read(path)?;
@@ -203,10 +204,10 @@ impl Timeline {
         let mut decoded = Vec::new();
         let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
             flate2::read::GzDecoder::new(bytes.as_slice())
-                .take(MAX_SIDECAR + 1)
+                .take(MAX_LIFETIME_SIDECAR + 1)
                 .read_to_end(&mut decoded)?;
             ensure!(
-                decoded.len() as u64 <= MAX_SIDECAR,
+                decoded.len() as u64 <= MAX_LIFETIME_SIDECAR,
                 "native lifetime sidecar exceeds decompressed budget"
             );
             &decoded
@@ -236,7 +237,7 @@ impl Timeline {
             collector: input["collector"].clone(),
             epoch_ms: epoch,
             complete: input["truncated"] == false,
-            sampling: super::native_sampling::Evidence::load(events, raw)?,
+            sampling: super::sampling::Evidence::load(events, raw)?,
             ..Self::default()
         };
         if let Some(outcome) = input.get("target_outcome").filter(|v| !v.is_null()) {
@@ -511,7 +512,7 @@ impl Timeline {
         if result.collector["os"] == "windows" && result.sampling.is_empty() {
             result
                 .diagnostics
-                .push(super::native_sampling::LEGACY_DIAGNOSTIC.into());
+                .push(super::sampling::LEGACY_DIAGNOSTIC.into());
         }
         if result.collector["patch_sha256"].is_null() {
             result.diagnostics.push("Native lifetime collector has no build-time patch digest; retain its binary/source provenance before trusting a distribution identity".into());
@@ -774,7 +775,7 @@ impl Timeline {
     }
     #[cfg(test)]
     pub fn records(&self, run: &str, key: &str) -> Result<Vec<Value>> {
-        let mut budget = super::OutputBudget::default();
+        let mut budget = crate::importers::OutputBudget::default();
         let mut records = RecordBatch::new(&mut budget, None);
         self.emit_records(run, key, &mut records)?;
         records.finish()
@@ -787,7 +788,7 @@ impl Timeline {
         record: &mut Value,
         key: &str,
     ) -> Result<Vec<Value>> {
-        let mut budget = super::OutputBudget::default();
+        let mut budget = crate::importers::OutputBudget::default();
         let mut records = RecordBatch::new(&mut budget, None);
         let relations = self.link_sample_into(thread, time, record, key, &mut records)?;
         for relation in relations {

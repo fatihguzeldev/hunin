@@ -7,9 +7,6 @@ mod graal;
 mod inputs;
 pub(crate) use inputs::{Limits as NormalizationInputLimits, NormalizationByteLimit};
 mod javascript_sources;
-mod native_identity;
-mod native_lifetimes;
-mod native_sampling;
 mod output;
 #[cfg(test)]
 use output::OutputDimension;
@@ -225,7 +222,7 @@ fn capture_inputs(
             javascript_sources::MAX_TOTAL
         } else if kind == ProfileFormat::Firefox && sidecar == path.with_extension("lifetimes.json")
         {
-            native_lifetimes::MAX_SIDECAR
+            firefox::MAX_LIFETIME_SIDECAR
         } else {
             limits.sidecar_bytes
         };
@@ -249,45 +246,23 @@ fn decode_snapshot(
     let sidecars = sidecar_sha256.keys().cloned().collect();
     let decoder_path = snapshot.path();
     let raw = snapshot.decoded()?;
-    let mut native_raw = if kind == ProfileFormat::Firefox {
-        Some(serde_json::from_slice::<Value>(&raw)?)
-    } else {
-        None
-    };
-    let lifetimes = if let Some(raw) = &native_raw {
-        let sidecar = decoder_path.with_extension("lifetimes.json");
-        native_lifetimes::Timeline::load(
-            &sidecar,
-            &raw_sha256,
-            sidecar_sha256
-                .get(&path.with_extension("lifetimes.json"))
-                .map(String::as_str),
-            raw,
-            budget,
-        )?
-    } else {
-        None
-    };
-    if let (Some(timeline), Some(raw)) = (&lifetimes, &mut native_raw) {
-        let libraries = raw["libs"]
-            .as_array_mut()
-            .context("native library dictionary missing")?;
-        for library in timeline.libraries() {
-            if !libraries.contains(library) {
-                libraries.push(library.clone());
-            }
-        }
-    }
-    let images = native_raw
-        .as_ref()
-        .map(|raw| match native_context {
-            Some(path) => native_identity::Images::from_context(raw, path, &raw_sha256),
-            None => Ok(native_identity::Images::inspect(raw)),
+    let firefox = (kind == ProfileFormat::Firefox)
+        .then(|| {
+            firefox::Input::load(
+                decoder_path,
+                &raw,
+                &raw_sha256,
+                sidecar_sha256
+                    .get(&path.with_extension("lifetimes.json"))
+                    .map(String::as_str),
+                native_context,
+                budget,
+            )
         })
         .transpose()?;
-    if let Some(images) = &images {
+    if let Some(input) = &firefox {
         digest.update(b"native-image-identifiers-v1\0");
-        digest.update(serde_json::to_vec(&images.fingerprint())?);
+        digest.update(serde_json::to_vec(&input.image_fingerprint())?);
     }
     let vmprof = (kind == ProfileFormat::Vmprof)
         .then(|| {
@@ -315,16 +290,13 @@ fn decode_snapshot(
         None
     };
     let mut records = output::RecordBatch::new(budget, snapshot.deadline());
-    let mut diagnostics = match kind {
-        ProfileFormat::Firefox => firefox::decode_into(
-            decoder_path,
-            native_raw.as_ref().unwrap(),
-            run_id,
-            &key,
-            images.as_ref().unwrap(),
-            lifetimes.as_ref(),
-            &mut records,
-        )?,
+    let diagnostics = match kind {
+        ProfileFormat::Firefox => {
+            firefox
+                .as_ref()
+                .unwrap()
+                .decode_into(decoder_path, run_id, &key, &mut records)?
+        }
         ProfileFormat::V8 => v8::decode_into(
             decoder_path,
             &serde_json::from_slice(&raw)?,
@@ -365,18 +337,11 @@ fn decode_snapshot(
             Vec::new()
         }
     };
-    if lifetimes.is_none()
-        && native_raw.as_ref().is_some_and(|raw| {
-            raw["meta"]["oscpu"]
-                .as_str()
-                .is_some_and(|os| os.to_ascii_lowercase().starts_with("windows"))
+    let (native_image_context, binary_snapshots) = firefox
+        .map(|input| {
+            let (context, snapshots) = input.into_evidence(&raw_sha256);
+            (Some(context), snapshots)
         })
-    {
-        diagnostics.push(native_sampling::LEGACY_DIAGNOSTIC.into());
-    }
-    let native_image_context = images.as_ref().map(|images| images.context(&raw_sha256));
-    let binary_snapshots = images
-        .map(native_identity::Images::into_snapshots)
         .unwrap_or_default();
     snapshot.verify()?;
     let profile = ImportedProfile {

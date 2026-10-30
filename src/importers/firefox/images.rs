@@ -216,10 +216,10 @@ impl Images {
     pub fn context(&self, raw_sha256: &str) -> Value {
         json!({"schema_version":1,"raw_profile_sha256":raw_sha256,"checks":self.checks})
     }
-    pub fn into_snapshots(self) -> Vec<super::BinarySnapshot> {
+    pub fn into_snapshots(self) -> Vec<crate::importers::BinarySnapshot> {
         self.snapshots
             .into_iter()
-            .map(|(sha256, content)| super::BinarySnapshot { sha256, content })
+            .map(|(sha256, content)| crate::importers::BinarySnapshot { sha256, content })
             .collect()
     }
     pub fn from_context(raw: &Value, path: &Path, raw_sha256: &str) -> Result<Self> {
@@ -376,8 +376,8 @@ mod tests {
     }
     #[test]
     fn actual_mach_images_have_distinct_identifiers() {
-        let a = identifiers(include_bytes!("fixtures/native-reload/phase_a.macho")).unwrap();
-        let b = identifiers(include_bytes!("fixtures/native-reload/phase_b.macho")).unwrap();
+        let a = identifiers(include_bytes!("../fixtures/native-reload/phase_a.macho")).unwrap();
+        let b = identifiers(include_bytes!("../fixtures/native-reload/phase_b.macho")).unwrap();
         assert_eq!(
             a[0].code.as_deref(),
             Some("CD3C90FFC4B93EF1B5FD3FBD731EA331")

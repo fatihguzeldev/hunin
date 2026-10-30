@@ -1,6 +1,7 @@
-use super::output::{RecordBatch, StackBuilder};
-use super::{SampleWeightUnit, StackSample};
-use super::{checked_us, native_identity::Images, sample};
+use super::images::Images;
+use crate::importers::output::{RecordBatch, StackBuilder};
+use crate::importers::{checked_us, sample};
+use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
@@ -17,7 +18,7 @@ pub(super) fn decode(
     key: &str,
     images: &Images,
 ) -> Result<(Vec<Value>, Vec<String>)> {
-    let mut budget = super::OutputBudget::default();
+    let mut budget = crate::importers::OutputBudget::default();
     let mut records = RecordBatch::new(&mut budget, None);
     let diagnostics = decode_into(path, raw, run_id, key, images, None, &mut records)?;
     Ok((records.finish()?, diagnostics))
@@ -29,7 +30,7 @@ pub(super) fn decode_into(
     run_id: &str,
     key: &str,
     images: &Images,
-    lifetimes: Option<&super::native_lifetimes::Timeline>,
+    lifetimes: Option<&super::lifetimes::Timeline>,
     records: &mut RecordBatch<'_>,
 ) -> Result<Vec<String>> {
     let sidecar = path.with_extension("syms.json");
@@ -62,7 +63,7 @@ pub(super) fn decode_into(
 
 struct NativeContext<'a> {
     images: &'a Images,
-    lifetimes: Option<&'a super::native_lifetimes::Timeline>,
+    lifetimes: Option<&'a super::lifetimes::Timeline>,
 }
 
 fn decode_process(
@@ -556,17 +557,17 @@ mod tests {
         for (name, bytes) in [
             (
                 "phase_a.dylib",
-                include_bytes!("fixtures/native-reload/phase_a.macho").as_slice(),
+                include_bytes!("../fixtures/native-reload/phase_a.macho").as_slice(),
             ),
             (
                 "phase_b.dylib",
-                include_bytes!("fixtures/native-reload/phase_b.macho").as_slice(),
+                include_bytes!("../fixtures/native-reload/phase_b.macho").as_slice(),
             ),
         ] {
             fs::write(directory.path().join(name), bytes).unwrap();
         }
         let mut raw: Value =
-            serde_json::from_slice(include_bytes!("fixtures/native-reload/cpu.json")).unwrap();
+            serde_json::from_slice(include_bytes!("../fixtures/native-reload/cpu.json")).unwrap();
         for lib in raw["libs"].as_array_mut().unwrap() {
             if lib["name"]
                 .as_str()
@@ -579,7 +580,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
         fs::write(
             path.with_extension("syms.json"),
-            include_bytes!("fixtures/native-reload/cpu.syms.json"),
+            include_bytes!("../fixtures/native-reload/cpu.syms.json"),
         )
         .unwrap();
         let unchecked = decode(
@@ -663,7 +664,8 @@ mod tests {
             .binary_snapshots
             .iter()
             .find(|image| {
-                image.content == include_bytes!("fixtures/native-reload/phase_b.macho").as_slice()
+                image.content
+                    == include_bytes!("../fixtures/native-reload/phase_b.macho").as_slice()
             })
             .unwrap();
         fs::write(cache.path().join(&corrupt.sha256), b"corrupt").unwrap();
@@ -678,7 +680,7 @@ mod tests {
         );
         fs::write(
             directory.path().join("phase_b.dylib"),
-            include_bytes!("fixtures/native-reload/phase_a.macho"),
+            include_bytes!("../fixtures/native-reload/phase_a.macho"),
         )
         .unwrap();
         let changed = crate::importers::import(&path, "firefox", "reload-control").unwrap();
