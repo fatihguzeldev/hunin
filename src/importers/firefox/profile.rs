@@ -1,6 +1,6 @@
 use super::images::Images;
 use crate::importers::output::{RecordBatch, StackBuilder};
-use crate::importers::{checked_us, sample};
+use crate::importers::output::{checked_us, sample};
 use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};

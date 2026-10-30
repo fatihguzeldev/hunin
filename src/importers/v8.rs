@@ -1,6 +1,9 @@
 use super::output::{RecordBatch, StackBuilder};
-use super::{SampleWeightUnit, StackSample};
-use super::{checked_us, javascript_sources::Scripts, sample};
+use super::{
+    javascript_sources::Scripts,
+    output::{checked_us, sample},
+};
+use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{

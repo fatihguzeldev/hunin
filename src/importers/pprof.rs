@@ -1,6 +1,7 @@
 //! The wire fields follow Google's canonical perftools.profiles profile.proto.
+use super::output::sample;
 use super::output::{RecordBatch, StackBuilder};
-use super::{SampleWeightUnit, StackSample, sample};
+use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use prost::Message;
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use super::output::RecordBatch;
-use super::sample;
+use super::output::sample;
 use crate::{
     host::{assets, probe, tool},
     model::observations::{SampleWeightUnit, StackSample},

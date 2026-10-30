@@ -1,6 +1,6 @@
 use super::output::{RecordBatch, StackBuilder};
-use super::{SampleWeightUnit, StackSample};
-use super::{checked_us, sample};
+use super::output::{checked_us, sample};
+use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{fs, path::Path};

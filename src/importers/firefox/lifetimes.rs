@@ -1,5 +1,5 @@
 //! Mapping-instance evidence retained before Samply converts absolute stacks.
-use crate::importers::checked_us;
+use crate::importers::output::checked_us;
 use crate::importers::output::{RecordBatch, ReservedRecord, StackBuilder};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;

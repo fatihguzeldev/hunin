@@ -4,9 +4,10 @@
 //! input dictionaries and retained attachments have separate bounds.
 //! Attachments count duplicated content and encoded auxiliary payload/copy work;
 //! parser/allocator overhead and one already constructed profile are not RSS quotas.
+use crate::model::observations::StackSample;
 use anyhow::{Result, bail};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{fmt, io::Write, time::Instant};
 
 #[derive(Clone, Copy)]
@@ -396,6 +397,29 @@ struct SourceMetadata<'a> {
     uri: &'a str,
     sha256: &'a str,
     provenance: &'a Value,
+}
+
+pub(super) fn sample(run_id: &str, key: &str, index: usize, sample: StackSample<'_>) -> Value {
+    let StackSample {
+        pid,
+        tid,
+        timestamp_us,
+        stack,
+        weight,
+        weight_unit: unit,
+        attributes,
+    } = sample;
+    json!({"schema_version":1,"kind":"sample","id":format!("profile:{key}:{index}"),
+        "run_id":run_id,"producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":tid,
+        "timestamp_us":timestamp_us,"basis":"sampled","stack":stack,"weight":weight,
+        "weight_unit":unit.as_wire(),"attributes":attributes})
+}
+
+pub(super) fn checked_us(value: f64, description: &str) -> Result<u64> {
+    if !value.is_finite() || !(0.0..=9_007_199_254_740_991.0).contains(&value) {
+        bail!("invalid {description}: {value}");
+    }
+    Ok(value.round() as u64)
 }
 
 #[cfg(test)]

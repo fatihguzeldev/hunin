@@ -1,5 +1,7 @@
 use super::*;
+use crate::model::observations::SampleWeightUnit;
 use serde_json::json;
+use std::collections::HashSet;
 
 #[test]
 fn row_and_byte_budgets_are_shared_across_batches_and_fail_sticky() {
@@ -186,4 +188,37 @@ fn common_profile_gate_counts_each_source_image_and_metadata_copy_across_profile
             .dimension,
         OutputDimension::AttachmentBytes
     );
+}
+
+#[test]
+fn canonical_sample_units_emit_the_authoritative_wire_contract_without_losing_attributes() {
+    for (unit, wire) in [
+        (SampleWeightUnit::Samples, "samples"),
+        (SampleWeightUnit::Microseconds, "microseconds"),
+        (SampleWeightUnit::Bytes, "bytes"),
+        (SampleWeightUnit::Count, "count"),
+    ] {
+        let attributes = json!({"clock":"process_cpu","clock_alignment":"unmapped","extension":{"retained":[null,"opaque"]}});
+        let row = sample(
+            "unit-control",
+            "input",
+            0,
+            StackSample {
+                pid: 3,
+                tid: "thread",
+                timestamp_us: 0,
+                stack: vec![json!({"function":"measured"})],
+                weight: 2.5,
+                weight_unit: unit,
+                attributes: attributes.clone(),
+            },
+        );
+        crate::ingestion::validate("unit-control", std::slice::from_ref(&row), &HashSet::new())
+            .unwrap();
+        assert_eq!(row["weight_unit"], wire);
+        assert_eq!(row["weight"], 2.5);
+        assert_eq!(row["basis"], "sampled");
+        assert_eq!(row["attributes"], attributes);
+        assert_eq!(crate::query::summary(&[row])["weight_unit"], wire);
+    }
 }

@@ -12,47 +12,16 @@ mod output;
 use output::OutputDimension;
 pub(crate) use output::{NormalizationOutputLimit, OutputBudget};
 mod pprof;
+mod result;
+pub use result::{BinarySnapshot, ImportedProfile, SourceSnapshot};
 mod python_cpu;
 mod v8;
 mod vmprof;
 
-use crate::model::observations::{SampleWeightUnit, StackSample};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
-
-#[derive(Debug, Clone)]
-pub struct SourceSnapshot {
-    pub uri: String,
-    pub content: String,
-    pub sha256: String,
-    pub provenance: Value,
-}
-#[derive(Debug, Clone)]
-pub struct BinarySnapshot {
-    pub sha256: String,
-    pub content: Vec<u8>,
-}
-#[derive(Debug, Clone)]
-pub struct ImportedProfile {
-    pub source: PathBuf,
-    pub raw_sha256: String,
-    pub format: String,
-    pub records: Vec<Value>,
-    pub diagnostics: Vec<String>,
-    pub input_fingerprint: String,
-    pub sidecars: Vec<PathBuf>,
-    pub sidecar_sha256: BTreeMap<PathBuf, String>,
-    pub source_snapshots: Vec<SourceSnapshot>,
-    pub binary_snapshots: Vec<BinarySnapshot>,
-    pub native_image_context: Option<Value>,
-    /// Actual offline decoder identity and resolved execution paths, not capture identity.
-    pub decoder_provenance: Option<Value>,
-}
+use std::path::{Path, PathBuf};
 
 pub fn import(path: &Path, format: &str, run_id: &str) -> Result<ImportedProfile> {
     import_controlled(path, format, run_id, None)
@@ -395,66 +364,10 @@ fn sidecars(path: &Path, format: ProfileFormat) -> Vec<PathBuf> {
     result
 }
 
-pub(crate) fn sample(run_id: &str, key: &str, index: usize, sample: StackSample<'_>) -> Value {
-    let StackSample {
-        pid,
-        tid,
-        timestamp_us,
-        stack,
-        weight,
-        weight_unit: unit,
-        attributes,
-    } = sample;
-    json!({"schema_version":1,"kind":"sample","id":format!("profile:{key}:{index}"),
-        "run_id":run_id,"producer_id":format!("profile:{key}:{pid}"),"pid":pid,"tid":tid,
-        "timestamp_us":timestamp_us,"basis":"sampled","stack":stack,"weight":weight,
-        "weight_unit":unit.as_wire(),"attributes":attributes})
-}
-
-pub(crate) fn checked_us(value: f64, description: &str) -> Result<u64> {
-    if !value.is_finite() || !(0.0..=9_007_199_254_740_991.0).contains(&value) {
-        bail!("invalid {description}: {value}");
-    }
-    Ok(value.round() as u64)
-}
-
 #[cfg(test)]
 mod recorded_controls {
     use super::*;
     use std::{collections::HashSet, fs};
-
-    #[test]
-    fn canonical_sample_units_emit_the_authoritative_wire_contract_without_losing_attributes() {
-        for (unit, wire) in [
-            (SampleWeightUnit::Samples, "samples"),
-            (SampleWeightUnit::Microseconds, "microseconds"),
-            (SampleWeightUnit::Bytes, "bytes"),
-            (SampleWeightUnit::Count, "count"),
-        ] {
-            let attributes = json!({"clock":"process_cpu","clock_alignment":"unmapped","extension":{"retained":[null,"opaque"]}});
-            let row = sample(
-                "unit-control",
-                "input",
-                0,
-                StackSample {
-                    pid: 3,
-                    tid: "thread",
-                    timestamp_us: 0,
-                    stack: vec![json!({"function":"measured"})],
-                    weight: 2.5,
-                    weight_unit: unit,
-                    attributes: attributes.clone(),
-                },
-            );
-            crate::ingestion::validate("unit-control", std::slice::from_ref(&row), &HashSet::new())
-                .unwrap();
-            assert_eq!(row["weight_unit"], wire);
-            assert_eq!(row["weight"], 2.5);
-            assert_eq!(row["basis"], "sampled");
-            assert_eq!(row["attributes"], attributes);
-            assert_eq!(crate::query::summary(&[row])["weight_unit"], wire);
-        }
-    }
 
     #[test]
     fn real_native_recording_resolves_known_hotspot_and_validates() {
