@@ -1,4 +1,5 @@
 import { Workspace } from './workspace';
+import { calls } from './views/calls';
 import { profile } from './views/profile';
 import { timeline } from './views/timeline';
 import { resources } from './views/resources';
@@ -12,6 +13,7 @@ new Workspace(
   {
     timeline: { name: 'Timeline', render: timeline },
     profile: { name: 'Stack profile', render: profile },
+    calls: { name: 'Function calls', render: calls },
     resources: { name: 'Resources', render: resources },
     evidence: { name: 'Evidence', render: evidence },
     analyses: { name: 'Analyzers', render: analyses },

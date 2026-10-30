@@ -7,6 +7,7 @@ import {
 import { AnalysisWatch } from './analysis/watch';
 import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
+import type { FunctionSelection } from './call-counts';
 import { runSource } from './run';
 import { operation, type Run, type Summary } from './api';
 import {
@@ -34,6 +35,7 @@ export type ViewContext = {
   persist: (mode?: 'push' | 'replace') => void;
   refresh: (message?: string) => void;
   followAttempt: (id: string) => void;
+  countFunctions: (functions: FunctionSelection[]) => void;
   source: (path: string, line?: number | null, codeId?: string | null) => void;
 };
 export type View = {
@@ -656,6 +658,14 @@ export class Workspace {
             signal,
             persist: (mode = 'replace') => {
               if (!signal.aborted) this.writeLocation(mode);
+            },
+            countFunctions: (functions) => {
+              if (signal.aborted) return;
+              investigation.calls.functions = functions.map((value) => ({
+                ...value,
+              }));
+              this.investigations.persist(run.id);
+              this.navigate(run.id, 'calls');
             },
             followAttempt: (id) => {
               this.attemptMonitor.follow(run.id, id);
