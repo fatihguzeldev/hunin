@@ -1519,6 +1519,10 @@
             "type": "string"
           }
         },
+        "input_kind": {
+          "type": "string",
+          "enum": ["profile", "observations"]
+        },
         "requires_existing_recording": {
           "type": "boolean"
         }

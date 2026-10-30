@@ -426,6 +426,7 @@ export type ImportFormat = {
   "description": string;
   "aliases": Array<string>;
   "requires": Array<string>;
+  "input_kind"?: "profile" | "observations";
   "requires_existing_recording": boolean;
 };
 
@@ -893,7 +894,7 @@ export function isOperationFailure(value: unknown): value is OperationFailure {
 }
 
 export function isImportFormat(value: unknown): value is ImportFormat {
-  return (isOutputObject(value) && Object.hasOwn(value, "format") && Object.hasOwn(value, "label") && Object.hasOwn(value, "description") && Object.hasOwn(value, "aliases") && Object.hasOwn(value, "requires") && Object.hasOwn(value, "requires_existing_recording") && (typeof value["format"] === "string" && [...value["format"]].length >= 1) && (typeof value["label"] === "string") && (typeof value["description"] === "string") && (Array.isArray(value["aliases"]) && value["aliases"].every(item => (typeof item === "string"))) && (Array.isArray(value["requires"]) && value["requires"].every(item => (typeof item === "string"))) && (typeof value["requires_existing_recording"] === "boolean") && Object.keys(value).every(key => ["format","label","description","aliases","requires","requires_existing_recording"].includes(key)));
+  return (isOutputObject(value) && Object.hasOwn(value, "format") && Object.hasOwn(value, "label") && Object.hasOwn(value, "description") && Object.hasOwn(value, "aliases") && Object.hasOwn(value, "requires") && Object.hasOwn(value, "requires_existing_recording") && (typeof value["format"] === "string" && [...value["format"]].length >= 1) && (typeof value["label"] === "string") && (typeof value["description"] === "string") && (Array.isArray(value["aliases"]) && value["aliases"].every(item => (typeof item === "string"))) && (Array.isArray(value["requires"]) && value["requires"].every(item => (typeof item === "string"))) && (!Object.hasOwn(value, "input_kind") || ((value["input_kind"] === "profile" || value["input_kind"] === "observations") && typeof value["input_kind"] === "string")) && (typeof value["requires_existing_recording"] === "boolean") && Object.keys(value).every(key => ["format","label","description","aliases","requires","input_kind","requires_existing_recording"].includes(key)));
 }
 
 export function isComparisonHotspotSelection(value: unknown): value is ComparisonHotspotSelection {

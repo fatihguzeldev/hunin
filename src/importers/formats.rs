@@ -13,6 +13,14 @@ pub(super) enum ProfileFormat {
     Jsonl,
 }
 
+/// Input responsibility, not a promise that one retained artifact can be replayed.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum InputKind {
+    Profile,
+    Observations,
+}
+
 #[derive(Serialize)]
 pub(crate) struct ImportFormat {
     #[serde(skip)]
@@ -23,6 +31,7 @@ pub(crate) struct ImportFormat {
     aliases: &'static [&'static str],
     requires: &'static [&'static str],
     requires_existing_recording: bool,
+    input_kind: InputKind,
 }
 
 const FORMATS: &[ImportFormat] = &[
@@ -34,6 +43,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &["firefox-profile", "samply"],
         requires: &[],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::V8,
@@ -43,6 +53,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &["v8", "cpuprofile"],
         requires: &[],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::Graal,
@@ -52,6 +63,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &["graal"],
         requires: &[],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::Pprof,
@@ -61,6 +73,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &["go-pprof"],
         requires: &[],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::PythonCpuProgress,
@@ -70,6 +83,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &[],
         requires: &[],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::GoTrace,
@@ -79,6 +93,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &[],
         requires: &["Compatible Go decoder toolchain"],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::Vmprof,
@@ -88,6 +103,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &[],
         requires: &["Python decoder environment with the vmprof package"],
         requires_existing_recording: false,
+        input_kind: InputKind::Profile,
     },
     ImportFormat {
         kind: ProfileFormat::Jsonl,
@@ -97,6 +113,7 @@ const FORMATS: &[ImportFormat] = &[
         aliases: &["jsonl"],
         requires: &["Existing recording identity matching every observation run_id"],
         requires_existing_recording: true,
+        input_kind: InputKind::Observations,
     },
 ];
 
@@ -139,5 +156,23 @@ mod tests {
             }
         }
         assert!(ProfileFormat::parse("unknown-format").is_err());
+    }
+    #[test]
+    fn advertised_input_roles_distinguish_profiles_from_observation_streams() {
+        let advertised = serde_json::to_value(import_formats()).unwrap();
+        let by_name = |name| {
+            advertised
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|format| format["format"] == name)
+                .unwrap()
+        };
+        assert_eq!(by_name("v8-cpuprofile")["input_kind"], "profile");
+        assert_eq!(by_name("hunin-jsonl")["input_kind"], "observations");
+        assert!(advertised.as_array().unwrap().iter().all(|format| matches!(
+            format["input_kind"].as_str(),
+            Some("profile" | "observations")
+        )));
     }
 }
