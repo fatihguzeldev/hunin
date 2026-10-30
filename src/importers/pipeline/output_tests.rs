@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 use std::fs;
 
 fn rejected(result: Result<ImportedProfile>) -> anyhow::Error {
@@ -71,15 +72,19 @@ fn shared_v8_symbol_cannot_expand_past_a_tiny_output_record_budget() {
 fn native_lifecycle_and_reserved_relations_share_the_exact_same_output_budget() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("cpu.json");
-    fs::write(&path, include_bytes!("fixtures/native-lifetimes/cpu.json")).unwrap();
+    fs::write(
+        &path,
+        include_bytes!("../fixtures/native-lifetimes/cpu.json"),
+    )
+    .unwrap();
     fs::write(
         path.with_extension("syms.json"),
-        include_bytes!("fixtures/native-lifetimes/cpu.syms.json"),
+        include_bytes!("../fixtures/native-lifetimes/cpu.syms.json"),
     )
     .unwrap();
     fs::write(
         path.with_extension("lifetimes.json"),
-        include_bytes!("fixtures/native-lifetimes/cpu.lifetimes.json.gz"),
+        include_bytes!("../fixtures/native-lifetimes/cpu.lifetimes.json.gz"),
     )
     .unwrap();
     let baseline = import(&path, "samply", "run").unwrap();
@@ -123,7 +128,13 @@ fn output_refusal_preserves_raw_and_the_previous_selected_result() {
     let path = root.path().join("events.jsonl");
     let row = |id| json!({"schema_version":1,"kind":"event","id":id,"run_id":"run","producer_id":"fixture","pid":1,"tid":"main","timestamp_us":1,"basis":"observed","name":"event"});
     fs::write(&path, format!("{}\n", row("old"))).unwrap();
-    crate::recordings::publish(&store, "run", import(&path, "jsonl", "run").unwrap()).unwrap();
+    crate::recordings::publish_controlled(
+        &store,
+        "run",
+        import(&path, "jsonl", "run").unwrap(),
+        None,
+    )
+    .unwrap();
     let before = store.records_snapshot("run").unwrap();
     let rejected_raw = format!("{}\n{}\n", row("new-a"), row("new-b"));
     fs::write(&path, &rejected_raw).unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 use std::fs;
 
 #[test]
@@ -12,17 +13,25 @@ fn valid_raw_profile_above_private_byte_limit_is_rejected_before_decode() {
         ..Default::default()
     };
     assert_eq!(
-        import_with_limits(&path, "jsonl", "run", None, limits, None)
-            .unwrap()
-            .records
-            .len(),
+        normalize(
+            &path,
+            "jsonl",
+            "run",
+            None,
+            limits,
+            &mut OutputBudget::default(),
+            None
+        )
+        .unwrap()
+        .records
+        .len(),
         1
     );
     assert_eq!(
         import(&path, "jsonl", "run").unwrap().input_fingerprint,
         "5e15e0dc7499ec197d52e8d1aa95134b490e9519982eed5d6f1136d0740c2d1b"
     );
-    let error = import_with_limits(
+    let error = normalize(
         &path,
         "jsonl",
         "run",
@@ -31,6 +40,7 @@ fn valid_raw_profile_above_private_byte_limit_is_rejected_before_decode() {
             raw_bytes: limits.raw_bytes - 1,
             ..limits
         },
+        &mut OutputBudget::default(),
         None,
     )
     .unwrap_err();
