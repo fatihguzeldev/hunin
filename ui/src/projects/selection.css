@@ -1,0 +1,95 @@
+.project-picker {
+  width: min(800px, 100%);
+  margin: 0 auto;
+  padding: 40px 24px;
+  display: grid;
+  gap: 20px;
+}
+.project-heading,
+.project-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.project-heading img {
+  width: 28px;
+  height: 28px;
+}
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.project-list li + li {
+  border-top: 1px solid var(--line);
+}
+.project-link {
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.project-link:hover,
+.project-link:focus-visible {
+  background: var(--surface-hover);
+}
+.project-link:focus-visible {
+  outline-offset: -3px;
+}
+.project-workspaces {
+  font-size: 12px;
+  color: var(--muted);
+}
+.project-guidance {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.project-guidance pre {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.project-problem {
+  border-left: 3px solid var(--bad);
+  padding: 12px 16px;
+  background: var(--surface);
+}
+.project-open-direct {
+  justify-self: start;
+}
+.project-selector {
+  min-width: 0;
+  max-width: 260px;
+  display: grid;
+  gap: 4px;
+}
+.project-selector a,
+.project-selector > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-selector small {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+@media (max-width: 700px) {
+  .project-picker {
+    padding: 24px 16px;
+  }
+  .project-title {
+    flex-wrap: wrap;
+  }
+  .project-selector {
+    max-width: 100%;
+  }
+}

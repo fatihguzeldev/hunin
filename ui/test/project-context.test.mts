@@ -4,7 +4,10 @@ import {
   projectFromUrl,
   projectUrl,
   projectStorage,
+  projectStorageScope,
+  resolveProjectSelection,
 } from '../src/projects/context.js';
+import type { ProjectCatalog } from '../src/operations.generated.js';
 import { Investigations } from '../src/investigation/state.js';
 import { AnalysisWatch } from '../src/analysis/watch.js';
 
@@ -22,6 +25,93 @@ test('project navigation retains the server origin and clears recording-specific
   const picker = projectUrl(url.href);
   assert.equal(picker.searchParams.has('project'), true);
   assert.equal(projectFromUrl(picker.href), undefined);
+});
+
+test('legacy store preferences bind the actual store while project preferences follow stable identity', () => {
+  const project = {
+    id: 'one',
+    name: 'One',
+    store_path: '/one',
+    workspace_roots: [],
+    legacy: false,
+  };
+  assert.equal(
+    projectStorageScope(project),
+    projectStorageScope({ ...project, store_path: '/moved' }),
+  );
+  const legacy = { ...project, id: 'legacy', legacy: true };
+  assert.notEqual(
+    projectStorageScope(legacy),
+    projectStorageScope({ ...legacy, store_path: '/other-registry' }),
+  );
+  assert.notEqual(projectStorageScope(legacy), `direct:${legacy.store_path}`);
+  assert.notEqual(
+    projectStorageScope(legacy),
+    projectStorageScope({ ...legacy, legacy: false }),
+  );
+});
+
+test('startup project selection is explicit, canonical and never falls back from an unknown project', () => {
+  const catalog: ProjectCatalog = {
+    projects: [
+      {
+        id: 'one',
+        name: 'One',
+        store_path: '/one',
+        workspace_roots: [],
+        legacy: false,
+      },
+    ],
+    selected_project_id: 'one',
+    direct_store: false,
+    storage_scope: null,
+  };
+  const startup = resolveProjectSelection(
+    catalog,
+    'http://localhost/?run=existing',
+  );
+  assert.equal(startup.kind, 'redirect');
+  if (startup.kind === 'redirect') {
+    assert.equal(startup.url.searchParams.get('project'), 'one');
+    assert.equal(startup.url.searchParams.get('run'), 'existing');
+  }
+  assert.equal(
+    resolveProjectSelection(catalog, 'http://localhost/?project=').kind,
+    'picker',
+  );
+  assert.equal(
+    resolveProjectSelection(catalog, 'http://localhost/?project=one').kind,
+    'project',
+  );
+  const unknown = resolveProjectSelection(
+    catalog,
+    'http://localhost/?project=missing&run=existing',
+  );
+  assert.equal(unknown.kind, 'picker');
+  assert.ok(unknown.kind === 'picker' && unknown.problem);
+  const direct = {
+    ...catalog,
+    projects: [],
+    selected_project_id: null,
+    direct_store: true,
+    storage_scope: '/explicit/store',
+  };
+  assert.deepEqual(resolveProjectSelection(direct, 'http://localhost/'), {
+    kind: 'direct',
+    storageScope: '/explicit/store',
+  });
+  assert.equal(
+    resolveProjectSelection(direct, 'http://localhost/?project=one').kind,
+    'picker',
+  );
+  assert.throws(
+    () =>
+      resolveProjectSelection(
+        { ...direct, storage_scope: null },
+        'http://localhost/',
+      ),
+    /identity/,
+  );
 });
 
 test('identical recording and attempt IDs remain isolated between project and direct-store contexts', () => {

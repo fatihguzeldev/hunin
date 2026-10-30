@@ -8,16 +8,21 @@ import { source } from './source/view';
 import { analyses } from './analysis/view';
 import { comparison } from './views/comparison';
 import './style.css';
+import { selectProject } from './projects/selection';
 
-new Workspace(
-  {
-    timeline: { name: 'Timeline', render: timeline },
-    profile: { name: 'Stack profile', render: profile },
-    calls: { name: 'Function calls', render: calls },
-    resources: { name: 'Resources', render: resources },
-    evidence: { name: 'Evidence', render: evidence },
-    analyses: { name: 'Analyzers', render: analyses },
-    compare: { name: 'Compare', render: comparison },
-  },
-  source,
-).mount(document.querySelector<HTMLDivElement>('#app')!);
+const root = document.querySelector<HTMLDivElement>('#app')!;
+void selectProject(root, (project) => {
+  new Workspace(
+    {
+      timeline: { name: 'Timeline', render: timeline },
+      profile: { name: 'Stack profile', render: profile },
+      calls: { name: 'Function calls', render: calls },
+      resources: { name: 'Resources', render: resources },
+      evidence: { name: 'Evidence', render: evidence },
+      analyses: { name: 'Analyzers', render: analyses },
+      compare: { name: 'Compare', render: comparison },
+    },
+    source,
+    project,
+  ).mount(root);
+});

@@ -21,6 +21,8 @@ import { removeRecordingDialog } from './recordings/remove';
 import { capabilities } from './views/capabilities';
 import { overview } from './views/overview';
 import { scenarios } from './views/scenarios';
+import { projectStorage } from './projects/context';
+import type { WorkspaceProject } from './projects/selection';
 
 export class Workspace {
   private catalog = new RecordingCatalog();
@@ -53,15 +55,20 @@ export class Workspace {
       signal: AbortSignal,
       page: (startLine: number) => void,
     ) => Promise<HTMLElement>,
+    private project: WorkspaceProject,
   ) {
-    let storage: Storage | undefined;
+    let storage: ReturnType<typeof projectStorage> | undefined;
     try {
-      storage = window.sessionStorage;
+      storage = projectStorage(window.sessionStorage, project.storageScope);
     } catch {
       /* Private state remains in memory. */
     }
     this.investigations = new Investigations(storage);
-    this.history = new InvestigationHistory(this.investigations);
+    this.history = new InvestigationHistory(
+      this.investigations,
+      window,
+      project.storageScope,
+    );
     this.analysisWatch = new AnalysisWatch(storage);
     this.attemptMonitor = new AttemptMonitor(this.analysisWatch, {
       updated: (runId) => this.updateAttemptNotice(runId),
@@ -151,7 +158,29 @@ export class Workspace {
           el('img', { src: '/hunin.svg', alt: '' }),
           'hunin',
         ),
-        el('span', { class: 'header-caption' }, 'profiling & observability'),
+        el(
+          'div',
+          { class: 'project-selector', title: this.project.storePath },
+          el(
+            'small',
+            {},
+            this.project.pickerHref
+              ? this.project.legacy
+                ? 'Legacy store'
+                : 'Project'
+              : 'Direct store',
+          ),
+          this.project.pickerHref
+            ? el(
+                'a',
+                {
+                  href: this.project.pickerHref,
+                  'aria-label': `Switch project, current project ${this.project.name}`,
+                },
+                `${this.project.name} ▾`,
+              )
+            : el('span', {}, this.project.storePath),
+        ),
         el(
           'div',
           { class: 'header-actions' },
