@@ -126,6 +126,13 @@ fn concrete_legacy_epoch_sources_retain_provenance_and_malformed_history_stays_u
     c.execute("UPDATE observations SET record=?1", [&raw])
         .unwrap();
     let retained = store.records("clocks").unwrap();
+    let wire: Value = serde_json::from_str(include_str!("../protocol/record.schema.json")).unwrap();
+    assert!(
+        jsonschema::validator_for(&wire)
+            .unwrap()
+            .is_valid(&retained[0]),
+        "historical legal v1 metadata must remain readable through record response guards"
+    );
     assert_eq!(query::timeline(&retained, &json!({}))["unaligned_count"], 1);
     assert_eq!(
         query::resources(&retained)["series"][0]["clock_alignment"],

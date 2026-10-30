@@ -55,7 +55,10 @@ pub(crate) fn inspect(attributes: &Value) -> Clock<'_> {
 /// Unknown labels are retained as unknown; a recognized epoch declaration must
 /// have a consistent domain. Historical rows are inspected, not revalidated.
 pub(crate) fn validate(attributes: &Value) -> Result<()> {
-    if let Some(mapping) = attributes["clock_alignment"].as_str() {
+    if let Some(value) = attributes.get("clock_alignment") {
+        let mapping = value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("observation clock_alignment must be a string"))?;
         ensure!(
             !epoch_mapping(mapping) || attributes["clock"] == "unix_epoch",
             "observation clock_alignment {mapping} requires clock unix_epoch"

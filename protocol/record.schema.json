@@ -138,8 +138,7 @@
           "description": "Clock domain or retained opaque v1 metadata; unknown values do not establish alignment."
         },
         "clock_alignment": {
-          "type": "string",
-          "description": "Declared mapping provenance. Recognized epoch mappings require clock unix_epoch; missing/unknown metadata stays outside epoch views. See observation-clocks.md."
+          "description": "New publication requires string mapping provenance. Historical opaque v1 values remain wire-readable and unknown/unmapped. Recognized epoch mappings require clock unix_epoch; see observation-clocks.md."
         }
       }
     }
