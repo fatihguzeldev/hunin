@@ -166,7 +166,15 @@ async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             }
             return Ok(());
         }
-        Command::Count(options) => cli::count::measure(&operations, options).await?,
+        Command::Count(options) => {
+            let planning = options.plan;
+            let result = cli::count::measure(&operations, options).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            if !planning && result["status"] != "complete" {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Command::List => operations.call("runs.list", json!({})).await?,
         Command::Inspect { run_id } => {
             operations
