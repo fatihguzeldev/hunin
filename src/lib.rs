@@ -8,6 +8,7 @@ pub mod interfaces;
 pub mod model;
 pub mod operations;
 pub mod product;
+pub mod projects;
 mod publication;
 pub mod query;
 mod recordings;
