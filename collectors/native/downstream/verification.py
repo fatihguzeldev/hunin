@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from .build import digest, inspect_toolchain, prepare_inputs, tree_digest
+from . import source as source_inputs, toolchain as rust_toolchain
 from .checks import pe_dwarf_check, run_checks
 
 
@@ -34,7 +34,7 @@ def fixture_from_recording(directory):
     return fixture, {
         "source": "completed_go_test_control",
         "run_id": run_id,
-        "run_manifest_sha256": digest(manifest),
+        "run_manifest_sha256": source_inputs.digest(manifest),
     }
 
 
@@ -56,16 +56,16 @@ def verify(cache, output, fixture=None, recording=None, toolchain="stable"):
         fixture = fixture.resolve()
         if not fixture.is_file():
             raise ValueError(f"Required real PE fixture is missing: {fixture}")
-        fixture_sha256 = digest(fixture)
+        fixture_sha256 = source_inputs.digest(fixture)
         context["fixture"] = {
             "path": str(fixture),
             "sha256": fixture_sha256,
             "size": fixture.stat().st_size,
             "origin": origin,
         }
-        source, workspace, identity, patch_sha256 = prepare_inputs(cache)
-        compiler, host = inspect_toolchain(toolchain)
-        source_sha256 = tree_digest(source)
+        source, workspace, identity, patch_sha256 = source_inputs.prepare_inputs(cache)
+        compiler, host = rust_toolchain.inspect(toolchain)
+        source_sha256 = source_inputs.tree_digest(source)
         context.update(
             {
                 "identity": identity,
@@ -84,7 +84,10 @@ def verify(cache, output, fixture=None, recording=None, toolchain="stable"):
         context["checks"] = run_checks(
             source, environment, toolchain, host, [pe_dwarf_check()]
         )
-        if digest(fixture) != fixture_sha256 or tree_digest(source) != source_sha256:
+        if (
+            source_inputs.digest(fixture) != fixture_sha256
+            or source_inputs.tree_digest(source) != source_sha256
+        ):
             raise ValueError("Source or fixture bytes changed during regression checks")
         context["limitations"] = (
             "These source oracles check compressed DWARF and profile/symbol-reader identity. "
