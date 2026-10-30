@@ -1,6 +1,15 @@
-use super::*;
+use super::{
+    IngestionOutcome,
+    contract::*,
+    ingest_controlled,
+    ingestion::{ingest_with_policy, publish_records},
+    spool::read,
+};
 use crate::model::runs::Run;
+use crate::storage::Store;
+use serde_json::Value;
 use serde_json::json;
+use std::{fs, path::Path, time::Instant};
 
 fn fixture() -> (tempfile::TempDir, Store, std::path::PathBuf) {
     let temporary = tempfile::tempdir().unwrap();
@@ -25,7 +34,15 @@ fn row(id: &str) -> String {
 }
 
 fn outcome(store: &Store, directory: &Path, limits: SpoolBudget) -> Value {
-    serde_json::to_value(ingest_with_budget(store, "sdk-budget", directory, limits)).unwrap()
+    serde_json::to_value(ingest_with_policy(
+        store,
+        "sdk-budget",
+        directory,
+        limits,
+        RawRetention::default(),
+        None,
+    ))
+    .unwrap()
 }
 
 fn assert_budget_rejection(value: &Value, store: &Store) {
