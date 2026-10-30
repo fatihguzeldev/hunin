@@ -34,7 +34,7 @@ type RecordBase = {
   "basis": "observed" | "sampled" | "explicit" | "derived";
   "attributes"?: {
   "clock"?: unknown;
-  "clock_alignment"?: string;
+  "clock_alignment"?: unknown;
   [key: string]: unknown;
 };
 };
