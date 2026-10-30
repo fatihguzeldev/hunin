@@ -134,13 +134,10 @@ async fn virtual_source_versions_require_the_measured_code_identity() {
         let digest = format!("{:x}", Sha256::digest(content.as_bytes()));
         let document = json!({"run_id":"source-control","source_snapshots":[{"uri":"webpack:///source.ts","artifact_id":artifact.id,"sha256":digest,"provenance":{"code_id":version}}]});
         store
-            .publish(
-                "source-control",
-                version,
-                version,
-                &[],
-                Some(("profile-inputs", version, &document)),
-            )
+            .accept_import("source-control", version, version, &[])
+            .unwrap();
+        store
+            .save_document("profile-inputs", version, &document)
             .unwrap();
     }
     let operations = Operations::new(store.clone());

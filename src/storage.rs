@@ -233,41 +233,6 @@ impl Store {
         })
     }
 
-    pub fn publish(
-        &self,
-        run_id: &str,
-        source_key: &str,
-        input_identity: &str,
-        records: &[Value],
-        document: Option<(&str, &str, &Value)>,
-    ) -> Result<bool> {
-        // Compatibility adapter for existing callers of the generic API. New
-        // application code supplies lifecycle metadata explicitly.
-        let metadata = document.map(|(namespace, id, document)| match namespace {
-            "analysis-results" => PublicationMetadata::Analysis {
-                execution_id: id,
-                document,
-            },
-            "profile-inputs" => PublicationMetadata::Normalization {
-                input_id: id,
-                document,
-            },
-            _ => PublicationMetadata::Other {
-                namespace,
-                id,
-                document,
-            },
-        });
-        self.publish_result(PublicationRequest {
-            run_id,
-            source_key,
-            input_identity,
-            records,
-            metadata,
-            deadline: None,
-        })
-    }
-
     pub(crate) fn publish_result(&self, request: PublicationRequest<'_>) -> Result<bool> {
         use crate::model::identity::{ObservationId, ResultId};
         let PublicationRequest {
@@ -388,7 +353,6 @@ fn write_publication_metadata(
     let (namespace, id) = match metadata {
         PublicationMetadata::Analysis { execution_id, .. } => ("analysis-results", execution_id),
         PublicationMetadata::Normalization { input_id, .. } => ("profile-inputs", input_id),
-        PublicationMetadata::Other { namespace, id, .. } => (namespace, id),
     };
     write_document(connection, namespace, id, document)
 }

@@ -37,11 +37,6 @@ pub(crate) enum PublicationMetadata<'a> {
         input_id: &'a str,
         document: &'a Value,
     },
-    Other {
-        namespace: &'a str,
-        id: &'a str,
-        document: &'a Value,
-    },
 }
 
 impl PublicationMetadata<'_> {
@@ -54,9 +49,7 @@ impl PublicationMetadata<'_> {
 
     pub fn document(&self) -> &Value {
         match self {
-            Self::Analysis { document, .. }
-            | Self::Normalization { document, .. }
-            | Self::Other { document, .. } => document,
+            Self::Analysis { document, .. } | Self::Normalization { document, .. } => document,
         }
     }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::publication::{PublicationMetadata, PublicationRequest};
 use serde_json::json;
 
 fn fixture() -> (tempfile::TempDir, Store, crate::model::runs::Artifact) {
@@ -300,8 +301,17 @@ fn concurrent_reselection_and_derived_publication_never_select_stale_inputs() {
     let ready = barrier.clone();
     let publication = std::thread::spawn(move || {
         ready.wait();
-        publishing.publish("recording","derived","derived-v1",&[json!({"schema_version":1,"kind":"event","id":"derived","run_id":"recording","producer_id":"analysis","pid":1,"tid":"","timestamp_us":2,"name":"derived","basis":"derived","evidence":["raw-v1"]})],
-            Some(("analysis-results","attempt",&json!({"run_id":"recording","status":"accepted","input_result_sets":[input]}))))
+        publishing.publish_result(PublicationRequest {
+            run_id: "recording",
+            source_key: "derived",
+            input_identity: "derived-v1",
+            records: &[json!({"schema_version":1,"kind":"event","id":"derived","run_id":"recording","producer_id":"analysis","pid":1,"tid":"","timestamp_us":2,"name":"derived","basis":"derived","evidence":["raw-v1"]})],
+            metadata: Some(PublicationMetadata::Analysis {
+                execution_id: "attempt",
+                document: &json!({"run_id":"recording","status":"accepted","input_result_sets":[input]}),
+            }),
+            deadline: None,
+        })
     });
     barrier.wait();
     store

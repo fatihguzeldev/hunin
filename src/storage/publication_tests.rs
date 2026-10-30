@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 #[test]
@@ -66,4 +66,321 @@ fn publication_waiting_for_the_writer_cannot_outlive_its_deadline() {
         store.document("analysis-results", "attempt").unwrap()["status"],
         "running"
     );
+}
+
+fn run() -> Run {
+    Run {
+        id: "run-1".into(),
+        name: "control".into(),
+        status: "completed".into(),
+        command: vec!["control".into()],
+        cwd: "/tmp".into(),
+        runtime: "native".into(),
+        started_at_us: 1,
+        finished_at_us: Some(5),
+        exit_code: Some(0),
+        diagnostics: vec![],
+        source: json!({"fingerprint":"source-1"}),
+        correctness: json!({"passed":true}),
+    }
+}
+fn event(id: &str) -> Value {
+    json!({"schema_version":1,"kind":"event","id":id,"run_id":"run-1","producer_id":"process-lifetime-1","pid":123,"tid":"main","timestamp_us":2,"name":"control","basis":"observed"})
+}
+
+#[test]
+fn reanalysis_invalidates_dependents_and_keeps_independent_results() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store.accept("run-1", "raw", &[event("raw")]).unwrap();
+    let raw = store.selected_result_id("run-1", "raw").unwrap().unwrap();
+    let publish = |source: &str, id: &str, inputs: Vec<String>| {
+        let mut record = event(id);
+        record["basis"] = json!("derived");
+        let doc = json!({"run_id":"run-1","status":"accepted","input_result_sets":inputs});
+        store.publish_result(PublicationRequest {
+            run_id: "run-1",
+            source_key: source,
+            input_identity: id,
+            records: &[record],
+            metadata: Some(PublicationMetadata::Analysis {
+                execution_id: id,
+                document: &doc,
+            }),
+            deadline: None,
+        })
+    };
+    publish("analysis:b", "b1", vec![raw.clone()]).unwrap();
+    publish("analysis:a", "a1", vec!["b1".into()]).unwrap();
+    assert_eq!(
+        store.active_result_ids("run-1", "analysis:b").unwrap(),
+        vec![raw.clone()]
+    );
+    publish("analysis:a", "a2", vec!["b1".into()]).unwrap();
+    assert_eq!(
+        store
+            .selected_result_id("run-1", "analysis:b")
+            .unwrap()
+            .as_deref(),
+        Some("b1")
+    );
+    publish("analysis:b", "b2", vec![raw]).unwrap();
+    assert!(
+        store
+            .selected_result_id("run-1", "analysis:a")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .records_for_result_ids("run-1", &["b2".into()])
+            .unwrap()[0]["id"],
+        "b2"
+    );
+    assert!(publish("analysis:a", "a2", vec!["b1".into()]).is_err());
+    assert_eq!(store.records("run-1").unwrap().len(), 2);
+    assert_eq!(store.records_history("run-1").unwrap().len(), 5);
+}
+
+#[test]
+fn persisted_cancellation_wins_the_publication_race_and_owned_documents_are_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let doc = json!({"run_id":"run-1","status":"running"});
+    store
+        .save_document("analysis-results", "attempt", &doc)
+        .unwrap();
+    let other_client = Store::open(root.path()).unwrap();
+    assert_eq!(
+        other_client.request_analysis_cancel("attempt").unwrap()["cancellation_requested"],
+        true
+    );
+    assert!(
+        store
+            .publish_result(PublicationRequest {
+                run_id: "run-1",
+                source_key: "analysis:a",
+                input_identity: "a1",
+                records: &[event("a")],
+                metadata: Some(PublicationMetadata::Analysis {
+                    execution_id: "attempt",
+                    document: &json!({"run_id":"run-1","status":"accepted"}),
+                }),
+                deadline: None,
+            })
+            .is_err()
+    );
+    assert!(store.records("run-1").unwrap().is_empty());
+    assert!(store.remove_run("run-1").is_err());
+    store
+        .save_document(
+            "analysis-results",
+            "attempt",
+            &json!({"run_id":"run-1","status":"cancelled"}),
+        )
+        .unwrap();
+    assert_eq!(
+        other_client.request_analysis_cancel("attempt").unwrap()["status"],
+        "cancelled"
+    );
+    store
+        .save_document("cancellations", "run-1", &json!({"run_id":"run-1"}))
+        .unwrap();
+    let capture = root.path().join("captures/run-1");
+    let attempt = root.path().join("analysis-executions/attempt");
+    std::fs::create_dir_all(&capture).unwrap();
+    std::fs::create_dir_all(&attempt).unwrap();
+    std::fs::write(capture.join("raw.txt"), "raw").unwrap();
+    std::fs::write(attempt.join("input.json"), "{}").unwrap();
+    store.remove_run("run-1").unwrap();
+    assert!(store.document("analysis-results", "attempt").is_err());
+    assert!(store.document("cancellations", "run-1").is_err());
+    assert!(!capture.exists());
+    assert!(!attempt.exists());
+}
+
+#[test]
+fn concurrent_cancellation_and_publication_have_one_serialized_outcome() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store
+        .save_document(
+            "analysis-results",
+            "raced",
+            &json!({"run_id":"run-1","status":"running"}),
+        )
+        .unwrap();
+    let other = Store::open(root.path()).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let ready = barrier.clone();
+    let publishing = store.clone();
+    let publish = std::thread::spawn(move || {
+        let records: Vec<_> = (0..256)
+            .map(|index| event(&format!("raced-{index}")))
+            .collect();
+        ready.wait();
+        publishing.publish_result(PublicationRequest {
+            run_id: "run-1",
+            source_key: "analysis:raced",
+            input_identity: "raced-input",
+            records: &records,
+            metadata: Some(PublicationMetadata::Analysis {
+                execution_id: "raced",
+                document: &json!({"run_id":"run-1","status":"accepted"}),
+            }),
+            deadline: None,
+        })
+    });
+    barrier.wait();
+    let cancellation = other.request_analysis_cancel("raced").unwrap();
+    let outcome = publish.join().unwrap();
+    let document = store.document("analysis-results", "raced").unwrap();
+    match outcome {
+        Ok(accepted) => {
+            assert!(accepted);
+            assert_eq!(cancellation["status"], "accepted");
+            assert_eq!(document["status"], "accepted");
+            assert_eq!(store.records("run-1").unwrap().len(), 256);
+        }
+        Err(error) => {
+            assert!(
+                error.to_string().contains("cancelled before publication"),
+                "{error:#}"
+            );
+            assert_eq!(cancellation["cancellation_requested"], true);
+            assert_eq!(document["cancellation_requested"], true);
+            assert!(store.records("run-1").unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn opaque_observation_and_result_identities_keep_distinct_reference_roles_and_replay_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store
+        .save_run(&Run {
+            id: "recording".into(),
+            name: "identity boundary".into(),
+            status: "completed".into(),
+            command: vec![],
+            cwd: "/fixture".into(),
+            runtime: "fixture".into(),
+            started_at_us: 1,
+            finished_at_us: Some(2),
+            exit_code: Some(0),
+            diagnostics: vec![],
+            source: json!({}),
+            correctness: json!({}),
+        })
+        .unwrap();
+    let event = json!({"schema_version":1,"kind":"event","name":"identity fixture","id":"observed:观测/α","run_id":"recording","producer_id":"fixture","pid":1,"tid":"thread","timestamp_us":1,"basis":"observed","attributes":{"arbitrary":{"nested":[1,null,"retained"]}}});
+    let result = "result:原始/α";
+    let document = json!({"id":result,"run_id":"recording","status":"accepted"});
+    assert!(
+        store
+            .publish_result(PublicationRequest {
+                run_id: "recording",
+                source_key: "opaque-source",
+                input_identity: "first-input",
+                records: std::slice::from_ref(&event),
+                metadata: Some(PublicationMetadata::Analysis {
+                    execution_id: result,
+                    document: &document,
+                }),
+                deadline: None,
+            })
+            .unwrap()
+    );
+    assert_eq!(store.records("recording").unwrap(), vec![event.clone()]);
+    let connection = rusqlite::Connection::open(store.root().join("hunin.sqlite")).unwrap();
+    let raw: String = connection
+        .query_row(
+            "SELECT record FROM observations WHERE id=?1",
+            [event["id"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw, serde_json::to_string(&event).unwrap());
+    assert_eq!(
+        store.active_result_ids("recording", "").unwrap(),
+        vec![result.to_owned()]
+    );
+
+    let relation = json!({"schema_version":1,"kind":"relation","id":"derived:关系/β","run_id":"recording","producer_id":"analyzer","pid":0,"tid":"","timestamp_us":1,"basis":"derived","from":event["id"],"to":event["id"],"relation":"explains","evidence":[event["id"]]});
+    let mut wrong_observation = relation.clone();
+    wrong_observation["from"] = json!(result);
+    let error = store
+        .accept("recording", "wrong-observation", &[wrong_observation])
+        .unwrap_err();
+    assert_eq!(error.to_string(), format!("unresolved from: {result}"));
+    let wrong_result = json!({"id":"failed","run_id":"recording","status":"accepted","input_result_sets":[event["id"]]});
+    let error = store
+        .publish_result(PublicationRequest {
+            run_id: "recording",
+            source_key: "derived",
+            input_identity: "wrong-result",
+            records: std::slice::from_ref(&relation),
+            metadata: Some(PublicationMetadata::Analysis {
+                execution_id: "failed",
+                document: &wrong_result,
+            }),
+            deadline: None,
+        })
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "analysis input changed before publication; rerun with current selected results"
+    );
+    assert_eq!(store.records("recording").unwrap(), vec![event.clone()]);
+
+    let derived_id = "result:派生/β";
+    let derived = json!({"id":derived_id,"run_id":"recording","status":"accepted","input_result_sets":[result]});
+    assert!(
+        store
+            .publish_result(PublicationRequest {
+                run_id: "recording",
+                source_key: "derived",
+                input_identity: "derived-input",
+                records: std::slice::from_ref(&relation),
+                metadata: Some(PublicationMetadata::Analysis {
+                    execution_id: derived_id,
+                    document: &derived,
+                }),
+                deadline: None,
+            })
+            .unwrap()
+    );
+    let replay_id = "attempt:replayed/γ";
+    let replay = json!({"id":replay_id,"run_id":"recording","status":"accepted","input_result_sets":[result]});
+    assert!(
+        !store
+            .publish_result(PublicationRequest {
+                run_id: "recording",
+                source_key: "derived",
+                input_identity: "derived-input",
+                records: std::slice::from_ref(&relation),
+                metadata: Some(PublicationMetadata::Analysis {
+                    execution_id: replay_id,
+                    document: &replay,
+                }),
+                deadline: None,
+            })
+            .unwrap()
+    );
+    let replay = store.document("analysis-results", replay_id).unwrap();
+    assert_eq!(replay["result_set_id"], derived_id);
+    assert_eq!(replay["status"], "replayed");
+    assert_eq!(store.records("recording").unwrap(), vec![event, relation]);
+    let dependency: String = connection
+        .query_row(
+            "SELECT input_result_set_id FROM result_set_dependencies WHERE result_set_id=?1",
+            [derived_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dependency, result);
 }
