@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from . import assembly as package
+from . import assembly as package, native
 
 from ..installation.hunin_install import activation, contracts, probe, verification
 
@@ -395,7 +395,7 @@ class PackageTests(unittest.TestCase):
 
     def test_native_collector_must_match_the_shipped_platform_binary_and_patches(self):
         files = self.native_files()
-        package.verify_native_collector(files, "linux-x64")
+        native.verify_collector(files, "linux-x64")
         for change in ("binary", "patch", "platform", "missing"):
             with self.subTest(change=change):
                 changed = dict(files)
@@ -409,7 +409,7 @@ class PackageTests(unittest.TestCase):
                 else:
                     del changed["collectors/native/bin/samply"]
                 with self.assertRaises(ValueError):
-                    package.verify_native_collector(changed, target)
+                    native.verify_collector(changed, target)
 
     def test_binary_compiled_contract_mismatch_fails_before_creating_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
