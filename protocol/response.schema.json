@@ -3,6 +3,40 @@
   "$id": "https://hunin.dev/protocol/response-v1.schema.json",
   "title": "Hunin operation results and transport envelopes",
   "$defs": {
+    "Project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "store_path": { "type": "string", "minLength": 1 },
+        "workspace_roots": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "legacy": { "type": "boolean" }
+      },
+      "required": ["id", "name", "store_path", "workspace_roots", "legacy"]
+    },
+    "ProjectCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projects": { "type": "array", "items": { "$ref": "#/$defs/Project" } },
+        "selected_project_id": { "type": ["string", "null"] },
+        "direct_store": { "type": "boolean" },
+        "storage_scope": {
+          "type": ["string", "null"],
+          "description": "Stable browser-state namespace for explicit direct-store mode; null in registry mode."
+        }
+      },
+      "required": [
+        "projects",
+        "selected_project_id",
+        "direct_store",
+        "storage_scope"
+      ]
+    },
     "Run": {
       "type": "object",
       "properties": {

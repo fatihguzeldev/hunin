@@ -2,6 +2,21 @@
 import type { Observation } from "./record.generated.js";
 export type { Observation } from "./record.generated.js";
 
+export type Project = {
+  "id": string;
+  "name": string;
+  "store_path": string;
+  "workspace_roots": Array<string>;
+  "legacy": boolean;
+};
+
+export type ProjectCatalog = {
+  "projects": Array<Project>;
+  "selected_project_id": string | null;
+  "direct_store": boolean;
+  "storage_scope": string | null;
+};
+
 export type Run = {
   "id": string;
   "name": string;
@@ -872,6 +887,14 @@ export type OperationOutputs = {
 
 function isOutputObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isProject(value: unknown): value is Project {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "name") && Object.hasOwn(value, "store_path") && Object.hasOwn(value, "workspace_roots") && Object.hasOwn(value, "legacy") && (typeof value["id"] === "string" && [...value["id"]].length >= 1) && (typeof value["name"] === "string" && [...value["name"]].length >= 1) && (typeof value["store_path"] === "string" && [...value["store_path"]].length >= 1) && (Array.isArray(value["workspace_roots"]) && value["workspace_roots"].every(item => (typeof item === "string" && [...item].length >= 1))) && (typeof value["legacy"] === "boolean") && Object.keys(value).every(key => ["id","name","store_path","workspace_roots","legacy"].includes(key)));
+}
+
+export function isProjectCatalog(value: unknown): value is ProjectCatalog {
+  return (isOutputObject(value) && Object.hasOwn(value, "projects") && Object.hasOwn(value, "selected_project_id") && Object.hasOwn(value, "direct_store") && Object.hasOwn(value, "storage_scope") && (Array.isArray(value["projects"]) && value["projects"].every(item => isProject(item))) && ((typeof value["selected_project_id"] === "string") || (value["selected_project_id"] === null)) && (typeof value["direct_store"] === "boolean") && ((typeof value["storage_scope"] === "string") || (value["storage_scope"] === null)) && Object.keys(value).every(key => ["projects","selected_project_id","direct_store","storage_scope"].includes(key)));
 }
 
 export function isRun(value: unknown): value is Run {
