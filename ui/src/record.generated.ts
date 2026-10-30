@@ -35,6 +35,7 @@ type RecordBase = {
   "attributes"?: {
   "clock"?: unknown;
   "clock_alignment"?: string;
+  [key: string]: unknown;
 };
 };
 

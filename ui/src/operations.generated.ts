@@ -15,6 +15,7 @@ export type Run = {
   "diagnostics": Array<string>;
   "source": unknown;
   "correctness": unknown;
+  [key: string]: unknown;
 };
 
 export type Summary = {
@@ -25,21 +26,25 @@ export type Summary = {
   "metric_count": number;
   "relation_count": number;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 };
 
 export type RunPage = {
   "runs": Array<Run>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
 
 export type RunResult = {
   "run": Run;
+  [key: string]: unknown;
 };
 
 export type RunDetails = {
   "run": Run;
   "summary": Summary;
   "result_identity"?: string;
+  [key: string]: unknown;
 };
 
 export type ImportResult = {
@@ -47,6 +52,7 @@ export type ImportResult = {
   "accepted": boolean;
   "summary": MutationSummary;
   "summary_diagnostic"?: string;
+  [key: string]: unknown;
 };
 
 export type ReanalysisResult = {
@@ -54,40 +60,49 @@ export type ReanalysisResult = {
   "diagnostics": Array<string>;
   "summary": MutationSummary;
   "summary_diagnostic"?: string;
+  [key: string]: unknown;
 };
 
 export type OperationError = {
   "code": string;
   "message": string;
   "details"?: unknown;
+  [key: string]: unknown;
 };
 
 export type HttpSuccess = {
   "result": unknown;
+  [key: string]: unknown;
 };
 
 export type HttpFailure = {
   "error": OperationError;
+  [key: string]: unknown;
 };
 
 export type McpToolSuccess = {
   "content": Array<{
   "type": "text";
   "text": string;
+  [key: string]: unknown;
 }>;
   "structuredContent": unknown;
   "isError": false;
+  [key: string]: unknown;
 };
 
 export type McpToolFailure = {
   "content": Array<{
   "type": "text";
   "text": string;
+  [key: string]: unknown;
 }>;
   "isError": true;
   "_meta"?: {
   "hunin/operation-error"?: OperationFailure;
+  [key: string]: unknown;
 };
+  [key: string]: unknown;
 };
 
 export type CapabilityMode = {
@@ -100,6 +115,7 @@ export type CapabilityMode = {
   "command_requirement"?: string;
   "default_executable"?: string | null;
   "selectable"?: boolean;
+  [key: string]: unknown;
 };
 
 export type Capability = {
@@ -112,6 +128,7 @@ export type Capability = {
   "modes"?: Array<CapabilityMode>;
   "diagnostics": Array<string>;
   "verification"?: string;
+  [key: string]: unknown;
 };
 
 export type NativeSamplingPermission = {
@@ -122,12 +139,14 @@ export type NativeSamplingPermission = {
   "prerequisite"?: string;
   "setup_url"?: string;
   "xperf_executable"?: string;
+  [key: string]: unknown;
 };
 
 export type Capabilities = {
   "host": {
   "os": string;
   "arch": string;
+  [key: string]: unknown;
 };
   "runtimes": Array<Capability>;
   "schema_version": 1;
@@ -135,9 +154,11 @@ export type Capabilities = {
   "probe_limits": {
   "timeout_seconds_per_command": number;
   "output_bytes_per_stream": number;
+  [key: string]: unknown;
 };
   "verification": string;
   "import_formats"?: Array<ImportFormat>;
+  [key: string]: unknown;
 };
 
 export type SourceRead = {
@@ -151,20 +172,24 @@ export type SourceRead = {
   "provenance"?: unknown;
   "next_line"?: number | null;
   "total_lines"?: number;
+  [key: string]: unknown;
 };
 
 export type AnalysisPage = {
   "analyses": Array<unknown>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
 
 export type AnalysisResultDocument = {
   "selected": boolean;
+  [key: string]: unknown;
 };
 
 export type AnalysisResultPage = {
   "results": Array<AnalysisResultDocument>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
 
 export type AnalysisPackage = {
@@ -182,29 +207,35 @@ export type AnalysisPackage = {
   "path": string;
   "sha256": string;
   "packaged": boolean;
+  [key: string]: unknown;
 };
   "dependency_state": string;
+  [key: string]: unknown;
 };
 
 export type AnalysisRegistered = {
   "analysis": AnalysisPackage;
+  [key: string]: unknown;
 };
 
 export type AnalysisStarted = {
   "result_set_id": string;
   "status": string;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 };
 
 export type AnalysisCanceled = {
   "execution_id": string;
   "status": unknown;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 };
 
 export type ScenarioPage = {
   "scenarios": Array<unknown>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
 
 export type ScenarioSaved = {
@@ -219,18 +250,22 @@ export type ScenarioSaved = {
   "input_files"?: Array<string>;
   "expected_stdout"?: string;
   "expected_stdout_sha256"?: string;
+  [key: string]: unknown;
 };
 
 export type ScenarioSaveResult = {
   "scenario": ScenarioSaved;
+  [key: string]: unknown;
 };
 
 export type ContextObservation = (unknown & Observation & {
   "kind": "context";
+  [key: string]: unknown;
 });
 
 export type RelationObservation = (unknown & Observation & {
   "kind": "relation";
+  [key: string]: unknown;
 });
 
 export type Hotspot = {
@@ -243,12 +278,14 @@ export type Hotspot = {
   "self_weight": number | null;
   "inclusive_weight": number | null;
   "weight_unit": string;
+  [key: string]: unknown;
 };
 
 export type ProfileHotspots = {
   "hotspots": Array<Hotspot>;
   "total_weight": number | null;
   "weight_unit": string;
+  [key: string]: unknown;
 };
 
 export type TreeNode = {
@@ -265,6 +302,7 @@ export type TreeNode = {
   "children_truncated": boolean;
   "depth_truncated": boolean;
   "children": Array<TreeNode>;
+  [key: string]: unknown;
 };
 
 export type ProfileTree = {
@@ -279,6 +317,7 @@ export type ProfileTree = {
   "node_limit": number;
   "depth_limit": number;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 };
 
 export type Timeline = {
@@ -289,14 +328,17 @@ export type Timeline = {
   "bounds": {
   "start_us": number;
   "end_us": number;
+  [key: string]: unknown;
 } | null;
   "unaligned_count": number;
   "unaligned_clock_domains": Array<{
   "producer_id": string;
   "clock": unknown;
+  [key: string]: unknown;
 }>;
   "total_count": number;
   "returned_count": number;
+  [key: string]: unknown;
 };
 
 export type ResourcePoint = {
@@ -307,6 +349,7 @@ export type ResourcePoint = {
   "tid": string;
   "context_id": string | null;
   "producer_id": string;
+  [key: string]: unknown;
 };
 
 export type ResourceSeries = {
@@ -331,6 +374,7 @@ export type ResourceSeries = {
   "returned_points": number;
   "truncated": boolean;
   "points": Array<ResourcePoint>;
+  [key: string]: unknown;
 };
 
 export type Resources = {
@@ -341,16 +385,19 @@ export type Resources = {
   "point_limit": number;
   "unaligned_point_count": number;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 };
 
 export type Contexts = {
   "contexts": Array<ContextObservation>;
   "relations": Array<RelationObservation>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
 
 export type Evidence = {
   "records": Array<Observation>;
+  [key: string]: unknown;
 };
 
 export type ComparisonMetric = {
@@ -369,6 +416,7 @@ export type ComparisonMetric = {
   "before_process_lifetimes"?: number;
   "after_process_lifetimes"?: number;
   "diagnostic"?: string;
+  [key: string]: unknown;
 };
 
 export type ComparisonHotspot = {
@@ -383,6 +431,7 @@ export type ComparisonHotspot = {
   "before_available": boolean;
   "after_available": boolean;
   "presence"?: "both_observed" | "before_only_observed" | "after_only_observed" | "unknown";
+  [key: string]: unknown;
 };
 
 export type Comparison = {
@@ -394,14 +443,17 @@ export type Comparison = {
   "correctness": {
   "before": unknown;
   "after": unknown;
+  [key: string]: unknown;
 };
   "hotspots": Array<ComparisonHotspot>;
   "sample_weight_units": {
   "before": Array<string>;
   "after": Array<string>;
+  [key: string]: unknown;
 };
   "limitations": Array<string>;
   "hotspot_selection"?: ComparisonHotspotSelection;
+  [key: string]: unknown;
 };
 
 export type OperationFailure = {
@@ -497,6 +549,7 @@ export type MutationSummary = {
   "metric_count": number;
   "relation_count": number;
   "diagnostics": Array<string>;
+  [key: string]: unknown;
 } | null;
 
 export type CountSelector = {
@@ -770,6 +823,7 @@ export type OperationOutputs = {
   "runs.cancel": RunResult;
   "runs.remove": {
   "removed": true;
+  [key: string]: unknown;
 };
   "runs.removal": RunRemoval;
   "profiles.hotspots": ProfileHotspots;
@@ -785,14 +839,17 @@ export type OperationOutputs = {
   "size": number;
   "sha256": string;
   "format": string;
+  [key: string]: unknown;
 }>;
   "next_cursor": string | null;
+  [key: string]: unknown;
 };
   "artifacts.read": {
   "content": string;
   "encoding": "utf8_lossy";
   "next_offset": number | null;
   "size": number;
+  [key: string]: unknown;
 };
   "source.read": SourceRead;
   "recordings.import": ImportResult;

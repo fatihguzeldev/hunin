@@ -103,7 +103,9 @@ export function typeOf(
         ([key, value]) =>
           `  ${JSON.stringify(key)}${schema.required?.includes(key) ? '' : '?'}: ${typeOf(value, definitions)};`,
       )
-      .join('\n')}\n}`;
+      .join(
+        '\n',
+      )}${schema.additionalProperties === false ? '' : '\n  [key: string]: unknown;'}\n}`;
   }
   const scalarTypes: Record<string, string> = {
     string: 'string',
