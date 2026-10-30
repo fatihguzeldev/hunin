@@ -2,7 +2,7 @@
 use crate::importers::{
     ImportedProfile, firefox,
     formats::ProfileFormat,
-    go_trace, graal, inputs, javascript_sources, jsonl,
+    go_trace, graal, inputs, jsonl,
     output::{self, OutputBudget},
     pprof, python_cpu, v8, vmprof,
 };
@@ -64,7 +64,7 @@ pub(super) fn decode_snapshot(
     }
     let key = format!("{:x}", digest.finalize());
     let scripts = if kind == ProfileFormat::V8 {
-        Some(javascript_sources::Scripts::load(decoder_path)?)
+        Some(v8::Scripts::load(decoder_path)?)
     } else {
         None
     };
@@ -122,9 +122,7 @@ pub(super) fn decode_snapshot(
         input_fingerprint: key,
         sidecars,
         sidecar_sha256,
-        source_snapshots: scripts
-            .map(javascript_sources::Scripts::into_snapshots)
-            .unwrap_or_default(),
+        source_snapshots: scripts.map(v8::Scripts::into_snapshots).unwrap_or_default(),
         binary_snapshots,
         native_image_context,
         decoder_provenance,

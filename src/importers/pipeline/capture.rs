@@ -1,5 +1,5 @@
 //! Snapshot raw bytes and ordered format sidecars before interpretation.
-use crate::importers::{firefox, formats::ProfileFormat, inputs, javascript_sources, v8};
+use crate::importers::{firefox, formats::ProfileFormat, inputs, v8};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ pub(super) fn capture_inputs(
                 .as_bytes(),
         );
         let maximum = if scripts.contains(&sidecar) {
-            javascript_sources::MAX_TOTAL
+            v8::MAX_SOURCE_BYTES
         } else if kind == ProfileFormat::Firefox && sidecar == path.with_extension("lifetimes.json")
         {
             firefox::MAX_LIFETIME_SIDECAR

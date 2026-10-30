@@ -4,7 +4,6 @@ mod formats;
 mod go_trace;
 mod graal;
 mod inputs;
-mod javascript_sources;
 mod jsonl;
 mod output;
 mod pipeline;

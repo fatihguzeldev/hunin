@@ -1,4 +1,4 @@
-use super::SourceSnapshot;
+use crate::importers::SourceSnapshot;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -9,7 +9,7 @@ use std::{
     path::Path,
 };
 
-pub(super) const MAX_TOTAL: u64 = 32 * 1024 * 1024;
+pub(in crate::importers) const MAX_TOTAL: u64 = 32 * 1024 * 1024;
 fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
@@ -52,7 +52,7 @@ struct Script {
     originals: HashMap<String, (String, String)>,
 }
 #[derive(Default)]
-pub(super) struct Scripts {
+pub(in crate::importers) struct Scripts {
     entries: HashMap<String, Vec<Script>>,
     snapshots: Vec<SourceSnapshot>,
     pub diagnostics: Vec<String>,
@@ -61,7 +61,7 @@ impl Scripts {
     pub fn load(path: &Path) -> Result<Self> {
         let mut result = Self::default();
         let mut snapshot_ids = HashSet::new();
-        for file in super::v8::script_paths(path)
+        for file in super::input::script_paths(path)
             .into_iter()
             .filter(|p| p.is_file())
         {
