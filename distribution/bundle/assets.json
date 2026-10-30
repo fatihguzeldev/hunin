@@ -27,13 +27,9 @@
       "files": {
         "capture.py": "capture.py",
         "cpu.py": "cpu.py",
-        "cpu_clock.py": "cpu_clock.py",
-        "entry.py": "entry.py",
-        "graal.py": "graal.py",
         "hunin_capture/__init__.py": "hunin_capture/__init__.py",
         "hunin_capture/target.py": "hunin_capture/target.py",
         "hunin_capture/vmprof.py": "hunin_capture/vmprof.py",
-        "hunin_capture/graal.py": "hunin_capture/graal.py",
         "hunin_capture/cpu_progress/__init__.py": "hunin_capture/cpu_progress/__init__.py",
         "hunin_capture/cpu_progress/sampling.py": "hunin_capture/cpu_progress/sampling.py",
         "hunin_capture/cpu_progress/clocks/__init__.py": "hunin_capture/cpu_progress/clocks/__init__.py",

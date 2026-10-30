@@ -85,7 +85,7 @@ class CpuProgressTest(unittest.TestCase):
 
     def test_terminated_cached_windows_handle_is_not_reused_for_a_python_frame(self):
         from ctypes import wintypes
-        from cpu_clock import WindowsClock
+        from hunin_capture.cpu_progress.clocks.windows import WindowsClock
 
         class Api:
             def __init__(self):
