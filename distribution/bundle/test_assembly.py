@@ -11,6 +11,10 @@ from ..installation.hunin_install import activation, contracts, probe, verificat
 
 
 RUNTIME_FILES = (
+    "collectors/counts/build.py",
+    "collectors/counts/python.py",
+    "collectors/counts/nativecounter.c",
+    "collectors/counts/hooks.c",
     "collectors/javascript/dist/plan.mjs",
     "collectors/javascript/dist/host/plan.mjs",
     "collectors/javascript/dist/agents/clock.mjs",

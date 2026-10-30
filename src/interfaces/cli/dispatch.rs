@@ -62,6 +62,15 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             }
             return Ok(());
         }
+        Command::Count(options) => {
+            let planning = options.plan;
+            let result = super::count::measure(&operations, options).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            if !planning && result["status"] != "complete" {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
         Command::List => operations.call("runs.list", json!({})).await?,
         Command::Inspect { run_id } => {
             operations
@@ -99,8 +108,10 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
                 })
                 .context("parameters must be a JSON object")?;
             let mut result = operations.call(&operation, parameters).await?;
-            if matches!(operation.as_str(), "runs.start" | "scenarios.run")
-                && result["run"]["status"] == "running"
+            if matches!(
+                operation.as_str(),
+                "runs.start" | "scenarios.run" | "calls.measure"
+            ) && result["run"]["status"] == "running"
             {
                 let id = result["run"]["id"].as_str().unwrap().to_owned();
                 let run = tokio::select! {

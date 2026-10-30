@@ -43,7 +43,9 @@ impl Engine {
             runtime: run.runtime.clone(),
             env: request.env,
         };
-        let plan = if run.runtime == "none" {
+        let plan = if let Some(counting) = &request.call_counting {
+            crate::collection::counts::prepare(&capture, counting)?
+        } else if run.runtime == "none" {
             collection::CapturePlan {
                 command,
                 env: Default::default(),
@@ -61,6 +63,14 @@ impl Engine {
         let settings = plan.settings(&capture);
         if let Some(identity) = &plan.collector_identity {
             run.source["collector_identity"] = identity.clone();
+            if identity["name"] == "compiler-hooks" {
+                run.source["workload_executable"] = run.source["executable"].clone();
+                run.source["workload_executable_sha256"] = run.source["executable_sha256"].clone();
+                run.source["workload_launch_executable"] = run.source["launch_executable"].clone();
+                run.source["executable"] = json!(plan.command[0]);
+                run.source["launch_executable"] = json!(plan.command[0]);
+                run.source["executable_sha256"] = identity["target_sha256"].clone();
+            }
         }
         run.source["collector_settings_fingerprint"] = json!(format!(
             "{:x}",

@@ -1,6 +1,7 @@
 //! Collector selection and adapter composition over one raw-delivery contract.
 mod artifacts;
 mod contract;
+pub(crate) mod counts;
 pub(crate) mod discovery;
 mod finalization;
 mod go;

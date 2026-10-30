@@ -85,7 +85,9 @@ export function startSpan(name: string, attributes: Attributes = {}): Span {
           attributes: {
             ...attributes,
             ...extra,
-            clock: 'performance.timeOrigin+performance.now',
+            clock: 'unix_epoch',
+            clock_alignment: 'direct_epoch',
+            clock_source: 'performance.timeOrigin+performance.now',
           },
         },
         ambient.getStore(),

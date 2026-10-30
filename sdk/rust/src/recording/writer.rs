@@ -105,7 +105,7 @@ pub(super) fn emit(context: &Context, kind: &str, fields: Value) -> Option<Strin
             record[key] = value.clone();
         }
     }
-    let mut attributes = json!({"thread_id_source":"std::thread::ThreadId", "clock":"SystemTime epoch with Instant duration"});
+    let mut attributes = json!({"thread_id_source":"std::thread::ThreadId", "clock":"unix_epoch", "clock_alignment":"direct_epoch", "clock_source":"SystemTime epoch with Instant duration"});
     if let Some(items) = record["attributes"].as_object() {
         for (key, value) in items {
             attributes[key] = value.clone();

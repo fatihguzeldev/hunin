@@ -1915,6 +1915,211 @@
         "diagnostics"
       ],
       "description": "Independent mutation summary, or null when selected aggregate work is unavailable; null never means measured zero."
+    },
+    "CountSelector": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    },
+    "CountPlan": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": ["ready", "blocked"]
+        },
+        "method": {
+          "type": ["string", "null"]
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "requested_scope": {
+          "enum": ["all", "selected"]
+        },
+        "collection_scope": {
+          "enum": ["all", "selected", "all_then_filter"]
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CountSelector"
+          }
+        },
+        "requires_rebuild": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "method",
+        "reason",
+        "requested_scope",
+        "collection_scope",
+        "functions",
+        "requires_rebuild",
+        "limitations"
+      ],
+      "additionalProperties": false
+    },
+    "CountPlanResult": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/CountPlan"
+        }
+      },
+      "required": ["plan"],
+      "additionalProperties": false
+    },
+    "CountMeasurement": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "plan": {
+          "$ref": "#/$defs/CountPlan"
+        },
+        "parent_run_id": {
+          "type": "string"
+        },
+        "reused": {
+          "type": "boolean"
+        }
+      },
+      "required": ["plan", "parent_run_id", "reused"],
+      "additionalProperties": false
+    },
+    "CountFunction": {
+      "type": "object",
+      "properties": {
+        "code_id": {
+          "type": "string",
+          "description": "Optional identity of a distinct observed code instance within this counting recording."
+        },
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      },
+      "required": ["name", "file", "line"],
+      "additionalProperties": false
+    },
+    "FunctionCount": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/CountFunction"
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resumes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": ["function", "calls", "resumes"],
+      "additionalProperties": false
+    },
+    "CallCounts": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "not_collected",
+            "running",
+            "complete",
+            "incomplete",
+            "failed",
+            "canceled"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "parent_run_id": {
+          "type": ["string", "null"]
+        },
+        "method": {
+          "type": ["string", "null"]
+        },
+        "requested_scope": {
+          "enum": ["all", "selected"]
+        },
+        "collection_scope": {
+          "enum": ["all", "selected", "all_then_filter"]
+        },
+        "counts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FunctionCount"
+          }
+        },
+        "next_cursor": {
+          "type": ["string", "null"]
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "run_id",
+        "parent_run_id",
+        "method",
+        "requested_scope",
+        "collection_scope",
+        "counts",
+        "next_cursor",
+        "total_count",
+        "diagnostics",
+        "limitations"
+      ],
+      "additionalProperties": false
     }
   }
 }

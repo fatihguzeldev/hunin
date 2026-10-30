@@ -23,7 +23,18 @@ pub(crate) fn validate_ids(
     });
     for record in records {
         if let Err(error) = schema.validate(record) {
-            bail!("observation schema: {error}");
+            bail!("observation schema at {}: {error}", error.instance_path);
+        }
+        crate::model::clocks::validate(&record["attributes"])?;
+        // Time fields feed bounded storage/query arithmetic. Identity and frame
+        // metadata retain their schema-valid JSON numbers, even beyond u64.
+        for field in ["timestamp_us", "duration_us"] {
+            if let Some(value) = record.get(field) {
+                anyhow::ensure!(
+                    crate::model::numbers::unsigned_integer(value).is_some(),
+                    "observation {field} must be an exactly representable unsigned integer"
+                );
+            }
         }
         if record["run_id"].as_str() != Some(run_id) {
             bail!("observation belongs to another run");

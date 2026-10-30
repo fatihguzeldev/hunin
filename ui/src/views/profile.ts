@@ -166,6 +166,11 @@ export async function profile(
       { class: 'toolbar' },
       treeButton,
       flameButton,
+      button(
+        'Count function calls',
+        () => context.countFunctions([]),
+        'button subtle',
+      ),
       reset,
       el('span', { class: 'spacer' }),
       units,
@@ -322,6 +327,20 @@ export async function profile(
       );
       name.disabled = !hasInspectableSource(node.file, node.code_id);
       const label = el('div', { class: 'tree-name' }, toggle, name);
+      label.append(
+        button(
+          'Count calls',
+          () =>
+            context.countFunctions([
+              {
+                name: node.name,
+                ...(node.file ? { file: node.file } : {}),
+                ...(node.line ? { line: node.line } : {}),
+              },
+            ]),
+          'text-button small',
+        ),
+      );
       if (node.children_truncated)
         label.append(
           button(

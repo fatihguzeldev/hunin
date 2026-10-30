@@ -4,7 +4,7 @@ pub(super) mod vmprof;
 
 use anyhow::{Result, bail};
 
-fn arguments(args: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+pub(super) fn arguments(args: &[String]) -> Result<(Vec<String>, Vec<String>)> {
     let mut index = 0;
     while let Some(argument) = args.get(index) {
         if argument == "-c" || argument == "-m" || !argument.starts_with('-') {

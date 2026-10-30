@@ -40,6 +40,11 @@ pub enum CaptureOutput {
     Profiles {
         format: String,
     },
+    FunctionCounts {
+        method: String,
+        maximum_bytes: u64,
+        maximum_functions: u32,
+    },
     GraalCpuSampler,
     DenoWorkers {
         producer_id: String,

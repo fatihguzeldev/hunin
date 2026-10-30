@@ -1,4 +1,5 @@
 use super::WorkBudget;
+use crate::model::numbers::unsigned_integer;
 use anyhow::Result;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -22,8 +23,9 @@ pub(super) fn resources_page_checked(
     let mut unmapped_points = 0;
     for record in records.iter().filter(|r| r["kind"] == "metric") {
         work.check()?;
-        let unmapped = record["attributes"]["clock_alignment"] == "unmapped";
-        let timestamp = record["timestamp_us"].as_u64().unwrap_or(0);
+        let interpreted = crate::model::clocks::inspect(&record["attributes"]);
+        let unmapped = !interpreted.aligned;
+        let timestamp = unsigned_integer(&record["timestamp_us"]).unwrap_or(0);
         if !unmapped
             && (!params["start_us"]
                 .as_u64()
@@ -36,18 +38,16 @@ pub(super) fn resources_page_checked(
             unmapped_points += 1;
         }
         let attrs = &record["attributes"];
-        let clock =
-            attrs["clock"]
-                .as_str()
-                .unwrap_or(if unmapped { "unknown" } else { "unix_epoch" });
-        let mapping = attrs["clock_alignment"]
-            .as_str()
-            .unwrap_or("default_epoch_contract");
+        let clock = interpreted.domain.as_str().unwrap_or("unknown");
+        let mapping = interpreted.mapping;
         let thread_source = attrs["thread_id_source"]
             .as_str()
             .or_else(|| attrs["tid_kind"].as_str())
             .unwrap_or("producer-local");
-        let metadata = json!({"name":record["name"],"unit":record["unit"],"scope":record["scope"],"pid":record["pid"],"tid":record["tid"],"producer_id":record["producer_id"],"context_id":record["context_id"],"thread_id_source":thread_source,"clock":clock,"clock_alignment":if unmapped{"unmapped"}else{"aligned"},"time_mapping":mapping,"process_started_at_seconds":attrs["process_started_at_seconds"],"process_lifetime_id":attrs["process_lifetime_id"],"process_role":attrs["process_role"],"temporality":attrs["temporality"]});
+        let pid = unsigned_integer(&record["pid"])
+            .map(Value::from)
+            .unwrap_or_else(|| record["pid"].clone());
+        let metadata = json!({"name":record["name"],"unit":record["unit"],"scope":record["scope"],"pid":pid,"tid":record["tid"],"producer_id":record["producer_id"],"context_id":record["context_id"],"thread_id_source":thread_source,"clock":clock,"clock_alignment":if unmapped{"unmapped"}else{"aligned"},"time_mapping":mapping,"process_started_at_seconds":attrs["process_started_at_seconds"],"process_lifetime_id":attrs["process_lifetime_id"],"process_role":attrs["process_role"],"temporality":attrs["temporality"]});
         let key = metadata.to_string();
         if !groups.contains_key(&key) {
             work.entry()?;
@@ -61,9 +61,8 @@ pub(super) fn resources_page_checked(
     for (_, points) in groups.values_mut() {
         work.check()?;
         points.sort_by(|a, b| {
-            a["timestamp_us"]
-                .as_u64()
-                .cmp(&b["timestamp_us"].as_u64())
+            unsigned_integer(&a["timestamp_us"])
+                .cmp(&unsigned_integer(&b["timestamp_us"]))
                 .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
         });
         work.check()?;

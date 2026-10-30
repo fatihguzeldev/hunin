@@ -557,6 +557,14 @@ export class Workspace {
             persist: (mode = 'replace') => {
               if (!signal.aborted) this.writeLocation(mode);
             },
+            countFunctions: (functions) => {
+              if (signal.aborted) return;
+              investigation.calls.functions = functions.map((value) => ({
+                ...value,
+              }));
+              this.investigations.persist(run.id);
+              this.navigate(run.id, 'calls');
+            },
             followAttempt: (id) => {
               this.attemptMonitor.follow(run.id, id);
             },

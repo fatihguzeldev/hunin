@@ -51,7 +51,9 @@ def emit(kind, ambient, **fields):
         row.update(fields)
         row["attributes"] = {
             "thread_id_source": "threading.get_ident",
-            "clock": "time.time_ns",
+            "clock": "unix_epoch",
+            "clock_alignment": "direct_epoch",
+            "clock_source": "time.time_ns",
             **row.get("attributes", {}),
         }
         payload = (

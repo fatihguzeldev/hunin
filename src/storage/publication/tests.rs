@@ -385,3 +385,69 @@ fn opaque_observation_and_result_identities_keep_distinct_reference_roles_and_re
         .unwrap();
     assert_eq!(dependency, result);
 }
+
+#[test]
+fn deadline_expiring_inside_ownership_walk_rolls_back_selection_and_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let original = event("before");
+    store
+        .accept_import("run-1", "source", "first", std::slice::from_ref(&original))
+        .unwrap();
+    let selected = store.selected_result_id("run-1", "source").unwrap();
+    let document = json!({"run_id":"run-1","status":"running"});
+    store
+        .save_document("analysis-results", "attempt", &document)
+        .unwrap();
+    let records: Vec<_> = (0..128)
+        .map(|index| {
+            let mut record = event(&format!("span-{index}"));
+            record["kind"] = json!("span");
+            record["duration_us"] = json!(1);
+            if index > 0 {
+                record["parent_id"] = json!(format!("span-{}", index - 1));
+            }
+            record
+        })
+        .collect();
+    let mut checkpoints = 0;
+    let error = store
+        .publish_result_checked(
+            PublicationRequest {
+                run_id: "run-1",
+                source_key: "source",
+                input_identity: "second",
+                records: &records,
+                metadata: Some(PublicationMetadata::Analysis {
+                    execution_id: "attempt",
+                    document: &json!({"run_id":"run-1","status":"accepted"}),
+                }),
+                deadline: None,
+            },
+            || {
+                checkpoints += 1;
+                // One initial transaction check and the proposed-node registration pass
+                // precede the graph walk. Expire deterministically within that walk.
+                if checkpoints >= 1 + records.len() + 32 {
+                    publication::check_deadline(Some(
+                        std::time::Instant::now() - Duration::from_secs(1),
+                    ))?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("deadline"), "{error}");
+    assert_eq!(checkpoints, 1 + records.len() + 32);
+    assert_eq!(
+        store.selected_result_id("run-1", "source").unwrap(),
+        selected
+    );
+    assert_eq!(store.records("run-1").unwrap(), vec![original]);
+    assert_eq!(
+        store.document("analysis-results", "attempt").unwrap(),
+        document
+    );
+    assert_eq!(store.records_history("run-1").unwrap().len(), 1);
+}

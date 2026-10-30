@@ -347,6 +347,58 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{64}$",
           "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
+        },
+        "call_counting": {
+          "type": "object",
+          "properties": {
+            "functions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "file": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295
+                  }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+              },
+              "maxItems": 256
+            },
+            "allow_rebuild": {
+              "type": "boolean"
+            },
+            "build_command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            },
+            "max_functions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8192
+            },
+            "max_output_bytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 8388608
+            }
+          },
+          "required": [],
+          "additionalProperties": false
         }
       },
       "required": ["command"],
@@ -1967,6 +2019,291 @@
         "checkpoint_seconds": 120,
         "scope": "One owned normalization worker through raw staging, decode and atomic publication; independent summary failure preserves the mutation acknowledgment.",
         "enforcement": "Cooperative checks cannot preempt one filesystem, JSON parse, external-tool or SQLite unit; cleanup remains owned after a caller drops."
+      }
+    }
+  },
+  {
+    "name": "calls.plan",
+    "description": "Choose an eligible automatic function counting method without launching or rebuilding the target",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "allow_rebuild": {
+          "type": "boolean"
+        },
+        "build_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "max_functions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountPlanResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      }
+    }
+  },
+  {
+    "name": "calls.measure",
+    "description": "Request an idempotent separate counting recording; sampling remains the ordinary recording default",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "allow_rebuild": {
+          "type": "boolean"
+        },
+        "build_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "max_functions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountMeasurement"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1,
+        "accepted_handle": {
+          "output": "run.id",
+          "when": "run is present; a blocked plan has no recording handle"
+        },
+        "cancel": {
+          "operation": "runs.cancel",
+          "parameter": "run_id"
+        },
+        "reconnect": {
+          "operation": "calls.query",
+          "parameter": "run_id"
+        }
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/job-admission": {
+        "scope": "shared_recording_engine_family",
+        "default_maximum_in_flight": 4,
+        "queue": "fail_fast",
+        "reservation": "Preparation through terminal evidence, monitor and owner cleanup. Engine clones share the counter; separately constructed Engines and processes are independent. Constructor configuration may select another limit."
+      }
+    }
+  },
+  {
+    "name": "calls.query",
+    "description": "Read bounded accepted function counts for a counting recording; absent observations are not zero",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CallCounts"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   }

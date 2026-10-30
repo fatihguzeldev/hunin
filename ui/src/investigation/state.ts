@@ -1,4 +1,5 @@
 import type { PageLocation } from '../pagination.js';
+import type { FunctionSelection } from '../call-counts.js';
 
 export type ProfileInvestigation = {
   unit: string;
@@ -40,6 +41,7 @@ export type SourceSelection = {
 };
 
 export type Investigation = {
+  calls: { functions: FunctionSelection[]; measurementRunId?: string };
   profile: ProfileInvestigation;
   timeline: TimelineInvestigation;
   evidence: EvidenceInvestigation;
@@ -97,6 +99,7 @@ function pageLocation(value: unknown): PageLocation | undefined {
 
 function empty(): Investigation {
   return {
+    calls: { functions: [] },
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
     timeline: { kind: '', alignment: 'aligned' },
     evidence: {},
@@ -124,6 +127,27 @@ function decode(value: unknown): SavedInvestigation | undefined {
   const focusNames = strings(focus?.names, 256);
   if (focusPath && focusNames && focusPath.length === focusNames.length)
     result.profile.focus = { path: focusPath, names: focusNames };
+  const calls = object(state?.calls);
+  if (Array.isArray(calls?.functions) && calls.functions.length <= 256) {
+    for (const value of calls.functions) {
+      const selection = object(value);
+      if (
+        typeof selection?.name === 'string' &&
+        selection.name.length > 0 &&
+        (selection.file === undefined || typeof selection.file === 'string') &&
+        (selection.line === undefined ||
+          (typeof selection.line === 'number' &&
+            Number.isSafeInteger(selection.line) &&
+            selection.line > 0))
+      )
+        result.calls.functions.push({
+          name: selection.name,
+          file: text(selection.file),
+          line: selection.line as number | undefined,
+        });
+    }
+  }
+  result.calls.measurementRunId = text(calls?.measurementRunId);
   const timeline = object(state?.timeline);
   if (timeline) {
     const kind = timeline.kind;

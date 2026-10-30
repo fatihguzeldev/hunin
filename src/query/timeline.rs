@@ -1,4 +1,5 @@
 use super::WorkBudget;
+use crate::model::numbers::unsigned_integer;
 use crate::storage::QueryReadPort;
 use anyhow::Result;
 use serde::Deserialize;
@@ -49,15 +50,15 @@ pub(super) fn read(
         if kind.is_some_and(|kind| row.kind != kind)
             || params["pid"]
                 .as_u64()
-                .is_some_and(|pid| row.pid.as_u64() != Some(pid))
+                .is_some_and(|pid| unsigned_integer(&row.pid) != Some(pid))
         {
             return Ok(());
         }
-        let unmapped = row.attributes["clock_alignment"] == "unmapped";
+        let unmapped = !crate::model::clocks::inspect(&row.attributes).aligned;
         if unmapped {
             unaligned += 1;
-        } else if let Some(timestamp) = row.timestamp_us.as_u64() {
-            let until = timestamp.saturating_add(row.duration_us.as_u64().unwrap_or(0));
+        } else if let Some(timestamp) = unsigned_integer(&row.timestamp_us) {
+            let until = timestamp.saturating_add(unsigned_integer(&row.duration_us).unwrap_or(0));
             start = Some(start.map_or(timestamp, |old| old.min(timestamp)));
             end = Some(end.map_or(until, |old| old.max(until)));
         }
@@ -66,8 +67,8 @@ pub(super) fn read(
         } else if alignment == "unmapped" {
             false
         } else {
-            let timestamp = row.timestamp_us.as_u64().unwrap_or(0);
-            let until = timestamp.saturating_add(row.duration_us.as_u64().unwrap_or(0));
+            let timestamp = unsigned_integer(&row.timestamp_us).unwrap_or(0);
+            let until = timestamp.saturating_add(unsigned_integer(&row.duration_us).unwrap_or(0));
             params["start_us"]
                 .as_u64()
                 .is_none_or(|value| until >= value)
@@ -121,10 +122,10 @@ pub fn timeline(records: &[Value], params: &Value) -> Value {
             params["kind"].as_str().is_none_or(|kind| r["kind"] == kind)
                 && params["pid"]
                     .as_u64()
-                    .is_none_or(|pid| r["pid"].as_u64() == Some(pid))
+                    .is_none_or(|pid| unsigned_integer(&r["pid"]) == Some(pid))
         })
         .collect::<Vec<_>>();
-    let is_unmapped = |r: &Value| r["attributes"]["clock_alignment"] == "unmapped";
+    let is_unmapped = |r: &Value| !crate::model::clocks::inspect(&r["attributes"]).aligned;
     let unaligned = relevant.iter().filter(|r| is_unmapped(r)).count();
     let aligned = relevant
         .iter()
@@ -136,15 +137,14 @@ pub fn timeline(records: &[Value], params: &Value) -> Value {
     } else {
         let start = aligned
             .iter()
-            .filter_map(|r| r["timestamp_us"].as_u64())
+            .filter_map(|r| unsigned_integer(&r["timestamp_us"]))
             .min()
             .unwrap_or(0);
         let end = aligned
             .iter()
             .filter_map(|r| {
-                r["timestamp_us"]
-                    .as_u64()
-                    .map(|ts| ts.saturating_add(r["duration_us"].as_u64().unwrap_or(0)))
+                unsigned_integer(&r["timestamp_us"])
+                    .map(|ts| ts.saturating_add(unsigned_integer(&r["duration_us"]).unwrap_or(0)))
             })
             .max()
             .unwrap_or(start);
@@ -159,8 +159,8 @@ pub fn timeline(records: &[Value], params: &Value) -> Value {
             if alignment == "unmapped" {
                 return false;
             }
-            let start = r["timestamp_us"].as_u64().unwrap_or(0);
-            let end = start.saturating_add(r["duration_us"].as_u64().unwrap_or(0));
+            let start = unsigned_integer(&r["timestamp_us"]).unwrap_or(0);
+            let end = start.saturating_add(unsigned_integer(&r["duration_us"]).unwrap_or(0));
             params["start_us"].as_u64().is_none_or(|n| end >= n)
                 && params["end_us"].as_u64().is_none_or(|n| start <= n)
         })

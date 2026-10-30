@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 mod artifacts;
 pub(crate) use artifacts::ArtifactByteLimit;
 mod bootstrap;
+mod count_requests;
 mod documents;
 pub use bootstrap::SCHEMA_VERSION;
 mod inspection;

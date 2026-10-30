@@ -47,7 +47,7 @@ func emit(ctx context.Context, kind string, fields map[string]any) string {
 	for key, value := range fields {
 		record[key] = value
 	}
-	metadata := Attributes{"thread_id_source": "unavailable; goroutines may migrate", "clock": "time.Time Unix epoch with monotonic duration"}
+	metadata := Attributes{"thread_id_source": "unavailable; goroutines may migrate", "clock": "unix_epoch", "clock_alignment": "direct_epoch", "clock_source": "time.Time Unix epoch with monotonic duration"}
 	if value, ok := record["attributes"].(Attributes); ok {
 		for key, item := range value {
 			metadata[key] = item

@@ -40,6 +40,8 @@ pub(super) enum Command {
         #[arg(required = true, last = true)]
         command: Vec<String>,
     },
+    /// Rerun a recording with automatic function counts (sampling remains the recording default).
+    Count(super::count::CountOptions),
     List,
     Inspect {
         run_id: String,

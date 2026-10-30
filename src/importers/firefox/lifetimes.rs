@@ -767,7 +767,7 @@ impl Timeline {
             link["record_id"] = json!(id);
             links.push_owned(link, records)?;
             if linked.insert(id.clone()) {
-                relations.push(records.reserve(json!({"schema_version":1,"kind":"relation","id":format!("{}:native-map:{}",record["id"].as_str().unwrap(),relations.len()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":record["timestamp_us"],"basis":"observed","from":record["id"],"to":id,"relation":"sampled_in_code_instance","evidence":[record["id"],id],"attributes":{"source_format":"samply-native-lifetimes","mapping_time_ms":mapping_time,"evidence_complete":self.complete}}))?);
+                relations.push(records.reserve(json!({"schema_version":1,"kind":"relation","id":format!("{}:native-map:{}",record["id"].as_str().unwrap(),relations.len()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":record["timestamp_us"],"basis":"observed","from":record["id"],"to":id,"relation":"sampled_in_code_instance","evidence":[record["id"],id],"attributes":{"clock":"unix_epoch","clock_alignment":"profile_start_epoch_plus_relative_time","source_format":"samply-native-lifetimes","mapping_time_ms":mapping_time,"evidence_complete":self.complete}}))?);
             }
         }
         record["attributes"]["native_load_instances"] = json!(links.finish());

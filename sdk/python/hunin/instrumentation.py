@@ -68,7 +68,9 @@ class Span:
             attributes={
                 **self.attributes,
                 **(attributes or {}),
-                "clock": "time.time_ns/perf_counter_ns",
+                "clock": "unix_epoch",
+                "clock_alignment": "direct_epoch",
+                "clock_source": "time.time_ns/perf_counter_ns",
             },
         )
         for key in ("parent_id", "context_id"):

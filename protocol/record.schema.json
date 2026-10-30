@@ -132,7 +132,15 @@
       "enum": ["observed", "sampled", "explicit", "derived"]
     },
     "attributes": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "clock": {
+          "description": "Clock domain or retained opaque v1 metadata; unknown values do not establish alignment."
+        },
+        "clock_alignment": {
+          "description": "New publication requires string mapping provenance. Historical opaque v1 values remain wire-readable and unknown/unmapped. Recognized epoch mappings require clock unix_epoch; see observation-clocks.md."
+        }
+      }
     }
   },
   "additionalProperties": false,

@@ -1,5 +1,7 @@
 //! CLI entry, machine-error projection and operation dispatch.
 mod arguments;
+mod cancellation;
+mod count;
 mod dispatch;
 
 use anyhow::Result;

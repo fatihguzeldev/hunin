@@ -1,5 +1,6 @@
 import type { Run, Summary } from '../api';
 import type { Investigation } from './state';
+import type { FunctionSelection } from '../call-counts';
 import type { ImportFormat } from '../operations.generated';
 
 export type ViewContext = {
@@ -14,6 +15,7 @@ export type ViewContext = {
   persist: (mode?: 'push' | 'replace') => void;
   refresh: (message?: string) => void;
   followAttempt: (id: string) => void;
+  countFunctions: (functions: FunctionSelection[]) => void;
   source: (path: string, line?: number | null, codeId?: string | null) => void;
 };
 
