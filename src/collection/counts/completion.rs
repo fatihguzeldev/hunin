@@ -3,6 +3,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -24,6 +25,7 @@ pub(in crate::collection) fn validate(
     files: &[PathBuf],
     method: &str,
     maximum: u64,
+    maximum_functions: u32,
 ) -> Result<()> {
     let profile = request.artifact_dir.join("calls.calls.jsonl");
     let completion = request.artifact_dir.join("calls.complete.json");
@@ -77,11 +79,17 @@ pub(in crate::collection) fn validate(
     }
     let mut records = 0u64;
     let mut complete = false;
+    let mut functions = HashSet::new();
+    let mut counters = HashSet::new();
     for line in bytes
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
     {
         let record: Value = serde_json::from_slice(line)?;
+        ensure!(
+            !complete,
+            "function-count records follow the completion sentinel"
+        );
         ensure!(
             record["run_id"] == request.run_id,
             "function count belongs to a different recording"
@@ -90,12 +98,75 @@ pub(in crate::collection) fn validate(
             record["producer_id"] == format!("calls:{}", request.run_id),
             "function-count producer identity does not match this recording"
         );
-        if record["kind"] == "event"
-            && record["name"] == "function.counts.complete"
-            && record["attributes"]["status"] == "complete"
-            && record["attributes"]["method"] == method
-        {
+        let attributes = &record["attributes"];
+        ensure!(
+            attributes["method"] == method && attributes["collection_scope"] == "all_then_filter",
+            "function-count row method or collection scope differs from its capture plan"
+        );
+        if record["kind"] == "event" && record["name"] == "function.counts.complete" {
+            ensure!(
+                attributes["status"] == "complete",
+                "function-count completion event is incomplete"
+            );
             complete = true;
+        } else {
+            let name = record["name"]
+                .as_str()
+                .context("function-count metric name missing")?;
+            ensure!(
+                record["kind"] == "metric"
+                    && matches!(name, "function.calls" | "function.resumes")
+                    && record["basis"] == "observed"
+                    && record["unit"] == "count"
+                    && record["scope"] == "process",
+                "unexpected row in function-count profile"
+            );
+            ensure!(
+                attributes["count_semantics"]
+                    == if name == "function.calls" {
+                        "starts"
+                    } else {
+                        "resumes"
+                    },
+                "function-count metric name and semantics disagree"
+            );
+            ensure!(
+                record["value"]
+                    .as_u64()
+                    .is_some_and(|value| value > 0 && value <= 9_007_199_254_740_991),
+                "function count must be a positive exact cross-language integer; absence is not zero"
+            );
+            let function = &attributes["function"];
+            ensure!(
+                function["name"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty() && value.len() <= 4096),
+                "function-count identity name is missing or unbounded"
+            );
+            ensure!(
+                function["file"].is_null()
+                    || function["file"]
+                        .as_str()
+                        .is_some_and(|value| value.len() <= 16384),
+                "function-count file identity is invalid"
+            );
+            ensure!(
+                function["line"].is_null()
+                    || function["line"]
+                        .as_u64()
+                        .is_some_and(|value| value > 0 && value <= u64::from(u32::MAX)),
+                "function-count line identity is invalid"
+            );
+            let key = serde_json::to_string(function)?;
+            functions.insert(key.clone());
+            ensure!(
+                functions.len() <= maximum_functions as usize,
+                "function-count identity inventory exceeds the requested bound"
+            );
+            ensure!(
+                counters.insert((key, name.to_owned())),
+                "duplicate function counter within one count window"
+            );
         }
         records += 1;
     }
@@ -129,7 +200,7 @@ mod tests {
         let manifest = root.path().join("calls.complete.json");
         let data = format!(
             "{}\n",
-            json!({"kind":"event","name":"function.counts.complete","run_id":"control","producer_id":"calls:control","attributes":{"status":"complete","method":"compiler-hooks"}})
+            json!({"kind":"event","name":"function.counts.complete","run_id":"control","producer_id":"calls:control","attributes":{"status":"complete","method":"compiler-hooks","collection_scope":"all_then_filter"}})
         );
         std::fs::write(&profile, &data).unwrap();
         let report = json!({"schema_version":1,"run_id":"control","method":"compiler-hooks","status":"complete","bytes":data.len(),"records":1,"sha256":format!("{:x}",Sha256::digest(data.as_bytes())),"dropped_events":0,"counter_overflow":false,"output_truncated":false,"loss":"none_observed"});
@@ -140,12 +211,12 @@ mod tests {
     #[test]
     fn complete_empty_selection_is_valid_but_mutated_output_is_not() {
         let (_root, request, files, _) = fixture();
-        validate(&request, &files, "compiler-hooks", 8192).unwrap();
+        validate(&request, &files, "compiler-hooks", 8192, 8).unwrap();
         let data = std::fs::read_to_string(&files[0])
             .unwrap()
             .replace("calls:control", "calls:another");
         std::fs::write(&files[0], data).unwrap();
-        assert!(validate(&request, &files, "compiler-hooks", 8192).is_err());
+        assert!(validate(&request, &files, "compiler-hooks", 8192, 8).is_err());
     }
 
     #[test]
@@ -154,11 +225,45 @@ mod tests {
         report["dropped_events"] = json!(1);
         std::fs::write(&files[1], serde_json::to_vec(&report).unwrap()).unwrap();
         assert!(
-            validate(&request, &files, "compiler-hooks", 8192)
+            validate(&request, &files, "compiler-hooks", 8192, 8)
                 .unwrap_err()
                 .to_string()
                 .contains("loss")
         );
-        assert!(validate(&request, &files[..1], "compiler-hooks", 8192).is_err());
+        assert!(validate(&request, &files[..1], "compiler-hooks", 8192, 8).is_err());
+    }
+
+    #[test]
+    fn coherent_checksums_do_not_override_metric_semantics_or_function_bounds() {
+        for fault in ["method", "zero", "bound", "status"] {
+            let (_root, request, files, mut report) = fixture();
+            let event: Value =
+                serde_json::from_str(std::fs::read_to_string(&files[0]).unwrap().trim()).unwrap();
+            let mut metric = json!({"kind":"metric","name":"function.calls","run_id":"control","producer_id":"calls:control","basis":"observed","unit":"count","scope":"process","value":3,"attributes":{"method":"compiler-hooks","collection_scope":"all_then_filter","count_semantics":"starts","function":{"name":"leaf","file":null,"line":null}}});
+            let mut rows = vec![metric.clone(), event];
+            match fault {
+                "method" => rows[0]["attributes"]["method"] = json!("other"),
+                "zero" => rows[0]["value"] = json!(0),
+                "bound" => {
+                    metric["attributes"]["function"]["name"] = json!("other");
+                    rows.insert(1, metric);
+                }
+                "status" => rows[1]["attributes"]["status"] = json!("incomplete"),
+                _ => unreachable!(),
+            }
+            let data = rows
+                .iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>();
+            report["bytes"] = json!(data.len());
+            report["records"] = json!(rows.len());
+            report["sha256"] = json!(format!("{:x}", Sha256::digest(data.as_bytes())));
+            std::fs::write(&files[0], data).unwrap();
+            std::fs::write(&files[1], serde_json::to_vec(&report).unwrap()).unwrap();
+            assert!(
+                validate(&request, &files, "compiler-hooks", 8192, 1).is_err(),
+                "fault {fault} should be rejected independently of a coherent digest"
+            );
+        }
     }
 }

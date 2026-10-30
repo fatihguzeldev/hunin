@@ -81,6 +81,7 @@ pub(super) fn prepare(request: &CaptureRequest, options: &CountRequest) -> Resul
         output: CaptureOutput::FunctionCounts {
             method: "cpython-monitoring-native".into(),
             maximum_bytes: options.max_output_bytes,
+            maximum_functions: options.max_functions,
         },
     })
 }

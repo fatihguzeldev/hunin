@@ -16,6 +16,7 @@ pub enum CaptureOutput {
     FunctionCounts {
         method: String,
         maximum_bytes: u64,
+        maximum_functions: u32,
     },
     GraalCpuSampler,
     DenoWorkers {
@@ -136,8 +137,8 @@ impl CapturePlan {
                 "declared_profile_artifacts",
                 vec!["Profile artifact presence does not establish an inventory of every target process, thread or worker".into()],
             ),
-            CaptureOutput::FunctionCounts { method, maximum_bytes } => {
-                if let Err(error) = super::counts::validate(request, &files, method, *maximum_bytes) {
+            CaptureOutput::FunctionCounts { method, maximum_bytes, maximum_functions } => {
+                if let Err(error) = super::counts::validate(request, &files, method, *maximum_bytes, *maximum_functions) {
                     diagnostics.push(format!("{error:#}"));
                 }
                 (Some("hunin-jsonl"), "declared_function_counter_window", vec!["Completeness describes the declared counter window and supported code scope; absent functions are not zero counts".into()])

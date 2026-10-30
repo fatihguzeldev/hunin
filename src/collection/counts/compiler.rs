@@ -225,12 +225,13 @@ pub(super) fn prepare(request: &CaptureRequest, options: &CountRequest) -> Resul
         diagnostics: limitations(),
         runtime_version: Some(version),
         collector_identity: Some(
-            json!({"name":"compiler-hooks","hook_source_sha256":digest(&source, 1024 * 1024)?,"target_sha256":digest(&binary, 256 * 1024 * 1024)?,"build_command":build}),
+            json!({"name":"compiler-hooks","hook_source_sha256":digest(&source, 1024 * 1024)?,"target_path":binary,"target_sha256":digest(&binary, 256 * 1024 * 1024)?,"build_command":build}),
         ),
         session_identity: BTreeMap::new(),
         output: CaptureOutput::FunctionCounts {
             method: "compiler-hooks".into(),
             maximum_bytes: options.max_output_bytes,
+            maximum_functions: options.max_functions,
         },
     })
 }
