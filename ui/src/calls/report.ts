@@ -43,7 +43,9 @@ export function countReport(
       { class: 'metric-note' },
       data.parent_run_id
         ? 'Window: this separate counting execution. These counts were not collected during the original sampled execution.'
-        : 'A new counting execution is required; sampled stack weights do not establish function invocation counts.',
+        : data.status === 'not_collected'
+          ? 'A new counting execution is required; sampled stack weights do not establish function invocation counts.'
+          : 'Window: this counting recording describes its own execution.',
     ),
     el(
       'p',
