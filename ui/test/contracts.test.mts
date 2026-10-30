@@ -15,7 +15,6 @@ import { duration, bytes, percentage } from '../src/format.js';
 import { parseCommand } from '../src/command.js';
 import { parseWorkloadOptions } from '../src/workload/options.js';
 import { hasLocalSource, hasInspectableSource } from '../src/source/paths.js';
-import { canReanalyze } from '../src/artifact.js';
 import {
   observationLabel,
   referenceIds,
@@ -494,28 +493,6 @@ test('virtual runtime source locations are not offered as local filesystem paths
   }
   for (const internal of ['node:internal/loader', 'wasm:wasm-function[1]'])
     assert.equal(hasInspectableSource(internal, 'code-id'), false);
-});
-
-test('profile reanalysis actions exclude SDK spools and analyzer output artifacts', async () => {
-  for (const format of [
-    'samply',
-    'v8-cpuprofile',
-    'vmprof',
-    'go-pprof',
-    'go-trace',
-    'graal-cpusampler',
-  ])
-    assert.equal(canReanalyze(format), true);
-  for (const format of [
-    'hunin-jsonl',
-    'jsonl',
-    'stdout',
-    'analysis-output',
-    'source',
-    'native-image',
-    'profile-sidecar',
-  ])
-    assert.equal(canReanalyze(format), false);
 });
 
 test('native lifetime labels retain instance identity and unknown mapping evidence', async () => {

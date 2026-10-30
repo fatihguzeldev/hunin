@@ -2,6 +2,36 @@ import { operation } from '../api.js';
 import { el, field } from '../dom.js';
 import type { ImportFormat } from '../operations.generated.js';
 
+/** Input roles come from the installed decoder registry, never a UI format table. */
+export function canReanalyze(
+  format: string,
+  formats: readonly ImportFormat[] | undefined,
+): boolean {
+  return (
+    formats?.some(
+      (definition) =>
+        definition.input_kind === 'profile' &&
+        (definition.format === format || definition.aliases.includes(format)),
+    ) ?? false
+  );
+}
+
+/** Cache a successfully read registry for this workspace; failed reads remain retryable. */
+export class ImportCatalog {
+  private formats: readonly ImportFormat[] | undefined;
+
+  async read(
+    signal: AbortSignal,
+  ): Promise<readonly ImportFormat[] | undefined> {
+    signal.throwIfAborted();
+    if (this.formats !== undefined) return this.formats;
+    const capabilities = await operation('capabilities', {}, signal);
+    signal.throwIfAborted();
+    this.formats = capabilities.import_formats;
+    return this.formats;
+  }
+}
+
 type ImportChoice = {
   value: string;
   label: string;

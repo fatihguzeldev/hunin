@@ -5,7 +5,7 @@ import { bytes, numeric } from '../format';
 import type { Observation } from '../record.generated';
 import type { ViewContext } from '../investigation/view';
 import { hasInspectableSource } from '../source/paths';
-import { canReanalyze } from '../artifact';
+import { canReanalyze } from '../recordings/formats';
 import { observationLabel, referenceIds } from '../observation';
 import { nativeEvidence } from '../native-evidence';
 import { pagedList } from '../paged-list';
@@ -15,17 +15,49 @@ export async function evidence(context: ViewContext): Promise<HTMLElement> {
   const state = context.investigation.evidence;
   const cursor = state.cursor;
   let selectionRequest: AbortController | undefined;
-  const relationships = await operation(
-    'contexts.query',
-    {
-      run_id: context.run.id,
-      cursor,
-      limit: 100,
-    },
-    context.signal,
-  );
+  const [relationships, formats] = await Promise.all([
+    operation(
+      'contexts.query',
+      {
+        run_id: context.run.id,
+        cursor,
+        limit: 100,
+      },
+      context.signal,
+    ),
+    context
+      .importFormats(context.signal)
+      .then((catalog) => ({ catalog, error: undefined as unknown }))
+      .catch((error: unknown) => ({ catalog: undefined, error })),
+  ]);
   context.signal.throwIfAborted();
   const body = el('div', { class: 'stack' });
+  if (
+    !formats.catalog ||
+    formats.catalog.some((format) => format.input_kind === undefined)
+  ) {
+    body.append(
+      el(
+        'p',
+        { class: 'notice' },
+        'Profile reanalysis is unavailable for formats this service has not identified as retained profiles.',
+      ),
+    );
+  }
+  if (formats.error) {
+    body.append(
+      el(
+        'div',
+        { class: 'notice' },
+        `Recording format discovery failed. ${formats.error instanceof Error ? formats.error.message : String(formats.error)}`,
+        button(
+          'Retry format discovery',
+          () => context.refresh(),
+          'button small',
+        ),
+      ),
+    );
+  }
   const inspector = el('div');
   const names = new Map(
     relationships.contexts.map((record) => [
@@ -436,7 +468,11 @@ export async function evidence(context: ViewContext): Promise<HTMLElement> {
                     { class: 'mono', title: item.sha256 },
                     item.sha256.slice(0, 16),
                   ),
-                  el('td', {}, canReanalyze(item.format) ? action : '—'),
+                  el(
+                    'td',
+                    {},
+                    canReanalyze(item.format, formats.catalog) ? action : '—',
+                  ),
                 );
               }),
             ),

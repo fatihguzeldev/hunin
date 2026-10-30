@@ -1,10 +1,14 @@
 import type { Run, Summary } from '../api';
 import type { Investigation } from './state';
+import type { ImportFormat } from '../operations.generated';
 
 export type ViewContext = {
   run: Run;
   summary?: Summary;
   runs: readonly Run[];
+  importFormats: (
+    signal: AbortSignal,
+  ) => Promise<readonly ImportFormat[] | undefined>;
   investigation: Investigation;
   signal: AbortSignal;
   persist: (mode?: 'push' | 'replace') => void;

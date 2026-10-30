@@ -6,6 +6,7 @@ import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
 import { runSource, runStatusTone } from './recordings/presentation';
 import { RecordingCatalog } from './recordings/catalog';
+import { ImportCatalog } from './recordings/formats';
 import { operation, type Run } from './api';
 import {
   recordingDetails,
@@ -23,6 +24,7 @@ import { scenarios } from './views/scenarios';
 
 export class Workspace {
   private catalog = new RecordingCatalog();
+  private importCatalog = new ImportCatalog();
   private selected = new URLSearchParams(location.search).get('run') ?? '';
   private tab = new URLSearchParams(location.search).get('view') ?? 'overview';
   private rail = el('div', { class: 'run-list', 'aria-label': 'Recordings' });
@@ -548,6 +550,7 @@ export class Workspace {
             run,
             summary,
             runs: this.catalog.runs,
+            importFormats: (signal) => this.importCatalog.read(signal),
             source,
             investigation,
             signal,
