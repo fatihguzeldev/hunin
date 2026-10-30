@@ -1,12 +1,10 @@
-use crate::model::runs::RunStatus;
-use crate::{model::now_us, storage::Store};
-use anyhow::Result;
+//! Persistent owner descriptors and conservative OS liveness evidence.
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 #[derive(Clone, Serialize)]
-pub struct Owner {
+pub(crate) struct Owner {
     pub pid: u32,
     pub process_start_time_seconds: Option<u64>,
     pub process_birth_identity: Option<String>,
@@ -20,7 +18,7 @@ impl Owner {
         refresh(&mut system, &[Pid::from_u32(pid)]);
         Self {
             pid,
-            process_birth_identity: super::process_identity::birth(pid),
+            process_birth_identity: super::identity::birth(pid),
             process_start_time_seconds: system
                 .process(Pid::from_u32(pid))
                 .map(|p| p.start_time())
@@ -30,54 +28,35 @@ impl Owner {
     }
 }
 
-pub fn recover_abandoned(store: &Store) -> Result<()> {
-    let mut offset = 0;
-    let mut running = Vec::new();
-    loop {
-        let runs = store.runs(250, offset)?;
-        let count = runs.len();
-        running.extend(
-            runs.into_iter()
-                .filter(|run| run.status == RunStatus::Running),
-        );
-        if count < 250 {
-            break;
-        }
-        offset += count;
-    }
-    if running.is_empty() {
-        return Ok(());
-    }
-    let pids = running
-        .iter()
-        .filter_map(|run| run.source["owner"]["pid"].as_u64())
-        .filter_map(|pid| u32::try_from(pid).ok())
-        .filter(|pid| *pid > 0)
-        .map(Pid::from_u32)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let mut system = System::new();
-    refresh(&mut system, &pids);
-    for mut run in running {
-        if !owner_absent(&run.source["owner"], &system) {
-            continue;
-        }
-        run.status = RunStatus::Failed;
-        run.finished_at_us = Some(now_us());
-        run.diagnostics.push("Recording interrupted: its owning Hunin process is absent or has a different OS start identity. Preserved artifacts remain available; no stale PID was signaled.".into());
-        run.source["collection_status"] = json!("interrupted");
-        store.save_run(&run)?;
-    }
-    Ok(())
+/// One process-table snapshot shared by a recovery pass. Missing or denied OS
+/// evidence remains unknown; this type does not choose any recovery policy.
+pub(crate) struct Probe {
+    system: System,
 }
 
-pub fn is_proven_absent(value: &Value) -> bool {
-    let mut system = System::new();
-    if let Some(pid) = value["pid"].as_u64().and_then(|v| u32::try_from(v).ok()) {
-        refresh(&mut system, &[Pid::from_u32(pid)]);
+impl Probe {
+    pub(crate) fn new<'a>(owners: impl IntoIterator<Item = &'a Value>) -> Self {
+        let pids = owners
+            .into_iter()
+            .filter_map(|owner| owner["pid"].as_u64())
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .map(Pid::from_u32)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut system = System::new();
+        refresh(&mut system, &pids);
+        Self { system }
     }
-    owner_absent(value, &system)
+
+    pub(crate) fn is_proven_absent(&self, value: &Value) -> bool {
+        owner_absent(value, &self.system)
+    }
+}
+
+pub(crate) fn is_proven_absent(value: &Value) -> bool {
+    Probe::new([value]).is_proven_absent(value)
 }
 
 fn refresh(system: &mut System, pids: &[Pid]) {
@@ -105,7 +84,7 @@ fn owner_absent(value: &Value, system: &System) -> bool {
         return true;
     }
     if let Some(saved) = value["process_birth_identity"].as_str()
-        && let Some(current) = super::process_identity::birth(pid)
+        && let Some(current) = super::identity::birth(pid)
     {
         return saved != current;
     }
@@ -148,6 +127,7 @@ fn windows_proven_absent(pid: u32) -> bool {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::process::Command;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, WAIT_OBJECT_0},
@@ -179,13 +159,13 @@ mod tests {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "execution::ownership::tests::windows_owner_exit259_fixture",
+                "host::process::owner::tests::windows_owner_exit259_fixture",
             ])
             .env("HUNIN_OWNER_EXIT259_RELEASE", &release)
             .spawn()
             .unwrap();
         let pid = child.id();
-        let birth = super::super::process_identity::birth(pid).unwrap();
+        let birth = super::super::identity::birth(pid).unwrap();
         let owner = json!({"pid":pid,"process_birth_identity":birth});
         assert!(!is_proven_absent(&owner));
         struct Held(windows_sys::Win32::Foundation::HANDLE);
@@ -211,7 +191,7 @@ mod tests {
         assert_ne!(unsafe { GetExitCodeProcess(held.0, &mut code) }, 0);
         assert_eq!(code, 259);
         assert_eq!(
-            super::super::process_identity::birth(pid).as_deref(),
+            super::super::identity::birth(pid).as_deref(),
             owner["process_birth_identity"].as_str()
         );
         assert!(

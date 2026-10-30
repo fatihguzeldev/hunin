@@ -21,7 +21,7 @@ use tokio::{
 pub struct Engine {
     pub(super) store: Store,
     pub(super) closing: Arc<AtomicBool>,
-    pub(super) owner: crate::execution::ownership::Owner,
+    pub(super) owner: crate::host::process::owner::Owner,
     pub(super) active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     pub(super) slots: Arc<Semaphore>,
     pub(super) maximum_in_flight: usize,
@@ -41,7 +41,7 @@ impl Engine {
         Ok(Self {
             store,
             closing: Arc::new(AtomicBool::new(false)),
-            owner: crate::execution::ownership::Owner::current(),
+            owner: crate::host::process::owner::Owner::current(),
             active: Arc::new(Mutex::new(HashMap::new())),
             slots: Arc::new(Semaphore::new(maximum_in_flight)),
             maximum_in_flight,

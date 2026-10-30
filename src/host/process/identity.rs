@@ -1,6 +1,6 @@
 /// Native process birth identity, retaining the OS precision rather than
 /// sysinfo's whole-second presentation. Unavailable identities stay unknown.
-pub(super) fn birth(pid: u32) -> Option<String> {
+pub(crate) fn birth(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
     }
@@ -76,7 +76,7 @@ fn native_birth(_: u32) -> Option<String> {
 
 /// Parent IDs are historical on Windows. A known child birth must be at
 /// least as recent as its current parent's birth before adding a tree edge.
-pub(super) fn child_not_older_than_parent(parent: &str, child: &str) -> bool {
+pub(crate) fn child_not_older_than_parent(parent: &str, child: &str) -> bool {
     fn value(identity: &str) -> Option<(&str, u128)> {
         let (domain, raw) = identity.split_once(':')?;
         let time = match domain {

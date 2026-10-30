@@ -208,7 +208,7 @@ struct ObservationIdentities {
 impl ObservationIdentities {
     fn new(root: u32) -> Self {
         Self {
-            root: super::process_identity::birth(root),
+            root: crate::host::process::identity::birth(root),
             tracked: HashSet::from([root]),
         }
     }
@@ -219,7 +219,7 @@ fn stable_birth<'a>(before: Option<&'a str>, after: Option<&str>) -> Option<&'a 
 }
 
 fn owned_child_birth<'a>(parent: &str, child: Option<&'a str>) -> Option<&'a str> {
-    child.filter(|child| super::process_identity::child_not_older_than_parent(parent, child))
+    child.filter(|child| crate::host::process::identity::child_not_older_than_parent(parent, child))
 }
 
 fn observe(
@@ -234,7 +234,7 @@ fn observe(
     let before = identities
         .tracked
         .iter()
-        .filter_map(|pid| Some((*pid, super::process_identity::birth(*pid)?)))
+        .filter_map(|pid| Some((*pid, crate::host::process::identity::birth(*pid)?)))
         .collect::<HashMap<_, _>>();
     // sysinfo's cached lifetime check uses whole seconds. A fresh table avoids
     // retaining a prior process's resource counters after same-second PID reuse.
@@ -252,7 +252,7 @@ fn observe(
         before.get(&root).map(String::as_str),
     )
     .is_none()
-        || super::process_identity::birth(root).as_deref() != identities.root.as_deref()
+        || crate::host::process::identity::birth(root).as_deref() != identities.root.as_deref()
     {
         return Vec::new();
     }
@@ -269,7 +269,7 @@ fn observe(
             };
             let birth = candidates
                 .entry(*pid)
-                .or_insert_with(|| super::process_identity::birth(pid.as_u32()));
+                .or_insert_with(|| crate::host::process::identity::birth(pid.as_u32()));
             if let Some(birth) = owned_child_birth(parent_birth, birth.as_deref()) {
                 owned.insert(*pid, birth.to_owned());
             }
@@ -283,7 +283,7 @@ fn observe(
     identities.tracked = owned.keys().map(|p| p.as_u32()).collect();
     for (pid, edge_birth) in owned {
         if let Some(p) = system.process(pid) {
-            let after = super::process_identity::birth(pid.as_u32());
+            let after = crate::host::process::identity::birth(pid.as_u32());
             let Some(birth) = stable_birth(
                 before.get(&pid.as_u32()).map(String::as_str),
                 after.as_deref(),

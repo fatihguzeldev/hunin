@@ -1,5 +1,5 @@
 use super::{Engine, blocking, retention};
-use crate::{execution::ownership::is_proven_absent, model::now_us};
+use crate::{host::process::owner::is_proven_absent, model::now_us};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{

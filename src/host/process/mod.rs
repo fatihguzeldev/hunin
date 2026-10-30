@@ -1,3 +1,6 @@
+pub(crate) mod identity;
+pub(crate) mod owner;
+
 use anyhow::{Context, Result};
 use std::{process::ExitStatus, time::Duration};
 use tokio::process::{Child, Command};

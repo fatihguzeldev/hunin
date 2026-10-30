@@ -4,15 +4,14 @@ mod finishing;
 mod identity;
 mod launch;
 mod lifecycle;
-pub(crate) mod ownership;
-pub(crate) use crate::host::process;
-mod process_identity;
+mod recovery;
 mod resources;
 mod retention;
 mod sdk;
 
 use crate::{
     collection::{self, CaptureRequest, native},
+    host::process::{self, owner::Owner},
     model::{
         now_us,
         runs::{Run, RunStatus},
@@ -65,7 +64,7 @@ pub struct Engine {
     store: Store,
     active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     closing: Arc<AtomicBool>,
-    owner: ownership::Owner,
+    owner: Owner,
     slots: Arc<Semaphore>,
     maximum_in_flight: usize,
 }
@@ -91,7 +90,7 @@ impl Engine {
             maximum_in_flight > 0 && maximum_in_flight <= Semaphore::MAX_PERMITS,
             "recording admission limit must be positive and supported by the semaphore"
         );
-        if let Err(error) = ownership::recover_abandoned(&store) {
+        if let Err(error) = recovery::recover_abandoned(&store) {
             if strict_recovery {
                 return Err(error.context("recording owner recovery failed"));
             }
@@ -101,7 +100,7 @@ impl Engine {
             store,
             active: Arc::new(Mutex::new(HashMap::new())),
             closing: Arc::new(AtomicBool::new(false)),
-            owner: ownership::Owner::current(),
+            owner: Owner::current(),
             slots: Arc::new(Semaphore::new(maximum_in_flight)),
             maximum_in_flight,
         })
@@ -153,7 +152,7 @@ impl Engine {
         // A collector may retain evidence about the actual supervised process.
         // Failure to retain that evidence must not stop or replace the target.
         #[cfg(windows)]
-        let native_wrapper_birth = process_identity::birth(pid);
+        let native_wrapper_birth = crate::host::process::identity::birth(pid);
         let native_collection = native::handles_runtime(&run.runtime);
         let collector_wrapper = plan.command[0] != capture.command[0]
             || matches!(run.runtime.as_str(), "go-test" | "go-trace");
