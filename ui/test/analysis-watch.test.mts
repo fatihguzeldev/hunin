@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AnalysisWatch } from '../src/analysis-watch.js';
+import { AnalysisWatch } from '../src/analysis/watch.js';
 
 function session() {
   const values = new Map<string, string>();

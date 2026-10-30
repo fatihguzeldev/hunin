@@ -4,7 +4,9 @@ import {
   type Investigation,
   type SourceSelection,
 } from './investigation';
-import { AnalysisWatch } from './analysis-watch';
+import { AnalysisWatch } from './analysis/watch';
+import { AttemptMonitor } from './analysis/monitor';
+import { attemptActivity } from './analysis/activity';
 import { runSource } from './run';
 import { operation, type Run, type Summary } from './api';
 import {
@@ -61,12 +63,7 @@ export class Workspace {
   private returningFromSource = false;
   private messages = new Map<string, string>();
   private analysisWatch: AnalysisWatch;
-  private attemptRunId = '';
-  private attemptEpoch = 0;
-  private attemptController: AbortController | undefined;
-  private attemptChecking: AbortController | undefined;
-  private attemptForce = false;
-  private attemptPoll: ReturnType<typeof setTimeout> | undefined;
+  private attemptMonitor: AttemptMonitor;
 
   constructor(
     views: Record<string, View>,
@@ -85,6 +82,20 @@ export class Workspace {
     }
     this.investigations = new Investigations(storage);
     this.analysisWatch = new AnalysisWatch(storage);
+    this.attemptMonitor = new AttemptMonitor(this.analysisWatch, {
+      updated: (runId) => this.updateAttemptNotice(runId),
+      completed: (runId, attempts) => {
+        this.messages.set(
+          runId,
+          attempts
+            .map(
+              (attempt) => `Analyzer attempt ${attempt.id}: ${attempt.status}.`,
+            )
+            .join(' '),
+        );
+        if (this.selected === runId) void this.render();
+      },
+    });
     this.views = {
       overview: {
         name: 'Overview',
@@ -101,16 +112,16 @@ export class Workspace {
     this.normalizeTab();
     this.restoreHistory();
     window.addEventListener('pagehide', () => {
-      this.pauseAttemptReads();
+      this.attemptMonitor.pause();
       this.renderController?.abort();
       this.listController?.abort();
       clearTimeout(this.poll);
     });
     window.addEventListener('pageshow', (event) => {
-      this.selectAttemptRun(this.selected);
+      this.attemptMonitor.select(this.selected);
       if (event.persisted) void this.reload();
     });
-    window.addEventListener('online', () => this.scheduleAttemptCheck(true));
+    window.addEventListener('online', () => this.attemptMonitor.recheck());
     window.addEventListener('popstate', () => {
       this.navigationEpoch++;
       const wasSource = Boolean(
@@ -245,7 +256,7 @@ export class Workspace {
         this.messages.delete(run.id);
         if (this.selected === run.id) {
           this.renderController?.abort();
-          this.pauseAttemptReads();
+          this.attemptMonitor.pause();
           this.selected = '';
           this.tab = 'overview';
           this.writeLocation('replace');
@@ -468,7 +479,7 @@ export class Workspace {
     this.renderController = controller;
     const signal = controller.signal;
     clearTimeout(this.poll);
-    this.selectAttemptRun(this.selected);
+    this.attemptMonitor.select(this.selected);
     this.content.replaceChildren(loading('Loading recording…'));
     try {
       if (this.tab === 'capabilities') {
@@ -647,13 +658,7 @@ export class Workspace {
               if (!signal.aborted) this.writeLocation(mode);
             },
             followAttempt: (id) => {
-              if (
-                this.analysisWatch.track(run.id, id) &&
-                this.attemptRunId === run.id
-              ) {
-                this.updateAttemptNotice(run.id);
-                this.scheduleAttemptCheck();
-              }
+              this.attemptMonitor.follow(run.id, id);
             },
             refresh: (message) => {
               if (message) this.messages.set(run.id, message);
@@ -688,130 +693,14 @@ export class Workspace {
     }
   }
 
-  private pauseAttemptReads(): void {
-    clearTimeout(this.attemptPoll);
-    this.attemptController?.abort();
-    this.attemptEpoch++;
-    this.attemptChecking = undefined;
-    this.attemptForce = false;
-    this.attemptRunId = '';
-  }
-
-  private selectAttemptRun(runId: string): void {
-    if (this.attemptRunId === runId) return;
-    this.pauseAttemptReads();
-    this.attemptRunId = runId;
-    if (runId) this.scheduleAttemptCheck(true);
-  }
-
-  private scheduleAttemptCheck(force = false, delay = 0): void {
-    clearTimeout(this.attemptPoll);
-    if (!this.attemptRunId) return;
-    this.attemptPoll = setTimeout(() => {
-      void this.checkAttempts(force);
-    }, delay);
-  }
-
-  private async checkAttempts(force: boolean): Promise<void> {
-    const runId = this.attemptRunId;
-    if (!runId || !this.analysisWatch.forRun(runId).length) return;
-    if (this.attemptChecking && !this.attemptChecking.signal.aborted) {
-      this.attemptForce ||= force;
-      return;
-    }
-    this.attemptController?.abort();
-    const controller = new AbortController();
-    this.attemptController = controller;
-    this.attemptChecking = controller;
-    const generation = ++this.attemptEpoch;
-    const completed = await this.analysisWatch.check(
-      runId,
-      async (runId, id, signal) => {
-        const page = await operation(
-          'analyses.results',
-          { run_id: runId, execution_id: id, limit: 1 },
-          signal,
-        );
-        return page.results;
-      },
-      controller.signal,
-      force,
-    );
-    if (this.attemptChecking === controller) this.attemptChecking = undefined;
-    if (
-      controller.signal.aborted ||
-      generation !== this.attemptEpoch ||
-      runId !== this.attemptRunId
-    )
-      return;
-    this.updateAttemptNotice(runId);
-    if (completed.length) {
-      this.messages.set(
-        runId,
-        completed
-          .map(
-            (attempt) => `Analyzer attempt ${attempt.id}: ${attempt.status}.`,
-          )
-          .join(' '),
-      );
-      if (this.selected === runId) void this.render();
-    }
-    if (this.attemptForce) {
-      this.attemptForce = false;
-      this.scheduleAttemptCheck(true);
-    } else if (
-      this.analysisWatch
-        .forRun(runId)
-        .some((attempt) => attempt.state !== 'unresolved')
-    )
-      this.scheduleAttemptCheck(false, 1_500);
-  }
-
   private updateAttemptNotice(runId: string): void {
     const target = this.content.querySelector('[data-analysis-activity]');
     if (target?.getAttribute('data-analysis-activity') !== runId) return;
-    const attempts = this.analysisWatch.forRun(runId);
-    target.replaceChildren();
-    if (!attempts.length) return;
-    target.append(
-      el(
-        'section',
-        { class: 'notice stack', role: 'status' },
-        el(
-          'p',
-          {},
-          'Known analyzer attempts may change selected results. Their retained status is checked independently of the open recording view.',
-        ),
-        ...attempts.map((attempt) =>
-          el(
-            'p',
-            { class: 'mono' },
-            `${attempt.id} · ${attempt.status ?? 'status not yet confirmed'}${attempt.diagnostic ? ` · ${attempt.diagnostic}` : ''}`,
-          ),
-        ),
-        !this.analysisWatch.persistent
-          ? el(
-              'p',
-              {},
-              'Attempt tracking is remembered on this page only because browser session storage is unavailable.',
-            )
-          : null,
-        el(
-          'div',
-          { class: 'toolbar' },
-          button(
-            'Recheck attempt status',
-            () => this.scheduleAttemptCheck(true),
-            'button small',
-          ),
-          button(
-            'Open Analyzers',
-            () => this.navigate(runId, 'analyses'),
-            'button small',
-          ),
-        ),
-      ),
-    );
+    const notice = attemptActivity(this.analysisWatch, runId, {
+      recheck: () => this.attemptMonitor.recheck(),
+      open: () => this.navigate(runId, 'analyses'),
+    });
+    target.replaceChildren(...(notice ? [notice] : []));
   }
 
   private pollStatus(id: string, epoch: number, signal: AbortSignal): void {
