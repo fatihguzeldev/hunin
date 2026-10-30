@@ -1,6 +1,9 @@
 //! Offline recording import, failure retention and accepted result publication.
 use super::{Operations, reads};
-use crate::model::{now_us, runs::Run};
+use crate::{
+    model::{now_us, runs::Run},
+    storage::Store,
+};
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -70,4 +73,15 @@ impl Operations {
         result["accepted"] = json!(publication.accepted);
         Ok(result)
     }
+}
+
+/// Run after aggregate-work admission; its deadline starts at this workflow.
+pub(super) fn reanalyze(store: &Store, run_id: &str, artifact_id: &str) -> Result<Value> {
+    let deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(120));
+    let publication =
+        crate::recordings::reanalyze_controlled(store, run_id, artifact_id, deadline)?;
+    let mut result = reads::summary_after_mutation(store, run_id, deadline);
+    result["accepted"] = json!(publication.accepted);
+    result["diagnostics"] = json!(publication.diagnostics);
+    Ok(result)
 }

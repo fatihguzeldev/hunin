@@ -8,6 +8,7 @@ mod inspection;
 mod reads;
 mod recordings;
 mod responses;
+mod scenarios;
 mod workers;
 pub(crate) use errors::operation_failure;
 
@@ -192,20 +193,7 @@ impl Operations {
                 let run_id = id()?.to_owned();
                 let artifact_id = params["artifact_id"].as_str().unwrap().to_owned();
                 self.aggregate_work
-                    .run(move || {
-                        let deadline =
-                            Some(std::time::Instant::now() + std::time::Duration::from_secs(120));
-                        let publication = crate::recordings::reanalyze_controlled(
-                            &store,
-                            &run_id,
-                            &artifact_id,
-                            deadline,
-                        )?;
-                        let mut result = reads::summary_after_mutation(&store, &run_id, deadline);
-                        result["accepted"] = json!(publication.accepted);
-                        result["diagnostics"] = json!(publication.diagnostics);
-                        Ok(result)
-                    })
+                    .run(move || recordings::reanalyze(&store, &run_id, &artifact_id))
                     .await
             }
             "comparisons.create" => {
@@ -222,35 +210,8 @@ impl Operations {
                     })
                     .await
             }
-            "scenarios.save" => {
-                let mut scenario = params;
-                let id = scenario["id"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                scenario["id"] = json!(id);
-                let store = store.clone();
-                self.metadata_work
-                    .run(move || {
-                        store.save_document("scenarios", &id, &scenario)?;
-                        Ok(json!({"scenario":scenario}))
-                    })
-                    .await
-            }
-            "scenarios.run" => {
-                let store = store.clone();
-                let scenario_id = params["scenario_id"].as_str().unwrap().to_owned();
-                let mut scenario = self
-                    .metadata_work
-                    .read(move |_| store.document("scenarios", &scenario_id))
-                    .await?;
-                scenario.as_object_mut().unwrap().remove("id");
-                if let Some(name) = params.get("name") {
-                    scenario["name"] = name.clone();
-                }
-                let request = serde_json::from_value(scenario)?;
-                Ok(json!({"run":self.engine.start(request).await?}))
-            }
+            "scenarios.save" => self.save_scenario(params).await,
+            "scenarios.run" => self.run_scenario(params).await,
             "analyses.results" => {
                 let operations = self.clone();
                 self.metadata_work
