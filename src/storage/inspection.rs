@@ -149,6 +149,7 @@ impl Store {
         connection.busy_timeout(Duration::ZERO)?;
         let before: u64 = connection.query_row("PRAGMA data_version", [], |row| row.get(0))?;
         let transaction = connection.transaction()?;
+        self.validate_identity(&transaction)?;
         let schema: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         ensure!(
             schema <= super::SCHEMA_VERSION,

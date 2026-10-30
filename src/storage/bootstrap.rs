@@ -1,6 +1,6 @@
-use super::Store;
-use anyhow::Result;
-use rusqlite::{Connection, TransactionBehavior};
+use super::{ExpectedIdentity, Store};
+use anyhow::{Context, Result, ensure};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fs, path::Path, time::Duration};
 
 /// Current migration target and highest schema this executable understands.
@@ -11,18 +11,80 @@ impl Store {
         fs::create_dir_all(root.join("artifacts"))?;
         let store = Self {
             root: root.canonicalize()?,
+            identity: ExpectedIdentity::Any,
         };
-        let mut connection = store.connection()?;
+        store.bootstrap()
+    }
+
+    pub(crate) fn open_project(root: &Path, project_id: &str) -> Result<Self> {
+        Self::open_existing(root, ExpectedIdentity::Project(project_id.to_owned()))
+    }
+
+    pub(crate) fn open_legacy(root: &Path) -> Result<Self> {
+        Self::open_existing(root, ExpectedIdentity::Unassigned)
+    }
+
+    fn open_existing(root: &Path, identity: ExpectedIdentity) -> Result<Self> {
+        Self {
+            root: root.canonicalize()?,
+            identity,
+        }
+        .bootstrap()
+    }
+
+    fn bootstrap(self) -> Result<Self> {
+        let mut connection = self.connection()?;
         let c = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         migrate(c)?;
-        Ok(store)
+        Ok(self)
     }
 
     pub(super) fn connection(&self) -> Result<Connection> {
-        let c = Connection::open(self.root.join("hunin.sqlite"))?;
+        let flags = match self.identity {
+            ExpectedIdentity::Any => {
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
+            }
+            _ => OpenFlags::SQLITE_OPEN_READ_WRITE,
+        };
+        let c = Connection::open_with_flags(self.root.join("hunin.sqlite"), flags).context(
+            "selected recording database is unavailable; restore its store before retrying",
+        )?;
         c.busy_timeout(Duration::from_secs(10))?;
+        // Bind the actual opened connection before PRAGMAs, migration or writes.
+        // A retained engine must not follow a reused path into another project.
+        self.validate_identity(&c)?;
         c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;")?;
         Ok(c)
+    }
+
+    pub(super) fn validate_identity(&self, c: &Connection) -> Result<()> {
+        match &self.identity {
+            ExpectedIdentity::Any => {}
+            ExpectedIdentity::Unassigned => {
+                let assigned: bool = c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_identity')",
+                    [], |row| row.get(0),
+                )?;
+                ensure!(
+                    !assigned,
+                    "legacy store was adopted as a project; select that project and restart Hunin"
+                );
+            }
+            ExpectedIdentity::Project(expected) => {
+                let actual: String = c
+                    .query_row(
+                        "SELECT id FROM project_identity WHERE singleton=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .context("selected store no longer has its project identity")?;
+                ensure!(
+                    &actual == expected,
+                    "project store identity mismatch; restore its registered store and restart Hunin"
+                );
+            }
+        }
+        Ok(())
     }
 }
 

@@ -28,6 +28,16 @@ pub use observations::{
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    identity: ExpectedIdentity,
+}
+
+#[derive(Clone)]
+enum ExpectedIdentity {
+    /// Explicit --data-dir callers select a path without a registry binding.
+    Any,
+    /// A pre-project store must not silently become a newly adopted project.
+    Unassigned,
+    Project(String),
 }
 
 impl Store {

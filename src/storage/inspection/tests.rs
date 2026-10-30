@@ -57,6 +57,7 @@ fn copied_store_inspection_distinguishes_missing_unreferenced_and_unknown_withou
     // neither bootstrap nor migrate the copied database.
     let copied = Store {
         root: copy.path().canonicalize().unwrap(),
+        identity: super::super::ExpectedIdentity::Any,
     };
     let before = fs::read(copy.path().join("hunin.sqlite")).unwrap();
     let report = copied.inspect(InspectionLimits::default()).unwrap();

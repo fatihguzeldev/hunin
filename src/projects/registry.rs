@@ -238,7 +238,11 @@ impl ProjectRegistry {
 
     pub fn open_store(&self, project: &Project) -> Result<Store> {
         self.verify_store(project)?;
-        Store::open(&project.store_path)
+        if project.legacy {
+            Store::open_legacy(&project.store_path)
+        } else {
+            Store::open_project(&project.store_path, &project.id)
+        }
     }
 
     fn create_in(

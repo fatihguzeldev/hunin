@@ -351,6 +351,10 @@ impl Store {
         let control = ReadControl::new(&connection, limits.maximum_sqlite_steps, checkpoint);
         control.checkpoint()?;
         let tx = control.sql(connection.transaction())?;
+        let identity = self.validate_identity(&tx);
+        // Preserve the original budget/cancellation origin if identity SQL was interrupted.
+        control.sql(Ok(()))?;
+        identity?;
         let schema: u32 = control.sql(tx.query_row("PRAGMA user_version", [], |row| row.get(0)))?;
         anyhow::ensure!(
             schema <= super::super::SCHEMA_VERSION,

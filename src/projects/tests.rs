@@ -29,6 +29,67 @@ fn recording(name: &str) -> Run {
 }
 
 #[test]
+fn retained_store_handles_cannot_write_to_a_replacement_or_recreate_a_missing_database() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ProjectRegistry::open(temp.path()).unwrap();
+    let first = registry.create("first", None).unwrap();
+    let second = registry.create("second", None).unwrap();
+    let retained = registry.open_store(&first).unwrap();
+    registry
+        .open_store(&second)
+        .unwrap()
+        .save_run(&recording("second"))
+        .unwrap();
+    let moved = temp.path().join("moved-first");
+    fs::rename(&first.store_path, &moved).unwrap();
+    fs::rename(&second.store_path, &first.store_path).unwrap();
+    assert!(
+        retained
+            .with_query_snapshot(
+                "same-recording-id",
+                crate::storage::ReadLimits::default(),
+                || Ok(()),
+                |_| Ok(())
+            )
+            .is_err()
+    );
+    assert!(
+        retained
+            .inspect(crate::storage::InspectionLimits::default())
+            .is_err()
+    );
+    assert!(retained.save_run(&recording("wrong project")).is_err());
+    assert_eq!(
+        Store::open(&first.store_path)
+            .unwrap()
+            .run("same-recording-id")
+            .unwrap()
+            .name,
+        "second"
+    );
+    fs::rename(&first.store_path, &second.store_path).unwrap();
+    assert!(retained.save_run(&recording("missing project")).is_err());
+    assert!(!first.store_path.exists());
+    fs::rename(&moved, &first.store_path).unwrap();
+    retained.save_run(&recording("restored original")).unwrap();
+}
+
+#[test]
+fn retained_legacy_store_cannot_keep_writing_after_explicit_project_adoption() {
+    let temp = tempfile::tempdir().unwrap();
+    Store::open(temp.path()).unwrap();
+    let registry = ProjectRegistry::open(temp.path()).unwrap();
+    let legacy = registry
+        .open_store(&registry.get("legacy").unwrap())
+        .unwrap();
+    let project = registry.register("adopted", temp.path(), None).unwrap();
+    assert!(legacy.save_run(&recording("old legacy context")).is_err());
+    let selected = registry.open_store(&project).unwrap();
+    assert!(selected.runs(10, 0).unwrap().is_empty());
+    selected.save_run(&recording("adopted context")).unwrap();
+}
+
+#[test]
 fn projects_own_independent_recordings_and_artifacts_without_id_filters() {
     let temp = tempfile::tempdir().unwrap();
     let registry = ProjectRegistry::open(temp.path()).unwrap();
