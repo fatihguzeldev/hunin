@@ -3,7 +3,7 @@ import process from 'node:process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { threadId } from 'node:worker_threads';
-import '../sources-preload.mjs';
+import '../source/snapshots.mjs';
 
 // Calibrate the V8 profiler's monotonic domain against epoch time in the same
 // isolate. A bounded handshake replaces assumptions about hrtime polyfills.
@@ -60,7 +60,7 @@ if (directory) {
 }
 if (globalThis.Deno && directory) {
   try {
-    const { installDenoWorkerBarrier } = await import('../deno-workers.mjs');
+    const { installDenoWorkerBarrier } = await import('./deno-workers.mjs');
     installDenoWorkerBarrier({
       directory,
       runId: process.env.HUNIN_RUN_ID,

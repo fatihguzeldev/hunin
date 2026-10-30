@@ -102,7 +102,7 @@ if (directory) {
   syncBuiltinESMExports();
   // Bun does not refresh an already-created worker_threads ESM binding here.
   // Install the constructor hook before source capture imports threadId.
-  const { captureBunProfile } = await import('../sources-preload.mjs');
+  const { captureBunProfile } = await import('../source/snapshots.mjs');
   const session = new inspector.Session();
   session.connect();
   function post(

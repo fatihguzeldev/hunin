@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { plan } from '../plan.mjs';
+import { plan } from '../host/plan.mjs';
 
 for (const [runtime, executable, expected] of [
   [

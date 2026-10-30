@@ -75,7 +75,7 @@ class InstalledControlTests(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as temporary:
             installed = Path(temporary) / "installed bundle %20"
-            preload = installed / "collectors/javascript/dist/clock-preload.mjs"
+            preload = installed / "collectors/javascript/dist/agents/clock.mjs"
             preload.parent.mkdir(parents=True)
             preload.write_text("// installed control")
             self.assertTrue(
@@ -87,7 +87,7 @@ class InstalledControlTests(unittest.TestCase):
                 control.adjacent_import(f'--import "{preload.as_uri()}"', installed)
             )
             outside = (
-                installed.with_name(installed.name + "-other") / "clock-preload.mjs"
+                installed.with_name(installed.name + "-other") / "clock.mjs"
             )
             self.assertFalse(
                 control.adjacent_import(f'--import="{outside.as_uri()}"', installed)

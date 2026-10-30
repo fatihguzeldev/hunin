@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { Profiler } from 'node:inspector';
-import { plan, toolPath } from '../plan.mjs';
+import { plan, toolPath } from '../host/plan.mjs';
 
 const denoExecutable = process.env.HUNIN_TEST_DENO;
 const bunExecutable = process.env.HUNIN_TEST_BUN;
@@ -697,7 +697,8 @@ if (denoExecutable) {
   denoLifecycleTest(
     'Deno lifecycle deadline bounds validation and resets only after a completed phase',
     (directory) => {
-      const module = new URL('../deno-workers.mjs', import.meta.url).href;
+      const module = new URL('../agents/deno-workers.mjs', import.meta.url)
+        .href;
       const producerId = 'zero-budget-control';
       writeFileSync(
         join(directory, `deno-workers-${producerId}.jsonl`),

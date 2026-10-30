@@ -8,10 +8,6 @@
       "build": "npm ci && npm run build:runtime",
       "files": {
         "dist/plan.mjs": "dist/plan.mjs",
-        "dist/clock-preload.mjs": "dist/clock-preload.mjs",
-        "dist/bun-preload.mjs": "dist/bun-preload.mjs",
-        "dist/deno-workers.mjs": "dist/deno-workers.mjs",
-        "dist/sources-preload.mjs": "dist/sources-preload.mjs",
         "dist/host/plan.mjs": "dist/host/plan.mjs",
         "dist/agents/clock.mjs": "dist/agents/clock.mjs",
         "dist/agents/bun.mjs": "dist/agents/bun.mjs",

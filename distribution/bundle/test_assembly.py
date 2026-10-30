@@ -12,10 +12,6 @@ from ..installation import bundle as installer
 
 RUNTIME_FILES = (
     "collectors/javascript/dist/plan.mjs",
-    "collectors/javascript/dist/clock-preload.mjs",
-    "collectors/javascript/dist/bun-preload.mjs",
-    "collectors/javascript/dist/deno-workers.mjs",
-    "collectors/javascript/dist/sources-preload.mjs",
     "collectors/javascript/dist/host/plan.mjs",
     "collectors/javascript/dist/agents/clock.mjs",
     "collectors/javascript/dist/agents/bun.mjs",

@@ -63,8 +63,8 @@ export default defineConfig(
   },
   {
     files: [
-      'collectors/javascript/src/clock-preload.mts',
-      'collectors/javascript/src/deno-workers.mts',
+      'collectors/javascript/src/agents/clock.mts',
+      'collectors/javascript/src/agents/deno-workers.mts',
     ],
     languageOptions: { globals: { Deno: 'readonly' } },
   },

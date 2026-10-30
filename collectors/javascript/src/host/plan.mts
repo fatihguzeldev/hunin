@@ -163,7 +163,7 @@ export function plan(request: CaptureRequest) {
       { mode: 0o600, flag: 'wx' },
     );
     const preload = toolPath(
-      fileURLToPath(new URL('../bun-preload.mjs', import.meta.url)),
+      fileURLToPath(new URL('../agents/bun.mjs', import.meta.url)),
     );
     // BUN_OPTIONS retains quote characters in --preload= values. Resolve a
     // whitespace-free unique shim through NODE_PATH, whose path list supports
@@ -193,7 +193,7 @@ export function plan(request: CaptureRequest) {
       completion_scope: 'declared_profile_artifacts',
     };
     const preload = toolPath(
-      fileURLToPath(new URL('../clock-preload.mjs', import.meta.url)),
+      fileURLToPath(new URL('../agents/clock.mjs', import.meta.url)),
     );
     env.NODE_OPTIONS =
       `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(pathToFileURL(preload).href)}`.trim();
@@ -206,7 +206,7 @@ export function plan(request: CaptureRequest) {
       completion_scope: 'declared_profiles_and_registered_deno_workers',
     };
     const preload = toolPath(
-      fileURLToPath(new URL('../clock-preload.mjs', import.meta.url)),
+      fileURLToPath(new URL('../agents/clock.mjs', import.meta.url)),
     );
     // Keep the target's explicit permissions. Hunin only adds access needed by its preload.
     const inspectorDenied = command.some(
