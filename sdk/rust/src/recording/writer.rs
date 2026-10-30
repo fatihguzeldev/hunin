@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+//! Process-owned writer, fork rejection and append-only observation publication.
+use super::Context;
+use serde_json::{json, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
@@ -7,7 +8,7 @@ use std::{
         atomic::{AtomicU32, AtomicU64, Ordering},
         Mutex, OnceLock,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -21,7 +22,7 @@ struct Writer {
     file: Option<File>,
     failure: Option<String>,
 }
-fn owns_state() -> bool {
+pub(super) fn owns_state() -> bool {
     let pid = std::process::id();
     match OWNER_PID.load(Ordering::SeqCst) {
         owner if owner == pid => true,
@@ -55,27 +56,20 @@ fn writer() -> Option<&'static Mutex<Writer>> {
         })
     }))
 }
-fn epoch_us() -> u64 {
+pub(super) fn epoch_us() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_micros()
         .min(9_007_199_254_740_991) as u64
 }
-fn id() -> Option<String> {
+pub(super) fn id() -> Option<String> {
     let state = writer()?.lock().unwrap_or_else(|e| e.into_inner());
     Some(format!(
         "{}:{}",
         state.producer,
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
-}
-fn object(value: Value) -> Value {
-    if value.is_object() {
-        value
-    } else {
-        json!({})
-    }
 }
 pub fn enabled() -> bool {
     let Some(writer) = writer() else {
@@ -94,7 +88,7 @@ pub fn last_error() -> Option<String> {
         .failure
         .clone()
 }
-fn emit(context: &Context, kind: &str, fields: Value) -> Option<String> {
+pub(super) fn emit(context: &Context, kind: &str, fields: Value) -> Option<String> {
     let record_id = id()?;
     let mut state = writer()?.lock().unwrap_or_else(|e| e.into_inner());
     if state.run.is_empty() || state.directory.is_empty() || state.failure.is_some() {
@@ -155,131 +149,22 @@ pub fn flush() -> Result<(), String> {
     state.failure.clone().map_or(Ok(()), Err)
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Context {
-    pub run_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-}
-impl Context {
-    pub fn current_run() -> Self {
-        Self {
-            run_id: writer()
-                .map(|writer| writer.lock().unwrap_or_else(|e| e.into_inner()).run.clone())
-                .unwrap_or_default(),
-            ..Self::default()
-        }
-    }
-    pub fn new(name: &str) -> Self {
-        let mut context = Self::current_run();
-        context.context_id = emit(&context, "context", json!({"name":name}));
-        context
-    }
-    pub fn span(&self, name: &str) -> Span {
-        Span::in_context(self, name)
-    }
-}
-pub struct Span {
-    pub id: Option<String>,
-    context: Context,
-    name: String,
-    started: Instant,
-    timestamp_us: u64,
-    attributes: Map<String, Value>,
-    ended: bool,
-}
-impl Span {
-    pub fn new(name: &str) -> Self {
-        Self::in_context(&Context::current_run(), name)
-    }
-    pub fn in_context(context: &Context, name: &str) -> Self {
-        let active = enabled();
-        let run = Context::current_run();
-        Self {
-            id: if active { id() } else { None },
-            context: if context.run_id == run.run_id {
-                context.clone()
-            } else {
-                run
-            },
-            name: name.into(),
-            started: Instant::now(),
-            timestamp_us: epoch_us(),
-            attributes: Map::new(),
-            ended: false,
-        }
-    }
-    pub fn context(&self) -> Context {
-        if !owns_state() {
-            return Context::default();
-        }
-        Context {
-            parent_id: self.id.clone(),
-            ..self.context.clone()
-        }
-    }
-    pub fn attribute(&mut self, key: impl Into<String>, value: impl Into<Value>) {
-        self.attributes.insert(key.into(), value.into());
-    }
-    pub fn end(mut self) {
-        self.finish();
-    }
-    fn finish(&mut self) {
-        if self.ended || !owns_state() {
-            return;
-        }
-        self.ended = true;
-        if let Some(id) = &self.id {
-            let mut fields = json!({"id":id,"name":self.name,"timestamp_us":self.timestamp_us,"duration_us":self.started.elapsed().as_micros().min(9_007_199_254_740_991)as u64,"attributes":self.attributes});
-            if let Some(parent) = &self.context.parent_id {
-                fields["parent_id"] = json!(parent);
-            }
-            emit(&self.context, "span", fields);
-        }
-    }
-}
-impl Drop for Span {
-    fn drop(&mut self) {
-        self.finish();
-    }
-}
-pub fn counter(context: &Context, name: &str, value: f64, unit: &str) -> Option<String> {
-    if !value.is_finite() {
-        return None;
-    }
-    emit(
-        context,
-        "metric",
-        json!({"name":name,"value":value,"unit":unit,"scope":if context.context_id.is_some(){"context"}else{"thread"},"attributes":{"temporality":"delta"}}),
-    )
-}
-pub fn event(context: &Context, name: &str, attributes: Value) -> Option<String> {
-    emit(
-        context,
-        "event",
-        json!({"name":name,"attributes":object(attributes)}),
-    )
-}
-pub fn relation(
-    context: &Context,
-    from: &str,
-    to: &str,
-    name: &str,
-    evidence: &[String],
-) -> Option<String> {
-    let unique: std::collections::BTreeSet<_> = evidence.iter().collect();
-    emit(
-        context,
-        "relation",
-        json!({"from":from,"to":to,"relation":name,"evidence":unique}),
-    )
+pub(super) fn run_id() -> String {
+    writer()
+        .map(|writer| {
+            writer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .run
+                .clone()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod fork_guard_tests {
     use super::*;
+    use crate::event;
     use std::{sync::mpsc, time::Duration};
 
     fn foreign_process_probe() -> (mpsc::Receiver<bool>, std::thread::JoinHandle<()>) {
@@ -312,7 +197,7 @@ mod fork_guard_tests {
             .args([
                 "--ignored",
                 "--exact",
-                "recording::fork_guard_tests::foreign_pid_probe",
+                "recording::writer::fork_guard_tests::foreign_pid_probe",
                 "--nocapture",
             ])
             .stdout(Stdio::null())

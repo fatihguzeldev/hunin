@@ -98,7 +98,8 @@
       "files": {
         "Cargo.toml": "Cargo.toml",
         "src/lib.rs": "src/lib.rs",
-        "src/recording.rs": "src/recording.rs"
+        "src/recording/mod.rs": "src/recording/mod.rs",
+        "src/recording/writer.rs": "src/recording/writer.rs"
       }
     },
     {
