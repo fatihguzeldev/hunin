@@ -15,6 +15,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parent
 
 
+def file_digest(path):
+    with open(path, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def prerequisites():
     if sys.implementation.name != "cpython" or sys.version_info < (3, 12):
         raise RuntimeError("automatic Python starts/resumes require CPython 3.12+")
@@ -37,13 +42,12 @@ def prerequisites():
     identity = {
         "runtime": sys.version,
         "executable": str(Path(sys.executable).resolve()),
-        "executable_sha256": hashlib.file_digest(
-            open(sys.executable, "rb"), "sha256"
-        ).hexdigest(),
+        "executable_sha256": file_digest(sys.executable),
         "include": str(include),
         "suffix": sysconfig.get_config_var("EXT_SUFFIX"),
         "compiler": compiler,
-        "compiler_sha256": hashlib.file_digest(open(found, "rb"), "sha256").hexdigest(),
+        "compiler_sha256": file_digest(found),
+        "python_header_sha256": file_digest(include / "Python.h"),
         "source_sha256": hashlib.sha256(
             (ROOT / "nativecounter.c").read_bytes()
         ).hexdigest(),
@@ -68,6 +72,10 @@ def build(cache):
                 "cached count callback identity mismatch; preserve it and choose another cache"
             )
         return {"extension": str(library), **prior}
+    if destination.exists():
+        raise RuntimeError(
+            "incomplete callback cache entry is preserved; choose another cache"
+        )
     cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".counts-build-", dir=cache) as temporary:
         staging = Path(temporary)

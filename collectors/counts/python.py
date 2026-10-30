@@ -42,7 +42,8 @@ def main():
     if tool is None:
         raise RuntimeError("no free sys.monitoring tool ID for function counting")
     started = time.time_ns() // 1000
-    producer = f"python-counts-{os.getpid()}"
+    owner_pid = os.getpid()
+    producer = f"calls:{config['run_id']}"
     completion = Path(config["completion"])
     output = Path(config["output"])
     manifest = {
@@ -57,11 +58,23 @@ def main():
     }
     write_manifest(completion, manifest)
     target_ok = False
+    expected_events = (
+        sys.monitoring.events.PY_START
+        | sys.monitoring.events.PY_RESUME
+        | sys.monitoring.events.PY_THROW
+    )
 
     def flush():
-        sys.monitoring.set_events(tool, 0)
-        sys.monitoring.free_tool_id(tool)
+        if os.getpid() != owner_pid:
+            return
         try:
+            owned = sys.monitoring.get_tool(tool) == "hunin-function-counts"
+            observer_intact = (
+                owned and sys.monitoring.get_events(tool) == expected_events
+            )
+            if owned:
+                sys.monitoring.set_events(tool, 0)
+                sys.monitoring.free_tool_id(tool)
             rows, dropped, overflow = native.snapshot()
             timestamp = time.time_ns() // 1000
             digest = hashlib.sha256()
@@ -115,7 +128,8 @@ def main():
                             json.dumps(record, ensure_ascii=True, separators=(",", ":"))
                             + "\n"
                         ).encode()
-                        if total + len(encoded) > config["max_output_bytes"]:
+                        # Reserve bounded space for the explicit result-set sentinel.
+                        if total + len(encoded) + 768 > config["max_output_bytes"]:
                             truncated = True
                             break
                         stream.write(encoded)
@@ -124,9 +138,51 @@ def main():
                         records += 1
                     if truncated:
                         break
+                event = {
+                    "schema_version": 1,
+                    "kind": "event",
+                    "id": f"{producer}:complete",
+                    "run_id": config["run_id"],
+                    "producer_id": producer,
+                    "pid": os.getpid(),
+                    "tid": "process",
+                    "timestamp_us": timestamp,
+                    "basis": "observed",
+                    "name": "function.counts.complete",
+                    "attributes": {
+                        "status": "complete"
+                        if target_ok
+                        and observer_intact
+                        and not dropped
+                        and not overflow
+                        and not truncated
+                        else "incomplete",
+                        "method": manifest["method"],
+                        "clock": "unix_epoch",
+                        "clock_alignment": "direct_epoch",
+                        "clock_source": "time.time_ns",
+                        "collection_scope": "all_then_filter",
+                        "window_started_at_us": started,
+                        "window_finished_at_us": timestamp,
+                    },
+                }
+                encoded = (
+                    json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n"
+                ).encode()
+                if total + len(encoded) <= config["max_output_bytes"]:
+                    stream.write(encoded)
+                    digest.update(encoded)
+                    total += len(encoded)
+                    records += 1
+                else:
+                    truncated = True
             manifest.update(
                 status="complete"
-                if target_ok and not dropped and not overflow and not truncated
+                if target_ok
+                and observer_intact
+                and not dropped
+                and not overflow
+                and not truncated
                 else "incomplete",
                 finished_at_us=timestamp,
                 records=records,
@@ -135,14 +191,15 @@ def main():
                 dropped_events=dropped,
                 counter_overflow=bool(overflow),
                 output_truncated=truncated,
+                observer_intact=observer_intact,
                 loss="none_observed"
-                if not dropped and not overflow and not truncated
+                if observer_intact and not dropped and not overflow and not truncated
                 else "incomplete",
                 limitations=[
                     "Python code starts and resumes only; C builtins, child processes and subinterpreters are outside this inventory",
                     "All Python-code callbacks execute; exact selectors filter counter admission",
                     "Code objects are retained in a bounded table; their existing constants may retain additional target-owned memory",
-                    "Target removal or replacement of the monitoring tool is not detected",
+                    "Tool ownership/event-mask changes are detected; individual callback replacement by target code is not proven absent",
                 ],
             )
             write_manifest(completion, manifest)
@@ -152,15 +209,18 @@ def main():
 
     # Registered before target handlers: their atexit work runs before this flush.
     atexit.register(flush)
+    if hasattr(os, "register_at_fork"):
+        os.register_at_fork(after_in_child=lambda: sys.monitoring.set_events(tool, 0))
     sys.monitoring.register_callback(
         tool, sys.monitoring.events.PY_START, native.on_start
     )
     sys.monitoring.register_callback(
         tool, sys.monitoring.events.PY_RESUME, native.on_resume
     )
-    sys.monitoring.set_events(
-        tool, sys.monitoring.events.PY_START | sys.monitoring.events.PY_RESUME
+    sys.monitoring.register_callback(
+        tool, sys.monitoring.events.PY_THROW, native.on_resume
     )
+    sys.monitoring.set_events(tool, expected_events)
     try:
         run_target(target)
         target_ok = True

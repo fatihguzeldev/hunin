@@ -74,7 +74,7 @@ static Entry *entry_for(State *state, PyObject *object) {
 }
 
 static PyObject *increment(PyObject *self, PyObject *const *args, Py_ssize_t nargs, int resume) {
-    if (nargs != 2)
+    if (nargs != 2 && !(resume && nargs == 3))
         return PyErr_Format(PyExc_TypeError, "expected code and instruction offset");
     State *state = PyModule_GetState(self);
     Entry *entry = entry_for(state, args[0]);
@@ -151,8 +151,10 @@ static void cleanup(void *module) {
     State *state = PyModule_GetState((PyObject *)module);
     if (!state)
         return;
-    for (size_t i = 0; i < state->slots; ++i)
-        Py_XDECREF(state->entries[i].code);
+    if (state->entries) {
+        for (size_t i = 0; i < state->slots; ++i)
+            Py_XDECREF(state->entries[i].code);
+    }
     PyMem_Free(state->entries);
     Py_XDECREF(state->selectors);
 }
