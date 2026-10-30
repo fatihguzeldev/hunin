@@ -75,7 +75,9 @@
       "files": {
         "dist/index.mjs": "dist/index.mjs",
         "dist/index.d.mts": "dist/index.d.mts",
-        "package.json": "package.json"
+        "package.json": "package.json",
+        "dist/writer.mjs": "dist/writer.mjs",
+        "dist/writer.d.mts": "dist/writer.d.mts"
       }
     },
     {

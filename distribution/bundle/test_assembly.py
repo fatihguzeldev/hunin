@@ -32,6 +32,8 @@ RUNTIME_FILES = (
     "collectors/python/hunin_capture/cpu_progress/clocks/linux.py",
     "sdk/javascript/dist/index.mjs",
     "sdk/javascript/dist/index.d.mts",
+    "sdk/javascript/dist/writer.mjs",
+    "sdk/javascript/dist/writer.d.mts",
     "sdk/javascript/package.json",
     "sdk/python/pyproject.toml",
     "sdk/python/hunin/__init__.py",
@@ -343,6 +345,8 @@ class PackageTests(unittest.TestCase):
         for name in (
             "collectors/javascript/dist/agents/clock.mjs",
             "sdk/javascript/dist/index.d.mts",
+            "sdk/javascript/dist/writer.mjs",
+            "sdk/javascript/dist/writer.d.mts",
             "ui/dist/.vite/manifest.json",
         ):
             with self.subTest(asset=name), tempfile.TemporaryDirectory() as temporary:

@@ -10,7 +10,9 @@
   },
   "files": [
     "dist/index.mjs",
-    "dist/index.d.mts"
+    "dist/index.d.mts",
+    "dist/writer.mjs",
+    "dist/writer.d.mts"
   ],
   "engines": {
     "node": ">=20"
