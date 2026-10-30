@@ -7,20 +7,18 @@ import {
 import { AnalysisWatch } from './analysis/watch';
 import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
-import { runSource } from './run';
+import { runSource } from './recordings/presentation';
 import { operation, type Run, type Summary } from './api';
 import {
   recordingDetails,
   recordingMetadata,
   queryFailureMessage,
-} from './recording-details';
+} from './recordings/details';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
-import { recordDialog } from './recording';
-import {
-  importRecordingDialog,
-  removeRecordingDialog,
-} from './recording-actions';
+import { recordDialog } from './recordings/create';
+import { importRecordingDialog } from './recordings/import';
+import { removeRecordingDialog } from './recordings/remove';
 import { capabilities } from './views/capabilities';
 import { overview, runTone } from './views/overview';
 import { scenarios } from './views/scenarios';

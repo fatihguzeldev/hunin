@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { importChoices } from '../src/import-format.js';
+import { importChoices } from '../src/recordings/formats.js';
 import type { ImportFormat } from '../src/operations.generated.js';
 
 function descriptor(overrides: Partial<ImportFormat> = {}): ImportFormat {

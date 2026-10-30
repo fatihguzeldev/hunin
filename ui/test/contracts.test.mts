@@ -23,7 +23,7 @@ import {
 } from '../src/observation.js';
 import { PagedQuery, type Page } from '../src/pagination.js';
 import type { Observation } from '../src/record.generated.js';
-import { runSource, runCorrectness, runStatusTone } from '../src/run.js';
+import { runSource, runCorrectness, runStatusTone } from '../src/recordings/presentation.js';
 
 test('canonical schema produces required fields per observation kind', async () => {
   const schema: ObservationSchema = JSON.parse(

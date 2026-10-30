@@ -1,4 +1,4 @@
-import { runSource } from '../run';
+import { runSource } from '../recordings/presentation';
 import { operation, type Artifact } from '../api';
 import { badge, button, el, empty, errorView, loading } from '../dom';
 import { bytes, numeric } from '../format';

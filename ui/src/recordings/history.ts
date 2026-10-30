@@ -1,6 +1,6 @@
-import { operation, type Run } from './api';
-import { badge, button, el } from './dom';
-import { pagedList } from './paged-list';
+import { operation, type Run } from '../api';
+import { badge, button, el } from '../dom';
+import { pagedList } from '../paged-list';
 
 /** Browse bounded history pages without loading the entire recording index into a select. */
 export function recordingHistory(

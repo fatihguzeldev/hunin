@@ -1,6 +1,6 @@
-import { operation } from './api.js';
-import { el, field } from './dom.js';
-import type { ImportFormat } from './operations.generated.js';
+import { operation } from '../api.js';
+import { el, field } from '../dom.js';
+import type { ImportFormat } from '../operations.generated.js';
 
 type ImportChoice = {
   value: string;

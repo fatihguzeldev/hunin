@@ -1,8 +1,8 @@
-import { operation } from './api';
-import { button, el, field, lockFields } from './dom';
-import { parseCommand } from './command';
-import { workloadFields } from './workload-fields';
-import { collectionMode } from './collection-mode';
+import { operation } from '../api';
+import { button, el, field, lockFields } from '../dom';
+import { parseCommand } from '../command';
+import { workloadFields } from '../workload-fields';
+import { collectionMode } from '../collection-mode';
 
 export function recordDialog(
   onRecorded: (id: string, foreground: boolean) => void,

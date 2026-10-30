@@ -5,7 +5,7 @@ import {
   recordingDetails,
   recordingMetadata,
   queryFailureMessage,
-} from '../src/recording-details.js';
+} from '../src/recordings/details.js';
 
 const run = {
   id: 'large-recording',

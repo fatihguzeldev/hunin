@@ -5,7 +5,7 @@ import {
   inspectRemovalReceipt,
   removalFailureMessage,
   removalReceiptNotice,
-} from '../src/removal-feedback.js';
+} from '../src/recordings/removal-feedback.js';
 
 const pending = {
   version: 1,

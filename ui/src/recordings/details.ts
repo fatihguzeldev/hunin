@@ -1,4 +1,4 @@
-import { ApiError, operation, type Operations, type Summary } from './api.js';
+import { ApiError, operation, type Operations, type Summary } from '../api.js';
 
 export type RecordingDetails = Operations['runs.metadata']['output'] & {
   summary?: Summary;

@@ -1,8 +1,8 @@
 import { weight, weightShare } from '../profile-weight';
-import { runCorrectness, runStatusTone } from '../run';
+import { runCorrectness, runStatusTone } from '../recordings/presentation';
 import { operation, type Operations, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
-import { queryFailureMessage } from '../recording-details';
+import { queryFailureMessage } from '../recordings/details';
 import { duration, numeric } from '../format';
 import { hasInspectableSource } from '../source/paths';
 

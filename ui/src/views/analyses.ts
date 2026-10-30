@@ -1,5 +1,5 @@
 import { analysisMetadata, analysisAttemptMetadata } from '../metadata';
-import { runSource } from '../run';
+import { runSource } from '../recordings/presentation';
 import { operation, type Analysis, type AnalysisResult } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { date } from '../format';

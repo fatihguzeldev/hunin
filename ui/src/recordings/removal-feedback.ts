@@ -1,4 +1,4 @@
-import { queryFailureMessage } from './recording-details.js';
+import { queryFailureMessage } from './details.js';
 
 type RemovalNotice = {
   kind: 'pending' | 'completed' | 'unknown' | 'absent' | 'unavailable';

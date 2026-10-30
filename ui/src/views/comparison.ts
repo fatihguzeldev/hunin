@@ -1,7 +1,7 @@
 import { operation, type Comparison } from '../api';
 import { comparisonResults } from './comparison-results';
 import { linkedRequest } from '../requests';
-import { recordingHistory } from '../recording-history';
+import { recordingHistory } from '../recordings/history';
 import { button, el, empty, errorView, field, loading } from '../dom';
 import type { ViewContext } from '../workspace';
 

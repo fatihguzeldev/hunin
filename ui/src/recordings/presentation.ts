@@ -1,4 +1,4 @@
-import type { Run } from './api';
+import type { Run } from '../api';
 
 function metadata(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
