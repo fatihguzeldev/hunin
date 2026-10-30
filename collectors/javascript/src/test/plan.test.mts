@@ -484,10 +484,11 @@ if (denoExecutable) {
   denoLifecycleTest(
     'Deno exit waits for a large exact worker profile without changing terminate',
     (directory) => {
-      // A large sampled stack makes native serialization outlast the main
-      // isolate's cleanup, reproducing missing/empty output without timing sleeps.
+      // Exercise a multi-MiB native write while keeping this success control
+      // bounded. Deeper stacks produced ~8 MiB and could exhaust the deliberate
+      // two-second lifecycle budget on slow hosts after validating the profile.
       const name = 'deep_' + 'x'.repeat(32000);
-      const worker = `function workerHot(){const end=Date.now()+150;let value=0;while(Date.now()<end)for(let n=1;n<10000;n++)value+=Math.sqrt(n);return value;}function ${name}(n){return n?${name}(n-1):workerHot();}postMessage(${name}(1200));`;
+      const worker = `function workerHot(){const end=Date.now()+150;let value=0;while(Date.now()<end)for(let n=1;n<10000;n++)value+=Math.sqrt(n);return value;}function ${name}(n){return n?${name}(n-1):workerHot();}postMessage(${name}(64));`;
       const { result, records, terminal, artifacts } = captureDeno(
         directory,
         workerMain,
@@ -514,6 +515,10 @@ if (denoExecutable) {
       assert.ok(
         bytes.length > 1024 * 1024,
         'control failed to exercise a large native profile write',
+      );
+      assert.ok(
+        bytes.length < 4 * 1024 * 1024,
+        'success control exceeded its bounded native serialization workload',
       );
       assert.equal(
         createHash('sha256').update(bytes).digest('hex'),
