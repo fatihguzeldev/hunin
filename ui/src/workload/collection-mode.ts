@@ -1,6 +1,6 @@
-import { operation } from './api';
-import { el } from './dom';
-import { launchChoices, type LaunchChoice } from './launch';
+import { operation } from '../api';
+import { el } from '../dom';
+import { launchChoices, type LaunchChoice } from './choices';
 
 /** Share one backend-owned mode picker without rewriting an explicit workload command. */
 export function collectionMode(

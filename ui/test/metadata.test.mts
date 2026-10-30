@@ -4,7 +4,7 @@ import {
   analysisMetadata,
   analysisAttemptMetadata,
 } from '../src/analysis/metadata.js';
-import { scenarioMetadata } from '../src/metadata.js';
+import { scenarioMetadata } from '../src/workload/scenario.js';
 import { operation } from '../src/api.js';
 
 test('legacy document results retain arbitrary rows while checking their page envelope', async () => {

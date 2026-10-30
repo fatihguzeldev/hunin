@@ -1,10 +1,9 @@
-import { scenarioMetadata } from '../metadata';
+import { scenarioMetadata } from '../workload/scenario';
 import { operation, type Scenario } from '../api';
 import { parseCommand } from '../command';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
-import { workloadFields } from '../workload-fields';
+import { recipeFields } from '../workload/fields';
 import { pagedList } from '../paged-list';
-import { collectionMode } from '../collection-mode';
 
 export async function scenarios(
   onRun: (id: string) => void,
@@ -35,14 +34,11 @@ export async function scenarios(
     required: true,
     placeholder: 'Absolute project directory',
   });
-  const mode = collectionMode(command, signal);
-  const timeout = el('input', {
-    type: 'number',
-    min: 1,
-    max: 86400,
-    value: 60,
-  });
-  const workload = workloadFields();
+  const {
+    mode,
+    timeout,
+    expectations: workload,
+  } = recipeFields(command, signal);
   const submit = button(
     'Save scenario',
     () => {

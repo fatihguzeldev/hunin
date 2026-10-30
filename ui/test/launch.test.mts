@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { launchChoices } from '../src/launch.js';
+import { launchChoices } from '../src/workload/choices.js';
 import type { Capability } from '../src/api.js';
 
 test('recording choices use backend launch routes and never promote probe executables to workload commands', () => {

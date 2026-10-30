@@ -1,5 +1,5 @@
-import { el, field } from './dom';
-import { parseWorkloadOptions } from './workload';
+import { el, field } from '../dom';
+import { parseWorkloadOptions } from './options';
 
 export function workloadFields(): {
   element: HTMLElement;

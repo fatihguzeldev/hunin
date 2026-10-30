@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sourceIdentityMetadata } from '../src/metadata.js';
+import { sourceIdentityMetadata } from '../src/recordings/presentation.js';
 import { Investigations } from '../src/investigation/state.js';
 
 test('comparison identity presentation keeps source, executable and build claims separate', () => {

@@ -1,4 +1,4 @@
-import type { Capability } from './api';
+import type { Capability } from '../api';
 
 export type LaunchChoice = {
   value: string;

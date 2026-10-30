@@ -1,8 +1,7 @@
 import { operation } from '../api';
 import { button, el, field, lockFields } from '../dom';
 import { parseCommand } from '../command';
-import { workloadFields } from '../workload-fields';
-import { collectionMode } from '../collection-mode';
+import { recipeFields } from '../workload/fields';
 
 export function recordDialog(
   onRecorded: (id: string, foreground: boolean) => void,
@@ -25,14 +24,11 @@ export function recordDialog(
     autocomplete: 'off',
   });
   const discovery = new AbortController();
-  const mode = collectionMode(command, discovery.signal);
-  const timeout = el('input', {
-    type: 'number',
-    min: 1,
-    max: 86400,
-    value: 60,
-  });
-  const workload = workloadFields();
+  const {
+    mode,
+    timeout,
+    expectations: workload,
+  } = recipeFields(command, discovery.signal);
   const error = el('p', { class: 'metric-note', role: 'alert' });
   const cancel = button('Cancel', () => dialog.close(), 'button subtle');
   const submit = button(

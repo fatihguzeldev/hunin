@@ -13,7 +13,7 @@ import {
 import { operation, ApiError } from '../src/api.js';
 import { duration, bytes, percentage } from '../src/format.js';
 import { parseCommand } from '../src/command.js';
-import { parseWorkloadOptions } from '../src/workload.js';
+import { parseWorkloadOptions } from '../src/workload/options.js';
 import { hasLocalSource, hasInspectableSource } from '../src/source/paths.js';
 import { canReanalyze } from '../src/artifact.js';
 import {
@@ -23,7 +23,11 @@ import {
 } from '../src/observation.js';
 import { PagedQuery, type Page } from '../src/pagination.js';
 import type { Observation } from '../src/record.generated.js';
-import { runSource, runCorrectness, runStatusTone } from '../src/recordings/presentation.js';
+import {
+  runSource,
+  runCorrectness,
+  runStatusTone,
+} from '../src/recordings/presentation.js';
 
 test('canonical schema produces required fields per observation kind', async () => {
   const schema: ObservationSchema = JSON.parse(

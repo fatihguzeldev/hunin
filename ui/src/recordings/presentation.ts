@@ -45,3 +45,17 @@ export function runStatusTone(status: string): string {
   };
   return Object.hasOwn(tones, status) ? tones[status] : '';
 }
+
+/** Display retained identities without assuming that source and executable match. */
+export function sourceIdentityMetadata(value: unknown) {
+  const source = metadata(value);
+  return {
+    sourceFingerprint: text(source.fingerprint),
+    executableSha256: text(source.executable_sha256),
+    runtimeVersion: text(source.runtime_version),
+    buildSourceVerified:
+      typeof source.build_source_verified === 'boolean'
+        ? source.build_source_verified
+        : undefined,
+  };
+}

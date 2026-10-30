@@ -1,7 +1,7 @@
 import type { Comparison } from '../api';
 import { badge, button, el, empty, field } from '../dom';
 import { numeric, percentage } from '../format';
-import { sourceIdentityMetadata } from '../metadata';
+import { sourceIdentityMetadata } from '../recordings/presentation';
 import type { ViewContext } from '../investigation/view';
 
 function correctness(value: unknown): HTMLElement {
