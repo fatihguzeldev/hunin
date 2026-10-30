@@ -13,6 +13,10 @@ pub enum CaptureOutput {
     Profiles {
         format: String,
     },
+    FunctionCounts {
+        method: String,
+        maximum_bytes: u64,
+    },
     GraalCpuSampler,
     DenoWorkers {
         producer_id: String,
@@ -132,6 +136,12 @@ impl CapturePlan {
                 "declared_profile_artifacts",
                 vec!["Profile artifact presence does not establish an inventory of every target process, thread or worker".into()],
             ),
+            CaptureOutput::FunctionCounts { method, maximum_bytes } => {
+                if let Err(error) = super::counts::validate(request, &files, method, *maximum_bytes) {
+                    diagnostics.push(format!("{error:#}"));
+                }
+                (Some("hunin-jsonl"), "declared_function_counter_window", vec!["Completeness describes the declared counter window and supported code scope; absent functions are not zero counts".into()])
+            }
             CaptureOutput::GraalCpuSampler => {
                 if let Err(error) = python::graal::validate_output(request, &files) {
                     diagnostics.push(format!("{error:#}"));
@@ -172,6 +182,11 @@ impl CapturePlan {
         let profiles = artifacts
             .iter()
             .filter_map(|artifact| {
+                if matches!(self.output, CaptureOutput::FunctionCounts { .. })
+                    && artifact.path != request.artifact_dir.join("calls.calls.jsonl")
+                {
+                    return None;
+                }
                 let profile_format = profile_format(&artifact.path)?;
                 (Some(profile_format) == format).then(|| RawProfile {
                     path: artifact.path.clone(),

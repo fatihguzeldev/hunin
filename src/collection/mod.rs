@@ -1,3 +1,4 @@
+pub(crate) mod counts;
 mod finalization;
 mod go;
 mod javascript;
@@ -73,7 +74,9 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
 
 pub(crate) fn profile_format(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_string_lossy();
-    if name.ends_with(".pythoncpu.jsonl") {
+    if name.ends_with(".calls.jsonl") {
+        Some("hunin-jsonl")
+    } else if name.ends_with(".pythoncpu.jsonl") {
         Some("python-cpu-progress")
     } else if name.ends_with(".cpuprofile") {
         Some("v8-cpuprofile")
