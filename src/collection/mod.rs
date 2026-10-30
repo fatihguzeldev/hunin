@@ -11,7 +11,7 @@ pub use finalization::{
     CaptureArtifact, CaptureCompletion, CaptureOutput, CaptureProducer, CompletionState,
     RawCaptureBundle, RawProfile, capture_artifacts,
 };
-pub(crate) use python::cpu_prerequisite as python_cpu_prerequisite;
+pub(crate) use python::cpu_progress::prerequisite as python_cpu_prerequisite;
 pub use selection::{
     CaptureAdapter, CaptureModeRegistration, LaunchExecutableKind, RuntimeRegistration,
     capture_modes, registered_runtimes, select_runtime,
@@ -61,9 +61,9 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
     fs::create_dir_all(&canonical.artifact_dir)?;
     match selected.adapter {
         CaptureAdapter::JavaScript => javascript::prepare(&canonical),
-        CaptureAdapter::PythonVmprof => python::vmprof(&canonical),
-        CaptureAdapter::PythonCpuProgress => python::cpu_progress(&canonical),
-        CaptureAdapter::GraalCpuSampler => python::graal(&canonical),
+        CaptureAdapter::PythonVmprof => python::vmprof::prepare(&canonical),
+        CaptureAdapter::PythonCpuProgress => python::cpu_progress::prepare(&canonical),
+        CaptureAdapter::GraalCpuSampler => python::graal::prepare(&canonical),
         CaptureAdapter::GoTestCpu => go::test(&canonical, false),
         CaptureAdapter::GoTrace => go::test(&canonical, true),
         CaptureAdapter::Native if canonical.runtime == "go" => go::native(&canonical),

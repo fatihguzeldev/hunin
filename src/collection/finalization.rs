@@ -89,7 +89,7 @@ impl CapturePlan {
     pub fn on_started(&self, request: &CaptureRequest, pid: u32) -> Result<()> {
         match self.output {
             CaptureOutput::GraalCpuSampler => {
-                python::graal_started(request, pid, self.runtime_version.as_deref())
+                python::graal::started(request, pid, self.runtime_version.as_deref())
             }
             _ => Ok(()),
         }
@@ -133,10 +133,10 @@ impl CapturePlan {
                 vec!["Profile artifact presence does not establish an inventory of every target process, thread or worker".into()],
             ),
             CaptureOutput::GraalCpuSampler => {
-                if let Err(error) = python::validate_graal_output(request, &files) {
+                if let Err(error) = python::graal::validate_output(request, &files) {
                     diagnostics.push(format!("{error:#}"));
                 }
-                (Some("graal-cpusampler"), python::GRAAL_COMPLETION_SCOPE, vec![
+                (Some("graal-cpusampler"), python::graal::COMPLETION_SCOPE, vec![
                     "Only declared CPUSampler output and the owned runtime process identity are checked; this does not establish an inventory of child processes or sampling coverage of every thread".into(),
                     "Graal thread labels remain guest-thread labels rather than OS thread IDs; profiling and runtime startup contribute overhead".into(),
                     "Graal CPUSampler writes its output-file diagnostic to target stdout; no byte-exact stdout non-interference is claimed".into(),
