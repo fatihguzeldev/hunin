@@ -1,3 +1,4 @@
+use super::cancellation::CountCancellation;
 use anyhow::{Context, Result};
 use clap::Args;
 use hunin::operations::Operations;
@@ -77,22 +78,47 @@ pub async fn measure(operations: &Operations, options: CountOptions) -> Result<V
         params.as_object_mut().unwrap().remove("request_id");
         return operations.call("calls.plan", params).await;
     }
-    let started = operations.call("calls.measure", params).await?;
+    let mut cancellation = CountCancellation::new(async {
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    });
+    let started = cancellation
+        .wait(operations.call("calls.measure", params), || async {
+            Ok(())
+        })
+        .await?;
     let Some(id) = started["run"]["id"].as_str() else {
         return Ok(started);
     };
+    if cancellation.requested() {
+        operations.call("runs.cancel", json!({"run_id":id})).await?;
+    }
     let mut report;
     loop {
-        report = operations
-            .call("calls.query", json!({"run_id":id,"limit":1000}))
+        report = cancellation
+            .wait(
+                operations.call("calls.query", json!({"run_id":id,"limit":1000})),
+                || async {
+                    operations.call("runs.cancel", json!({"run_id":id})).await?;
+                    Ok(())
+                },
+            )
             .await?;
         if report["status"] != "running" {
             break;
         }
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {},
-            _ = tokio::signal::ctrl_c() => { operations.call("runs.cancel", json!({"run_id":id})).await?; }
-        }
+        cancellation
+            .wait(
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    Ok(())
+                },
+                || async {
+                    operations.call("runs.cancel", json!({"run_id":id})).await?;
+                    Ok(())
+                },
+            )
+            .await?;
     }
     let mut cursor = report["next_cursor"].as_str().map(str::to_owned);
     let mut seen = std::collections::HashSet::new();
@@ -101,12 +127,20 @@ pub async fn measure(operations: &Operations, options: CountOptions) -> Result<V
             seen.insert(next.clone()),
             "function-count pagination did not advance"
         );
-        let page = operations
-            .call(
-                "calls.query",
-                json!({"run_id":id,"cursor":next,"limit":1000}),
+        let interrupted_before = cancellation.requested();
+        let page = cancellation
+            .wait(
+                operations.call(
+                    "calls.query",
+                    json!({"run_id":id,"cursor":next,"limit":1000}),
+                ),
+                || async { Ok(()) },
             )
             .await?;
+        anyhow::ensure!(
+            interrupted_before || !cancellation.requested(),
+            "function-count output interrupted; retained counts remain available"
+        );
         let counts = page["counts"]
             .as_array()
             .context("function counts missing")?;
