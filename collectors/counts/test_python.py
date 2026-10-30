@@ -122,6 +122,18 @@ print(recur(6),sum(gen()))
         self.assertEqual(value[2:], ["__main__", "BuiltinImporter"])
         self.assertEqual(completion["status"], "complete")
 
+    def test_bootstrap_asset_paths_do_not_expand_target_import_search(self):
+        result, completion, _ = self.capture(
+            ["-c", "import json,sys;print(json.dumps(sys.path))"],
+            functions=[{"name": "unobserved"}],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        paths = json.loads(result.stdout)
+        self.assertEqual(paths[0], "")
+        self.assertNotIn(str(ROOT), paths)
+        self.assertNotIn(str(ROOT.parent / "python"), paths)
+        self.assertEqual(completion["status"], "complete")
+
     def test_table_overflow_preserves_target_but_marks_counts_incomplete(self):
         result, completion, _ = self.capture(
             ["-c", "def leaf(): pass\nleaf();print('ok')"], max_functions=1

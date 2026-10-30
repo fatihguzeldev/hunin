@@ -29,7 +29,10 @@ def main():
     spec.loader.exec_module(native)
     native.configure(config["max_functions"], config["functions"])
     sys.path.insert(0, str(ROOT.parent / "python"))
-    from hunin_capture.target import run_target
+    try:
+        from hunin_capture.target import run_target
+    finally:
+        sys.path.pop(0)
 
     tool = None
     for candidate in reversed(range(6)):

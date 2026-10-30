@@ -17,6 +17,7 @@ pub(super) fn prerequisite(request: &CaptureRequest) -> Result<Value> {
         Command::new(&request.command[0])
             .envs(&request.env)
             .current_dir(&request.cwd)
+            .arg("-B")
             .arg(assets().join("collectors/counts/build.py"))
             .arg("--probe"),
     )?;
