@@ -1,4 +1,4 @@
-//! Regular-file work with measured byte bounds and cooperative checkpoints.
+//! Analysis content identity and regular-file work with bounded reads/checkpoints.
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::{
@@ -8,6 +8,10 @@ use std::{
 };
 
 const CHUNK_BYTES: usize = 64 * 1024;
+
+pub(super) fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
 
 #[derive(Debug)]
 pub(super) struct ByteLimitExceeded;

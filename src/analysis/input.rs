@@ -1,5 +1,5 @@
 //! Canonical, size-bounded analyzer inputs from one selected-observation snapshot.
-use super::{applicability, package};
+use super::{applicability, files};
 use crate::storage::{RecordReadLimit, Store};
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -113,7 +113,7 @@ fn snapshot_with_limit(
         output.write_all(b"}")?;
         checkpoint()?;
         Ok(Input {
-            fingerprint: package::digest(&output.bytes),
+            fingerprint: files::digest(&output.bytes),
             bytes: output.bytes,
             run_id: run_id.to_owned(),
             result_ids: selected.result_ids().to_owned(),
@@ -192,7 +192,7 @@ mod tests {
         let input =
             snapshot_with_limit(&store, &analysis, "recording", bytes.len(), || Ok(())).unwrap();
         assert_eq!(input.bytes, bytes);
-        assert_eq!(input.fingerprint, package::digest(&bytes));
+        assert_eq!(input.fingerprint, files::digest(&bytes));
         assert_eq!(input.record_ids, HashSet::from(["input".to_owned()]));
         assert!(
             snapshot_with_limit(&store, &analysis, "recording", bytes.len() - 1, || Ok(()))
@@ -239,7 +239,7 @@ mod tests {
                 let records = store.records_for_result_ids("sizing", &result_ids).unwrap();
                 let value = json!({"run":run,"records":records,"artifacts":[],"input_result_sets":result_ids,"analyzer":{"id":"sizing","version":"1","package_digest":"sizing-package"}});
                 let bytes = serde_json::to_vec(&value).unwrap();
-                (value, package::digest(&bytes))
+                (value, files::digest(&bytes))
             }
             let (value, fingerprint) = legacy(&store);
             let bytes = serde_json::to_vec(&value).unwrap().len();
