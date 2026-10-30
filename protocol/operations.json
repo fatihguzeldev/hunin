@@ -2088,6 +2088,33 @@
         "kind": "read",
         "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
         "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
       }
     }
   },
@@ -2165,7 +2192,47 @@
       "hunin/lifecycle": {
         "kind": "mutation",
         "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
-        "version": 1
+        "version": 1,
+        "accepted_handle": {
+          "output": "run.id",
+          "when": "run is present; a blocked plan has no recording handle"
+        },
+        "cancel": {
+          "operation": "runs.cancel",
+          "parameter": "run_id"
+        },
+        "reconnect": {
+          "operation": "calls.query",
+          "parameter": "run_id"
+        }
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/job-admission": {
+        "scope": "shared_recording_engine_family",
+        "default_maximum_in_flight": 4,
+        "queue": "fail_fast",
+        "reservation": "Preparation through terminal evidence, monitor and owner cleanup. Engine clones share the counter; separately constructed Engines and processes are independent. Constructor configuration may select another limit."
       }
     }
   },
@@ -2199,6 +2266,44 @@
         "kind": "read",
         "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
         "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded",
+          "conflict"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
       }
     }
   }

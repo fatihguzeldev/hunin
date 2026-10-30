@@ -581,6 +581,7 @@ export type CountMeasurement = {
 };
 
 export type CountFunction = {
+  "code_id"?: string;
   "name": string;
   "file": string | null;
   "line": number | null;
@@ -1097,7 +1098,7 @@ export function isCountMeasurement(value: unknown): value is CountMeasurement {
 }
 
 export function isCountFunction(value: unknown): value is CountFunction {
-  return (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && (typeof value["name"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"]) && value["line"] >= 1) || (value["line"] === null)) && Object.keys(value).every(key => ["name","file","line"].includes(key)));
+  return (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && (!Object.hasOwn(value, "code_id") || (typeof value["code_id"] === "string")) && (typeof value["name"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"]) && value["line"] >= 1) || (value["line"] === null)) && Object.keys(value).every(key => ["code_id","name","file","line"].includes(key)));
 }
 
 export function isFunctionCount(value: unknown): value is FunctionCount {

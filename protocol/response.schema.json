@@ -1953,7 +1953,7 @@
         "functions": {
           "type": "array",
           "items": {
-            "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountSelector"
+            "$ref": "#/$defs/CountSelector"
           }
         },
         "requires_rebuild": {
@@ -1982,7 +1982,7 @@
       "type": "object",
       "properties": {
         "plan": {
-          "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountPlan"
+          "$ref": "#/$defs/CountPlan"
         }
       },
       "required": ["plan"],
@@ -1992,10 +1992,10 @@
       "type": "object",
       "properties": {
         "run": {
-          "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/Run"
+          "$ref": "#/$defs/Run"
         },
         "plan": {
-          "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountPlan"
+          "$ref": "#/$defs/CountPlan"
         },
         "parent_run_id": {
           "type": "string"
@@ -2010,6 +2010,10 @@
     "CountFunction": {
       "type": "object",
       "properties": {
+        "code_id": {
+          "type": "string",
+          "description": "Optional identity of a distinct observed code instance within this counting recording."
+        },
         "name": {
           "type": "string"
         },
@@ -2028,7 +2032,7 @@
       "type": "object",
       "properties": {
         "function": {
-          "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountFunction"
+          "$ref": "#/$defs/CountFunction"
         },
         "calls": {
           "type": "integer",
@@ -2075,7 +2079,7 @@
         "counts": {
           "type": "array",
           "items": {
-            "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/FunctionCount"
+            "$ref": "#/$defs/FunctionCount"
           }
         },
         "next_cursor": {

@@ -277,9 +277,9 @@ async fn reopening_a_parent_reads_its_retained_child_without_relaunching_and_pre
     child.source = json!({"collector_identity":{"name":"fixture"},"call_counting":{"parent_run_id":"sampled","request_key":"key","requested_scope":"selected"},"collection_status":"completed"});
     store.save_run(&child).unwrap();
     // An admitted child survives even when its reservation acknowledgement was never saved.
-    let attrs = json!({"clock":"unix_epoch","clock_alignment":"direct_epoch","method":"fixture","collection_scope":"all_then_filter","function":{"name":"parse","file":"parser.py","line":1}});
+    let attrs = json!({"clock":"unix_epoch","clock_alignment":"direct_epoch","method":"fixture","collection_scope":"all_then_filter","count_semantics":"starts","counter_temporality":"delta","function":{"name":"parse","file":"parser.py","line":1,"code_id":"fixture:instance"}});
     store.accept("counted","counts",&[
-        json!({"schema_version":1,"kind":"metric","id":"count","run_id":"counted","producer_id":"calls:counted","pid":1,"tid":"process","timestamp_us":100,"basis":"observed","name":"function.calls","value":0,"unit":"count","scope":"process","attributes":attrs}),
+        json!({"schema_version":1,"kind":"metric","id":"count","run_id":"counted","producer_id":"calls:counted","pid":1,"tid":"process","timestamp_us":100,"basis":"observed","name":"function.calls","value":0.0,"unit":"count","scope":"process","attributes":attrs}),
         json!({"schema_version":1,"kind":"event","id":"complete","run_id":"counted","producer_id":"calls:counted","pid":1,"tid":"process","timestamp_us":100,"basis":"observed","name":"function.counts.complete","attributes":{"status":"complete","clock":"unix_epoch","clock_alignment":"direct_epoch","method":"fixture","collection_scope":"all_then_filter"}})
     ]).unwrap();
     let operations = Operations::new(store.clone());
@@ -291,7 +291,58 @@ async fn reopening_a_parent_reads_its_retained_child_without_relaunching_and_pre
     assert_eq!(result["parent_run_id"], "sampled");
     assert_eq!(result["status"], "complete");
     assert_eq!(result["counts"][0]["calls"], 0);
+    assert_eq!(
+        result["counts"][0]["function"]["code_id"],
+        "fixture:instance"
+    );
     assert!(result["counts"][0]["resumes"].is_null());
     assert_eq!(store.runs(100, 0).unwrap().len(), 2);
+    child.correctness["passed"] = serde_json::Value::Null;
+    store.save_run(&child).unwrap();
+    assert_ne!(
+        operations
+            .call("calls.query", json!({"run_id":"sampled"}))
+            .await
+            .unwrap()["status"],
+        "complete"
+    );
     operations.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn arbitrary_accepted_metrics_cannot_masquerade_as_function_invocations() {
+    for (pointer, contradictory) in [
+        ("/unit", json!("bytes")),
+        ("/scope", json!("thread")),
+        ("/basis", json!("explicit")),
+        ("/attributes/count_semantics", json!("resumes")),
+        ("/attributes/counter_temporality", json!("cumulative")),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        parent(&store, "node");
+        let mut child = store.run("sampled").unwrap();
+        child.id = "counted".into();
+        child.source = json!({"collector_identity":{"name":"fixture"},"call_counting":{"parent_run_id":"sampled","requested_scope":"all"},"collection_status":"completed"});
+        store.save_run(&child).unwrap();
+        let mut metric = json!({"schema_version":1,"kind":"metric","id":"count","run_id":"counted","producer_id":"calls:counted","pid":1,"tid":"process","timestamp_us":100,"basis":"observed","name":"function.calls","value":40,"unit":"count","scope":"process","attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch","method":"fixture","collection_scope":"all_then_filter","counter_temporality":"delta","count_semantics":"starts","function":{"name":"parse","file":null,"line":null}}});
+        *metric.pointer_mut(pointer).unwrap() = contradictory;
+        store
+            .accept("counted", "count-control", &[metric.clone()])
+            .unwrap();
+        let operations = Operations::new(store.clone());
+        let result = operations
+            .call("calls.query", json!({"run_id":"counted"}))
+            .await;
+        assert!(
+            result.is_err(),
+            "{pointer} must not be presented as an invocation count"
+        );
+        assert_eq!(store.runs(100, 0).unwrap().len(), 2);
+        assert_eq!(
+            store.records("counted").unwrap()[0],
+            metric
+        );
+        operations.shutdown().await.unwrap();
+    }
 }

@@ -219,11 +219,16 @@ pub(super) fn query(
                 }
                 if record["kind"] != "metric" || !matches!(name, "function.calls" | "function.resumes") { return Ok(()); }
                 let function = &attributes["function"];
+                anyhow::ensure!(record["basis"] == "observed" && record["unit"] == "count" && record["scope"] == "process" && attributes["counter_temporality"] == "delta" && attributes["count_semantics"] == if name == "function.calls" { "starts" } else { "resumes" }, "accepted function counter has incompatible measurement semantics");
                 let Some(function_name) = function["name"].as_str() else { bail!("accepted call counter is missing its function identity"); };
                 let value = unsigned_integer(&record["value"]).context("accepted function count is not an exact integer")?;
                 anyhow::ensure!(value <= 9_007_199_254_740_991, "function count exceeds the cross-language exact integer range");
                 let key = serde_json::to_string(function)?;
                 let entry = rows.entry(key).or_insert_with(|| json!({"function":{"name":function_name,"file":function["file"],"line":function["line"]},"calls":null,"resumes":null}));
+                if let Some(code_id) = function.get("code_id") {
+                    anyhow::ensure!(code_id.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 4096), "accepted function code identity is invalid");
+                    entry["function"]["code_id"] = code_id.clone();
+                }
                 let field = if name == "function.calls" {"calls"} else {"resumes"};
                 anyhow::ensure!(entry[field].is_null(), "duplicate function count in one selected counting window");
                 entry[field] = json!(value);
@@ -239,7 +244,10 @@ pub(super) fn query(
         "canceled"
     } else if run.correctness["passed"] == false {
         "failed"
-    } else if complete_event && run.source["collection_status"] == "completed" {
+    } else if complete_event
+        && run.source["collection_status"] == "completed"
+        && run.correctness["passed"] == true
+    {
         "complete"
     } else if run.correctness["passed"] == true {
         "incomplete"
