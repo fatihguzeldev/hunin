@@ -1,5 +1,6 @@
 //! Recording-family admission, preparation and durable ownership handoff.
-use super::{Engine, StartRequest, blocking, collection, correctness, identity};
+use super::{Engine, StartRequest, blocking, correctness, identity};
+use crate::collection;
 use crate::model::{
     now_us,
     runs::{Run, RunStatus},
@@ -73,7 +74,7 @@ impl Engine {
         let runtime = request
             .runtime
             .clone()
-            .unwrap_or_else(|| super::detect_runtime(&request.command[0]));
+            .unwrap_or_else(|| detect_runtime(&request.command[0]));
         let runtime = if runtime.eq_ignore_ascii_case("none") {
             "none".to_owned()
         } else {
@@ -177,4 +178,28 @@ impl Engine {
         });
         Ok(returned)
     }
+}
+
+fn detect_runtime(command: &str) -> String {
+    let name = std::path::Path::new(command)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    if name.contains("graal") {
+        "graalpy"
+    } else if name.contains("pypy") {
+        "pypy"
+    } else if name.contains("python") {
+        "cpython"
+    } else if name == "node" {
+        "node"
+    } else if name == "bun" {
+        "bun"
+    } else if name == "deno" {
+        "deno"
+    } else {
+        "native"
+    }
+    .into()
 }

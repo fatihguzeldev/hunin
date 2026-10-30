@@ -1,9 +1,12 @@
 //! Synchronous correctness, raw retention, normalization and SDK publication.
-use super::{
-    CaptureRequest, Engine, Run, RunStatus, collection, correctness, native, resources, retention,
-    sdk,
+use super::{Engine, correctness, resources, retention, sdk};
+use crate::{
+    collection::{self, CaptureRequest, native},
+    model::{
+        now_us,
+        runs::{Run, RunStatus},
+    },
 };
-use crate::model::now_us;
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
