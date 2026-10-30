@@ -3,7 +3,7 @@ import { operation, type Artifact } from '../api';
 import { badge, button, el, empty, errorView, loading } from '../dom';
 import { bytes, numeric } from '../format';
 import type { Observation } from '../record.generated';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 import { hasInspectableSource } from '../source/paths';
 import { canReanalyze } from '../artifact';
 import { observationLabel, referenceIds } from '../observation';

@@ -2,7 +2,7 @@ import { operation } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { duration, numeric } from '../format';
 import type { Observation } from '../record.generated';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 import { hasInspectableSource } from '../source/paths';
 import {
   isModuleLifetime,

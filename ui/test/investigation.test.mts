@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Investigations, sourceReturnDepth } from '../src/investigation.js';
+import { Investigations } from '../src/investigation/state.js';
+import { sourceReturnDepth } from '../src/investigation/history.js';
 
 function session() {
   const values = new Map<string, string>();

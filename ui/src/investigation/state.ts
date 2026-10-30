@@ -1,4 +1,4 @@
-import type { PageLocation } from './pagination.js';
+import type { PageLocation } from '../pagination.js';
 
 export type ProfileInvestigation = {
   unit: string;
@@ -223,14 +223,6 @@ function decode(value: unknown): SavedInvestigation | undefined {
     resultIdentity: text(saved.resultIdentity),
     state: result,
   };
-}
-
-/** Older private history entries used a boolean for the first source window. */
-export function sourceReturnDepth(value: unknown): number {
-  if (value === true) return 1;
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-    ? value
-    : 0;
 }
 
 /** Own private investigation preferences; raw observations and source bytes stay in the service. */

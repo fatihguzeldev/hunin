@@ -2,7 +2,7 @@ import type { Comparison } from '../api';
 import { badge, button, el, empty, field } from '../dom';
 import { numeric, percentage } from '../format';
 import { sourceIdentityMetadata } from '../metadata';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 
 function correctness(value: unknown): HTMLElement {
   const passed =

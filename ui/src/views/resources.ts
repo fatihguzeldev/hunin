@@ -1,7 +1,7 @@
 import { operation, type Series } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
 import { duration, numeric } from '../format';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 import type { PageLocation } from '../pagination';
 
 function plot(series: Series): SVGSVGElement {

@@ -1,15 +1,12 @@
-import {
-  Investigations,
-  sourceReturnDepth,
-  type Investigation,
-  type SourceSelection,
-} from './investigation';
+import { Investigations, type SourceSelection } from './investigation/state';
+import { InvestigationHistory } from './investigation/history';
+import type { View } from './investigation/view';
 import { AnalysisWatch } from './analysis/watch';
 import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
 import { runSource, runStatusTone } from './recordings/presentation';
 import { RecordingCatalog } from './recordings/catalog';
-import { operation, type Run, type Summary } from './api';
+import { operation, type Run } from './api';
 import {
   recordingDetails,
   recordingMetadata,
@@ -23,22 +20,6 @@ import { removeRecordingDialog } from './recordings/remove';
 import { capabilities } from './views/capabilities';
 import { overview } from './views/overview';
 import { scenarios } from './views/scenarios';
-
-export type ViewContext = {
-  run: Run;
-  summary?: Summary;
-  runs: readonly Run[];
-  investigation: Investigation;
-  signal: AbortSignal;
-  persist: (mode?: 'push' | 'replace') => void;
-  refresh: (message?: string) => void;
-  followAttempt: (id: string) => void;
-  source: (path: string, line?: number | null, codeId?: string | null) => void;
-};
-export type View = {
-  name: string;
-  render: (context: ViewContext) => Promise<HTMLElement>;
-};
 
 export class Workspace {
   private catalog = new RecordingCatalog();
@@ -54,6 +35,7 @@ export class Workspace {
   private poll: ReturnType<typeof setTimeout> | undefined;
   private views: Record<string, View>;
   private investigations: Investigations;
+  private history: InvestigationHistory;
   private renderController: AbortController | undefined;
   private pendingInvalidation: 'changed' | 'unconfirmed' | undefined;
   private returningFromSource = false;
@@ -77,6 +59,7 @@ export class Workspace {
       /* Private state remains in memory. */
     }
     this.investigations = new Investigations(storage);
+    this.history = new InvestigationHistory(this.investigations);
     this.analysisWatch = new AnalysisWatch(storage);
     this.attemptMonitor = new AttemptMonitor(this.analysisWatch, {
       updated: (runId) => this.updateAttemptNotice(runId),
@@ -106,7 +89,7 @@ export class Workspace {
       ...views,
     };
     this.normalizeTab();
-    this.restoreHistory();
+    this.history.restore(this.selected);
     window.addEventListener('pagehide', () => {
       this.attemptMonitor.pause();
       this.renderController?.abort();
@@ -127,7 +110,7 @@ export class Workspace {
       this.selected = params.get('run') ?? '';
       this.tab = params.get('view') ?? 'overview';
       this.normalizeTab();
-      this.restoreHistory();
+      this.history.restore(this.selected);
       this.returningFromSource =
         wasSource && !this.investigations.forRun(this.selected).source;
       this.renderRail();
@@ -380,65 +363,16 @@ export class Workspace {
     void this.render();
   }
 
-  private historyState():
-    | { runId: string; saved: unknown; sourceReturn: number }
-    | undefined {
-    const value: unknown = history.state;
-    if (!value || typeof value !== 'object' || !('hunin' in value))
-      return undefined;
-    const state = value.hunin;
-    if (
-      !state ||
-      typeof state !== 'object' ||
-      !('runId' in state) ||
-      typeof state.runId !== 'string' ||
-      !('saved' in state)
-    )
-      return undefined;
-    return {
-      runId: state.runId,
-      saved: state.saved,
-      sourceReturn: sourceReturnDepth(
-        'sourceReturn' in state ? state.sourceReturn : undefined,
-      ),
-    };
-  }
-
-  private restoreHistory(): void {
-    const state = this.historyState();
-    if (this.selected && state?.runId === this.selected)
-      this.investigations.restore(this.selected, state.saved);
-  }
-
   private writeLocation(
     mode: 'push' | 'replace' = 'replace',
     sourceEntry = 0,
   ): void {
     if (mode === 'push') this.navigationEpoch++;
-    const url = new URL(location.href);
-    if (this.selected) url.searchParams.set('run', this.selected);
-    else url.searchParams.delete('run');
-    url.searchParams.set('view', this.tab);
-    const previous = this.historyState();
-    const source = this.selected
-      ? this.investigations.forRun(this.selected).source
-      : undefined;
-    const state = {
-      hunin: {
-        runId: this.selected,
-        saved: this.selected
-          ? this.investigations.capture(this.selected)
-          : undefined,
-        sourceReturn: source
-          ? sourceEntry ||
-            (mode === 'replace' && previous?.runId === this.selected
-              ? previous.sourceReturn
-              : 0)
-          : 0,
-      },
-    };
-    history[mode === 'push' ? 'pushState' : 'replaceState'](state, '', url);
-    if (this.selected) this.investigations.persist(this.selected);
+    this.history.write(
+      { runId: this.selected, view: this.tab },
+      mode,
+      sourceEntry,
+    );
   }
 
   private async render(): Promise<void> {
@@ -571,7 +505,7 @@ export class Workspace {
         const back = button(
           `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
           () => {
-            const entry = this.historyState();
+            const entry = this.history.state();
             const depth = entry?.runId === run.id ? entry.sourceReturn : 0;
             if (depth > 0 && depth < history.length) history.go(-depth);
             else {
@@ -594,7 +528,7 @@ export class Workspace {
             signal,
             (startLine) => {
               if (signal.aborted) return;
-              const depth = this.historyState()?.sourceReturn ?? 0;
+              const depth = this.history.state()?.sourceReturn ?? 0;
               investigation.source = { ...selected, startLine };
               this.writeLocation('push', depth ? depth + 1 : 0);
               void this.render();

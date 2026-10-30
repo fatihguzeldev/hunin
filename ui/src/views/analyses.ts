@@ -4,7 +4,7 @@ import { operation, type Analysis, type AnalysisResult } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { date } from '../format';
 import { parseCommand } from '../command';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 import { pagedList } from '../paged-list';
 
 export async function analyses(context: ViewContext): Promise<HTMLElement> {

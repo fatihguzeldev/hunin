@@ -3,7 +3,7 @@ import { comparisonResults } from './comparison-results';
 import { linkedRequest } from '../requests';
 import { recordingHistory } from '../recordings/history';
 import { button, el, empty, errorView, field, loading } from '../dom';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 
 export async function comparison(context: ViewContext): Promise<HTMLElement> {
   if (context.runs.length < 2)

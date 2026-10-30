@@ -2,7 +2,7 @@ import { linkedRequest } from '../requests';
 import { operation, type TreeNode } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
 import { numeric } from '../format';
-import type { ViewContext } from '../workspace';
+import type { ViewContext } from '../investigation/view';
 import { weight, weightShare, totalWeight } from '../profile-weight';
 import { hasInspectableSource } from '../source/paths';
 
