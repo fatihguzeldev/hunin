@@ -16,7 +16,7 @@ pub struct ProjectSessions {
 
 #[derive(Clone)]
 enum Source {
-    Direct(Operations),
+    Direct(Box<Operations>),
     Registry {
         registry: ProjectRegistry,
         selected_project_id: Option<String>,
@@ -34,7 +34,7 @@ type Session = watch::Receiver<Option<std::result::Result<(Project, Operations),
 impl ProjectSessions {
     pub fn direct(operations: Operations) -> Self {
         Self {
-            source: Source::Direct(operations),
+            source: Source::Direct(Box::new(operations)),
             state: Arc::new(Mutex::new(SessionState::default())),
         }
     }
@@ -77,7 +77,7 @@ impl ProjectSessions {
                     project_id.is_none(),
                     "This server uses a direct store; project_id must be omitted"
                 );
-                Ok(operations.clone())
+                Ok(operations.as_ref().clone())
             }
             Source::Registry { registry, .. } => {
                 let id = project_id.context("Select a project and include its project_id")?;
