@@ -153,6 +153,7 @@ jobs:
           environment = dict(os.environ)
           if sys.platform != 'win32':
               environment['HUNIN_TEST_COUNTS_PYTHON'] = sys.executable
+              environment['HUNIN_TEST_COUNTS_NATIVE'] = '1'
           with path.open('w+b') as log:
               log.write(('Actual counting interpreter: ' + environment.get('HUNIN_TEST_COUNTS_PYTHON', 'Windows collection unverified; separate prerequisite control') + '\n').encode())
               log.flush()

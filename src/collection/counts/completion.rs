@@ -131,6 +131,10 @@ pub(in crate::collection) fn validate(
                 "function-count metric name and semantics disagree"
             );
             ensure!(
+                attributes["counter_temporality"] == "delta",
+                "function count must declare delta counter temporality"
+            );
+            ensure!(
                 record["value"]
                     .as_u64()
                     .is_some_and(|value| value > 0 && value <= 9_007_199_254_740_991),
@@ -157,6 +161,14 @@ pub(in crate::collection) fn validate(
                         .is_some_and(|value| value > 0 && value <= u64::from(u32::MAX)),
                 "function-count line identity is invalid"
             );
+            if let Some(code_id) = function.get("code_id") {
+                ensure!(
+                    code_id
+                        .as_str()
+                        .is_some_and(|value| !value.is_empty() && value.len() <= 4096),
+                    "function-count code identity must be a bounded string when present"
+                );
+            }
             let key = serde_json::to_string(function)?;
             functions.insert(key.clone());
             ensure!(
@@ -235,11 +247,18 @@ mod tests {
 
     #[test]
     fn coherent_checksums_do_not_override_metric_semantics_or_function_bounds() {
-        for fault in ["method", "zero", "bound", "status"] {
+        for fault in [
+            "method",
+            "zero",
+            "bound",
+            "status",
+            "temporality",
+            "code_id",
+        ] {
             let (_root, request, files, mut report) = fixture();
             let event: Value =
                 serde_json::from_str(std::fs::read_to_string(&files[0]).unwrap().trim()).unwrap();
-            let mut metric = json!({"kind":"metric","name":"function.calls","run_id":"control","producer_id":"calls:control","basis":"observed","unit":"count","scope":"process","value":3,"attributes":{"method":"compiler-hooks","collection_scope":"all_then_filter","count_semantics":"starts","function":{"name":"leaf","file":null,"line":null}}});
+            let mut metric = json!({"kind":"metric","name":"function.calls","run_id":"control","producer_id":"calls:control","basis":"observed","unit":"count","scope":"process","value":3,"attributes":{"method":"compiler-hooks","collection_scope":"all_then_filter","counter_temporality":"delta","count_semantics":"starts","function":{"name":"leaf","file":null,"line":null}}});
             let mut rows = vec![metric.clone(), event];
             match fault {
                 "method" => rows[0]["attributes"]["method"] = json!("other"),
@@ -249,6 +268,8 @@ mod tests {
                     rows.insert(1, metric);
                 }
                 "status" => rows[1]["attributes"]["status"] = json!("incomplete"),
+                "temporality" => rows[0]["attributes"]["counter_temporality"] = json!("cumulative"),
+                "code_id" => rows[0]["attributes"]["function"]["code_id"] = json!(17),
                 _ => unreachable!(),
             }
             let data = rows

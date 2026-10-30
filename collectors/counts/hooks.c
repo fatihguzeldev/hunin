@@ -170,7 +170,8 @@ __attribute__((destructor(101), no_instrument_function)) static void finish(void
                  ",\"basis\":\"observed\",\"name\":\"function.calls\",\"value\":%" PRIu64
                  ",\"unit\":\"count\",\"scope\":\"process\",\"attributes\":{\"function\":{\"name\":"
                  "\"%s\",\"file\":null,\"line\":null},\"address\":\"%s\",\"count_semantics\":"
-                 "\"starts\",\"method\":\"compiler-hooks\",\"clock\":\"unix_epoch\",\"clock_"
+                 "\"starts\",\"counter_temporality\":\"delta\",\"method\":\"compiler-hooks\","
+                 "\"clock\":\"unix_epoch\",\"clock_"
                  "alignment\":\"direct_epoch\",\"clock_source\":\"clock_gettime(CLOCK_REALTIME)\","
                  "\"collection_scope\":\"all_then_filter\",\"function_identity_kind\":\"linked_"
                  "symbol_or_address\",\"window_started_at_us\":%" PRIu64
