@@ -339,10 +339,7 @@ async fn arbitrary_accepted_metrics_cannot_masquerade_as_function_invocations() 
             "{pointer} must not be presented as an invocation count"
         );
         assert_eq!(store.runs(100, 0).unwrap().len(), 2);
-        assert_eq!(
-            store.records("counted").unwrap()[0],
-            metric
-        );
+        assert_eq!(store.records("counted").unwrap()[0], metric);
         operations.shutdown().await.unwrap();
     }
 }
