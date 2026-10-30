@@ -10,6 +10,22 @@ use std::{net::SocketAddr, path::PathBuf};
 pub(super) struct Cli {
     #[arg(long, env = "HUNIN_DATA_DIR", global = true)]
     pub(super) data_dir: Option<PathBuf>,
+    /// Select a project by stable ID or unambiguous name.
+    #[arg(
+        long,
+        env = "HUNIN_PROJECT",
+        global = true,
+        conflicts_with = "data_dir"
+    )]
+    pub(super) project: Option<String>,
+    /// Root containing registry.sqlite and project stores.
+    #[arg(
+        long,
+        env = "HUNIN_REGISTRY_DIR",
+        global = true,
+        conflicts_with = "data_dir"
+    )]
+    pub(super) registry_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub(super) command: Command,
 }
@@ -18,6 +34,11 @@ pub(super) enum Command {
     /// Describe compiled contracts without opening a recording store.
     BuildInfo,
     Capabilities,
+    /// Manage project discovery without opening every recording database.
+    Projects {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
     Run {
         #[arg(long)]
         name: Option<String>,
@@ -71,6 +92,25 @@ pub(super) enum Command {
         bind: SocketAddr,
         #[arg(long, env = "HUNIN_UI_DIR")]
         ui_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum ProjectCommand {
+    List,
+    /// Create a project with an independent store.
+    Create {
+        name: String,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
+    /// Register an existing store; its recording data is kept in place.
+    Register {
+        name: String,
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
 }
 

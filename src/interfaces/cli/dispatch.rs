@@ -1,6 +1,9 @@
 //! Adapt parsed commands and own their foreground job waits/output.
-use super::arguments::{Cli, Command};
-use crate::{interfaces, model::runs::RunStatus, operations::Operations, storage::Store};
+use super::arguments::{Cli, Command, ProjectCommand};
+use crate::{
+    interfaces, model::runs::RunStatus, operations::Operations, projects::ProjectRegistry,
+    storage::Store,
+};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -13,12 +16,55 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let root = cli.data_dir.unwrap_or_else(|| {
-        dirs::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("hunin")
-    });
-    let store = Store::open(&root)?;
+    if let Command::Projects { command } = cli.command {
+        anyhow::ensure!(
+            cli.data_dir.is_none(),
+            "Project management uses --registry-dir, not --data-dir"
+        );
+        let registry = ProjectRegistry::open(&cli.registry_dir.unwrap_or_else(default_root))?;
+        let result = match command {
+            ProjectCommand::List => json!({"projects":registry.list()?}),
+            ProjectCommand::Create { name, workspace } => {
+                json!({"project":registry.create(&name, workspace.as_deref())?})
+            }
+            ProjectCommand::Register {
+                name,
+                store,
+                workspace,
+            } => json!({"project":registry.register(&name, &store, workspace.as_deref())?}),
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    if let Command::Ui { bind, ui_dir } = cli.command {
+        let sessions = if let Some(root) = cli.data_dir {
+            interfaces::projects::ProjectSessions::direct(Operations::try_new(Store::open(&root)?)?)
+        } else {
+            let registry = ProjectRegistry::open(&cli.registry_dir.unwrap_or_else(default_root))?;
+            let selected = cli
+                .project
+                .as_deref()
+                .map(|selector| registry.get(selector).map(|project| project.id))
+                .transpose()?;
+            interfaces::projects::ProjectSessions::registry(registry, selected)
+        };
+        return interfaces::http::serve_projects(sessions, bind, ui_path(ui_dir)?).await;
+    }
+    let store = if let Some(root) = cli.data_dir {
+        Store::open(&root)?
+    } else {
+        let registry = ProjectRegistry::open(&cli.registry_dir.unwrap_or_else(default_root))?;
+        let project = if let Some(selector) = cli.project {
+            registry.get(&selector)?
+        } else {
+            let cwd = match &cli.command {
+                Command::Run { cwd: Some(cwd), .. } => cwd.clone(),
+                _ => std::env::current_dir()?,
+            };
+            registry.resolve_or_create(&cwd)?
+        };
+        registry.open_store(&project)?
+    };
     let operations = if machine_errors {
         Operations::try_new(store)?
     } else {
@@ -26,6 +72,9 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
     };
     let value = match cli.command {
         Command::BuildInfo => unreachable!("build-info returns before opening a store"),
+        Command::Projects { .. } | Command::Ui { .. } => {
+            unreachable!("project management and UI return before selecting an operation store")
+        }
         Command::Capabilities => operations.call("capabilities", json!({})).await?,
         Command::Run {
             name,
@@ -133,18 +182,27 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             result
         }
         Command::Mcp => return interfaces::mcp::serve(operations).await,
-        Command::Ui { bind, ui_dir } => {
-            let adjacent = std::env::current_exe()?.parent().unwrap().join("ui");
-            let ui = ui_dir.unwrap_or_else(|| {
-                if adjacent.join("index.html").is_file() {
-                    adjacent
-                } else {
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/dist")
-                }
-            });
-            return interfaces::http::serve(operations, bind, ui).await;
-        }
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn default_root() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("hunin")
+}
+
+fn ui_path(ui_dir: Option<PathBuf>) -> Result<PathBuf> {
+    let adjacent = std::env::current_exe()?
+        .parent()
+        .context("executable directory missing")?
+        .join("ui");
+    Ok(ui_dir.unwrap_or_else(|| {
+        if adjacent.join("index.html").is_file() {
+            adjacent
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/dist")
+        }
+    }))
 }
