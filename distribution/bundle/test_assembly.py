@@ -36,6 +36,7 @@ RUNTIME_FILES = (
     "sdk/python/pyproject.toml",
     "sdk/python/hunin/__init__.py",
     "sdk/python/hunin/instrumentation.py",
+    "sdk/python/hunin/writer.py",
     "sdk/rust/Cargo.toml",
     "sdk/rust/src/lib.rs",
     "sdk/rust/src/recording.rs",

@@ -85,7 +85,8 @@
       "files": {
         "pyproject.toml": "pyproject.toml",
         "hunin/__init__.py": "hunin/__init__.py",
-        "hunin/instrumentation.py": "hunin/instrumentation.py"
+        "hunin/instrumentation.py": "hunin/instrumentation.py",
+        "hunin/writer.py": "hunin/writer.py"
       }
     },
     {

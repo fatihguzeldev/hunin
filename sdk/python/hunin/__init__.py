@@ -6,13 +6,11 @@ from .instrumentation import (
     capture_context,
     context,
     counter,
-    enabled,
     event,
-    flush,
-    last_error,
     relation,
     span,
 )
+from .writer import enabled, flush, last_error
 
 __all__ = [
     "Span",
