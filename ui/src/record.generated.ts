@@ -32,7 +32,10 @@ type RecordBase = {
   "relation"?: string;
   "evidence"?: Array<string>;
   "basis": "observed" | "sampled" | "explicit" | "derived";
-  "attributes"?: Record<string, unknown>;
+  "attributes"?: {
+  "clock"?: unknown;
+  "clock_alignment"?: string;
+};
 };
 
 export type Observation = RecordBase & (

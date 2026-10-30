@@ -347,6 +347,58 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{64}$",
           "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
+        },
+        "call_counting": {
+          "type": "object",
+          "properties": {
+            "functions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "file": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295
+                  }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+              },
+              "maxItems": 256
+            },
+            "allow_rebuild": {
+              "type": "boolean"
+            },
+            "build_command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            },
+            "max_functions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8192
+            },
+            "max_output_bytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 8388608
+            }
+          },
+          "required": [],
+          "additionalProperties": false
         }
       },
       "required": ["command"],
@@ -1967,6 +2019,186 @@
         "checkpoint_seconds": 120,
         "scope": "One owned normalization worker through raw staging, decode and atomic publication; independent summary failure preserves the mutation acknowledgment.",
         "enforcement": "Cooperative checks cannot preempt one filesystem, JSON parse, external-tool or SQLite unit; cleanup remains owned after a caller drops."
+      }
+    }
+  },
+  {
+    "name": "calls.plan",
+    "description": "Choose an eligible automatic function counting method without launching or rebuilding the target",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "allow_rebuild": {
+          "type": "boolean"
+        },
+        "build_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "max_functions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountPlanResult"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1
+      }
+    }
+  },
+  {
+    "name": "calls.measure",
+    "description": "Request an idempotent separate counting recording; sampling remains the ordinary recording default",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4294967295
+              }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+          },
+          "maxItems": 256
+        },
+        "allow_rebuild": {
+          "type": "boolean"
+        },
+        "build_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "max_functions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 8388608
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CountMeasurement"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "mutation",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1
+      }
+    }
+  },
+  {
+    "name": "calls.query",
+    "description": "Read bounded accepted function counts for a counting recording; absent observations are not zero",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      },
+      "required": ["run_id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CallCounts"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; durable counting recordings require explicit runs.cancel. Queries never relaunch workloads.",
+        "version": 1
       }
     }
   }

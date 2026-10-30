@@ -499,6 +499,60 @@ export type MutationSummary = {
   "diagnostics": Array<string>;
 } | null;
 
+export type CountSelector = {
+  "name": string;
+  "file"?: string;
+  "line"?: number;
+};
+
+export type CountPlan = {
+  "status": "ready" | "blocked";
+  "method": string | null;
+  "reason": string | null;
+  "requested_scope": "all" | "selected";
+  "collection_scope": "all" | "selected" | "all_then_filter";
+  "functions": Array<CountSelector>;
+  "requires_rebuild": boolean;
+  "limitations": Array<string>;
+};
+
+export type CountPlanResult = {
+  "plan": CountPlan;
+};
+
+export type CountMeasurement = {
+  "run"?: Run;
+  "plan": CountPlan;
+  "parent_run_id": string;
+  "reused": boolean;
+};
+
+export type CountFunction = {
+  "name": string;
+  "file": string | null;
+  "line": number | null;
+};
+
+export type FunctionCount = {
+  "function": CountFunction;
+  "calls": number;
+  "resumes": number | null;
+};
+
+export type CallCounts = {
+  "status": "not_collected" | "running" | "complete" | "incomplete" | "failed" | "canceled";
+  "run_id": string;
+  "parent_run_id": string | null;
+  "method": string | null;
+  "requested_scope": "all" | "selected";
+  "collection_scope": "all" | "selected" | "all_then_filter";
+  "counts": Array<FunctionCount>;
+  "next_cursor": string | null;
+  "total_count": number;
+  "diagnostics": Array<string>;
+  "limitations": Array<string>;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -530,6 +584,17 @@ export type OperationInputs = {
   "input_files"?: Array<string>;
   "expected_stdout"?: string;
   "expected_stdout_sha256"?: string;
+  "call_counting"?: {
+  "functions"?: Array<{
+  "name": string;
+  "file"?: string;
+  "line"?: number;
+}>;
+  "allow_rebuild"?: boolean;
+  "build_command"?: Array<string>;
+  "max_functions"?: number;
+  "max_output_bytes"?: number;
+};
 };
   "runs.cancel": {
   "run_id": string;
@@ -662,6 +727,37 @@ export type OperationInputs = {
   "run_id": string;
   "artifact_id": string;
 };
+  "calls.plan": {
+  "run_id": string;
+  "functions"?: Array<{
+  "name": string;
+  "file"?: string;
+  "line"?: number;
+}>;
+  "allow_rebuild"?: boolean;
+  "build_command"?: Array<string>;
+  "max_functions"?: number;
+  "max_output_bytes"?: number;
+};
+  "calls.measure": {
+  "run_id": string;
+  "functions"?: Array<{
+  "name": string;
+  "file"?: string;
+  "line"?: number;
+}>;
+  "allow_rebuild"?: boolean;
+  "build_command"?: Array<string>;
+  "max_functions"?: number;
+  "max_output_bytes"?: number;
+  "timeout_seconds"?: number;
+  "request_id"?: string;
+};
+  "calls.query": {
+  "run_id": string;
+  "limit"?: number;
+  "cursor"?: string;
+};
 };
 
 export type OperationOutputs = {
@@ -710,6 +806,9 @@ export type OperationOutputs = {
   "scenarios.run": RunResult;
   "analyses.cancel": AnalysisCanceled;
   "recordings.reanalyze": ReanalysisResult;
+  "calls.plan": CountPlanResult;
+  "calls.measure": CountMeasurement;
+  "calls.query": CallCounts;
 };
 
 function isOutputObject(value: unknown): value is Record<string, unknown> {
@@ -825,7 +924,7 @@ export function isScenarioSaveResult(value: unknown): value is ScenarioSaveResul
 }
 
 export function isObservation(value: unknown): value is Observation {
-  return (((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "sample"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "stack") && Object.hasOwn(value, "weight") && Object.hasOwn(value, "weight_unit")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "span"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "duration_us")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "event"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "metric"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "value") && Object.hasOwn(value, "unit") && Object.hasOwn(value, "scope")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "relation"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "from") && Object.hasOwn(value, "to") && Object.hasOwn(value, "relation") && Object.hasOwn(value, "evidence")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "context"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name")))) : true)) && isOutputObject(value) && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "kind") && Object.hasOwn(value, "id") && Object.hasOwn(value, "run_id") && Object.hasOwn(value, "producer_id") && Object.hasOwn(value, "pid") && Object.hasOwn(value, "tid") && Object.hasOwn(value, "timestamp_us") && Object.hasOwn(value, "basis") && (value["schema_version"] === 1) && ((value["kind"] === "sample" || value["kind"] === "span" || value["kind"] === "event" || value["kind"] === "metric" || value["kind"] === "relation" || value["kind"] === "context")) && (typeof value["id"] === "string" && [...value["id"]].length >= 1) && (typeof value["run_id"] === "string" && [...value["run_id"]].length >= 1) && (typeof value["producer_id"] === "string" && [...value["producer_id"]].length >= 1) && (typeof value["pid"] === "number" && Number.isInteger(value["pid"]) && value["pid"] >= 0) && (typeof value["tid"] === "string") && (typeof value["timestamp_us"] === "number" && Number.isInteger(value["timestamp_us"]) && value["timestamp_us"] >= 0 && value["timestamp_us"] <= 9007199254740991) && (!Object.hasOwn(value, "name") || (typeof value["name"] === "string")) && (!Object.hasOwn(value, "duration_us") || (typeof value["duration_us"] === "number" && Number.isInteger(value["duration_us"]) && value["duration_us"] >= 0 && value["duration_us"] <= 9007199254740991)) && (!Object.hasOwn(value, "parent_id") || (typeof value["parent_id"] === "string")) && (!Object.hasOwn(value, "context_id") || (typeof value["context_id"] === "string")) && (!Object.hasOwn(value, "stack") || (Array.isArray(value["stack"]) && value["stack"].every(item => (isOutputObject(item) && Object.hasOwn(item, "function") && (typeof item["function"] === "string") && (!Object.hasOwn(item, "file") || (typeof item["file"] === "string")) && (!Object.hasOwn(item, "line") || (typeof item["line"] === "number" && Number.isInteger(item["line"]) && item["line"] >= 1)) && (!Object.hasOwn(item, "column") || (typeof item["column"] === "number" && Number.isInteger(item["column"]) && item["column"] >= 0)) && (!Object.hasOwn(item, "module") || (typeof item["module"] === "string")) && (!Object.hasOwn(item, "address") || (typeof item["address"] === "string")) && (!Object.hasOwn(item, "code_id") || (typeof item["code_id"] === "string")) && Object.keys(item).every(key => ["function","file","line","column","module","address","code_id"].includes(key)))))) && (!Object.hasOwn(value, "weight") || (typeof value["weight"] === "number" && Number.isFinite(value["weight"]) && value["weight"] > 0)) && (!Object.hasOwn(value, "weight_unit") || ((value["weight_unit"] === "samples" || value["weight_unit"] === "microseconds" || value["weight_unit"] === "bytes" || value["weight_unit"] === "count"))) && (!Object.hasOwn(value, "interval_us") || (typeof value["interval_us"] === "number" && Number.isFinite(value["interval_us"]) && value["interval_us"] > 0)) && (!Object.hasOwn(value, "value") || (typeof value["value"] === "number" && Number.isFinite(value["value"]))) && (!Object.hasOwn(value, "unit") || (typeof value["unit"] === "string")) && (!Object.hasOwn(value, "scope") || ((value["scope"] === "process" || value["scope"] === "thread" || value["scope"] === "context" || value["scope"] === "run"))) && (!Object.hasOwn(value, "from") || (typeof value["from"] === "string")) && (!Object.hasOwn(value, "to") || (typeof value["to"] === "string")) && (!Object.hasOwn(value, "relation") || (typeof value["relation"] === "string")) && (!Object.hasOwn(value, "evidence") || (Array.isArray(value["evidence"]) && new Set(value["evidence"]).size === value["evidence"].length && value["evidence"].every(item => (typeof item === "string")))) && ((value["basis"] === "observed" || value["basis"] === "sampled" || value["basis"] === "explicit" || value["basis"] === "derived")) && (!Object.hasOwn(value, "attributes") || (isOutputObject(value["attributes"]))) && Object.keys(value).every(key => ["schema_version","kind","id","run_id","producer_id","pid","tid","timestamp_us","name","duration_us","parent_id","context_id","stack","weight","weight_unit","interval_us","value","unit","scope","from","to","relation","evidence","basis","attributes"].includes(key)));
+  return (((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "sample"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "stack") && Object.hasOwn(value, "weight") && Object.hasOwn(value, "weight_unit")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "span"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "duration_us")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "event"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "metric"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "value") && Object.hasOwn(value, "unit") && Object.hasOwn(value, "scope")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "relation"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "from") && Object.hasOwn(value, "to") && Object.hasOwn(value, "relation") && Object.hasOwn(value, "evidence")))) : true)) && ((((!isOutputObject(value) || (isOutputObject(value) && (!Object.hasOwn(value, "kind") || (value["kind"] === "context"))))) ? ((!isOutputObject(value) || (isOutputObject(value) && Object.hasOwn(value, "name")))) : true)) && isOutputObject(value) && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "kind") && Object.hasOwn(value, "id") && Object.hasOwn(value, "run_id") && Object.hasOwn(value, "producer_id") && Object.hasOwn(value, "pid") && Object.hasOwn(value, "tid") && Object.hasOwn(value, "timestamp_us") && Object.hasOwn(value, "basis") && (value["schema_version"] === 1) && ((value["kind"] === "sample" || value["kind"] === "span" || value["kind"] === "event" || value["kind"] === "metric" || value["kind"] === "relation" || value["kind"] === "context")) && (typeof value["id"] === "string" && [...value["id"]].length >= 1) && (typeof value["run_id"] === "string" && [...value["run_id"]].length >= 1) && (typeof value["producer_id"] === "string" && [...value["producer_id"]].length >= 1) && (typeof value["pid"] === "number" && Number.isInteger(value["pid"]) && value["pid"] >= 0) && (typeof value["tid"] === "string") && (typeof value["timestamp_us"] === "number" && Number.isInteger(value["timestamp_us"]) && value["timestamp_us"] >= 0 && value["timestamp_us"] <= 9007199254740991) && (!Object.hasOwn(value, "name") || (typeof value["name"] === "string")) && (!Object.hasOwn(value, "duration_us") || (typeof value["duration_us"] === "number" && Number.isInteger(value["duration_us"]) && value["duration_us"] >= 0 && value["duration_us"] <= 9007199254740991)) && (!Object.hasOwn(value, "parent_id") || (typeof value["parent_id"] === "string")) && (!Object.hasOwn(value, "context_id") || (typeof value["context_id"] === "string")) && (!Object.hasOwn(value, "stack") || (Array.isArray(value["stack"]) && value["stack"].every(item => (isOutputObject(item) && Object.hasOwn(item, "function") && (typeof item["function"] === "string") && (!Object.hasOwn(item, "file") || (typeof item["file"] === "string")) && (!Object.hasOwn(item, "line") || (typeof item["line"] === "number" && Number.isInteger(item["line"]) && item["line"] >= 1)) && (!Object.hasOwn(item, "column") || (typeof item["column"] === "number" && Number.isInteger(item["column"]) && item["column"] >= 0)) && (!Object.hasOwn(item, "module") || (typeof item["module"] === "string")) && (!Object.hasOwn(item, "address") || (typeof item["address"] === "string")) && (!Object.hasOwn(item, "code_id") || (typeof item["code_id"] === "string")) && Object.keys(item).every(key => ["function","file","line","column","module","address","code_id"].includes(key)))))) && (!Object.hasOwn(value, "weight") || (typeof value["weight"] === "number" && Number.isFinite(value["weight"]) && value["weight"] > 0)) && (!Object.hasOwn(value, "weight_unit") || ((value["weight_unit"] === "samples" || value["weight_unit"] === "microseconds" || value["weight_unit"] === "bytes" || value["weight_unit"] === "count"))) && (!Object.hasOwn(value, "interval_us") || (typeof value["interval_us"] === "number" && Number.isFinite(value["interval_us"]) && value["interval_us"] > 0)) && (!Object.hasOwn(value, "value") || (typeof value["value"] === "number" && Number.isFinite(value["value"]))) && (!Object.hasOwn(value, "unit") || (typeof value["unit"] === "string")) && (!Object.hasOwn(value, "scope") || ((value["scope"] === "process" || value["scope"] === "thread" || value["scope"] === "context" || value["scope"] === "run"))) && (!Object.hasOwn(value, "from") || (typeof value["from"] === "string")) && (!Object.hasOwn(value, "to") || (typeof value["to"] === "string")) && (!Object.hasOwn(value, "relation") || (typeof value["relation"] === "string")) && (!Object.hasOwn(value, "evidence") || (Array.isArray(value["evidence"]) && new Set(value["evidence"]).size === value["evidence"].length && value["evidence"].every(item => (typeof item === "string")))) && ((value["basis"] === "observed" || value["basis"] === "sampled" || value["basis"] === "explicit" || value["basis"] === "derived")) && (!Object.hasOwn(value, "attributes") || (isOutputObject(value["attributes"]) && (!Object.hasOwn(value["attributes"], "clock") || true) && (!Object.hasOwn(value["attributes"], "clock_alignment") || (typeof value["attributes"]["clock_alignment"] === "string")))) && Object.keys(value).every(key => ["schema_version","kind","id","run_id","producer_id","pid","tid","timestamp_us","name","duration_us","parent_id","context_id","stack","weight","weight_unit","interval_us","value","unit","scope","from","to","relation","evidence","basis","attributes"].includes(key)));
 }
 
 export function isContextObservation(value: unknown): value is ContextObservation {
@@ -924,6 +1023,34 @@ export function isMutationSummary(value: unknown): value is MutationSummary {
   return ((isOutputObject(value) && Object.hasOwn(value, "sample_count") && Object.hasOwn(value, "total_weight") && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "span_count") && Object.hasOwn(value, "metric_count") && Object.hasOwn(value, "relation_count") && Object.hasOwn(value, "diagnostics") && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0) && ((typeof value["total_weight"] === "number" && Number.isFinite(value["total_weight"])) || (value["total_weight"] === null)) && (typeof value["weight_unit"] === "string") && (typeof value["span_count"] === "number" && Number.isInteger(value["span_count"]) && value["span_count"] >= 0) && (typeof value["metric_count"] === "number" && Number.isInteger(value["metric_count"]) && value["metric_count"] >= 0) && (typeof value["relation_count"] === "number" && Number.isInteger(value["relation_count"]) && value["relation_count"] >= 0) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string")))) || (value === null));
 }
 
+export function isCountSelector(value: unknown): value is CountSelector {
+  return (isOutputObject(value) && Object.hasOwn(value, "name") && (typeof value["name"] === "string" && [...value["name"]].length >= 1) && (!Object.hasOwn(value, "file") || (typeof value["file"] === "string" && [...value["file"]].length >= 1)) && (!Object.hasOwn(value, "line") || (typeof value["line"] === "number" && Number.isInteger(value["line"]) && value["line"] >= 1 && value["line"] <= 4294967295)) && Object.keys(value).every(key => ["name","file","line"].includes(key)));
+}
+
+export function isCountPlan(value: unknown): value is CountPlan {
+  return (isOutputObject(value) && Object.hasOwn(value, "status") && Object.hasOwn(value, "method") && Object.hasOwn(value, "reason") && Object.hasOwn(value, "requested_scope") && Object.hasOwn(value, "collection_scope") && Object.hasOwn(value, "functions") && Object.hasOwn(value, "requires_rebuild") && Object.hasOwn(value, "limitations") && ((value["status"] === "ready" || value["status"] === "blocked")) && ((typeof value["method"] === "string") || (value["method"] === null)) && ((typeof value["reason"] === "string") || (value["reason"] === null)) && ((value["requested_scope"] === "all" || value["requested_scope"] === "selected")) && ((value["collection_scope"] === "all" || value["collection_scope"] === "selected" || value["collection_scope"] === "all_then_filter")) && (Array.isArray(value["functions"]) && value["functions"].every(item => isCountSelector(item))) && (typeof value["requires_rebuild"] === "boolean") && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && Object.keys(value).every(key => ["status","method","reason","requested_scope","collection_scope","functions","requires_rebuild","limitations"].includes(key)));
+}
+
+export function isCountPlanResult(value: unknown): value is CountPlanResult {
+  return (isOutputObject(value) && Object.hasOwn(value, "plan") && isCountPlan(value["plan"]) && Object.keys(value).every(key => ["plan"].includes(key)));
+}
+
+export function isCountMeasurement(value: unknown): value is CountMeasurement {
+  return (isOutputObject(value) && Object.hasOwn(value, "plan") && Object.hasOwn(value, "parent_run_id") && Object.hasOwn(value, "reused") && (!Object.hasOwn(value, "run") || isRun(value["run"])) && isCountPlan(value["plan"]) && (typeof value["parent_run_id"] === "string") && (typeof value["reused"] === "boolean") && Object.keys(value).every(key => ["run","plan","parent_run_id","reused"].includes(key)));
+}
+
+export function isCountFunction(value: unknown): value is CountFunction {
+  return (isOutputObject(value) && Object.hasOwn(value, "name") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && (typeof value["name"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"]) && value["line"] >= 1) || (value["line"] === null)) && Object.keys(value).every(key => ["name","file","line"].includes(key)));
+}
+
+export function isFunctionCount(value: unknown): value is FunctionCount {
+  return (isOutputObject(value) && Object.hasOwn(value, "function") && Object.hasOwn(value, "calls") && Object.hasOwn(value, "resumes") && isCountFunction(value["function"]) && (typeof value["calls"] === "number" && Number.isInteger(value["calls"]) && value["calls"] >= 0 && value["calls"] <= 9007199254740991) && ((typeof value["resumes"] === "number" && Number.isInteger(value["resumes"]) && value["resumes"] >= 0 && value["resumes"] <= 9007199254740991) || (value["resumes"] === null)) && Object.keys(value).every(key => ["function","calls","resumes"].includes(key)));
+}
+
+export function isCallCounts(value: unknown): value is CallCounts {
+  return (isOutputObject(value) && Object.hasOwn(value, "status") && Object.hasOwn(value, "run_id") && Object.hasOwn(value, "parent_run_id") && Object.hasOwn(value, "method") && Object.hasOwn(value, "requested_scope") && Object.hasOwn(value, "collection_scope") && Object.hasOwn(value, "counts") && Object.hasOwn(value, "next_cursor") && Object.hasOwn(value, "total_count") && Object.hasOwn(value, "diagnostics") && Object.hasOwn(value, "limitations") && ((value["status"] === "not_collected" || value["status"] === "running" || value["status"] === "complete" || value["status"] === "incomplete" || value["status"] === "failed" || value["status"] === "canceled")) && (typeof value["run_id"] === "string") && ((typeof value["parent_run_id"] === "string") || (value["parent_run_id"] === null)) && ((typeof value["method"] === "string") || (value["method"] === null)) && ((value["requested_scope"] === "all" || value["requested_scope"] === "selected")) && ((value["collection_scope"] === "all" || value["collection_scope"] === "selected" || value["collection_scope"] === "all_then_filter")) && (Array.isArray(value["counts"]) && value["counts"].every(item => isFunctionCount(item))) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)) && (typeof value["total_count"] === "number" && Number.isInteger(value["total_count"]) && value["total_count"] >= 0) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))) && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && Object.keys(value).every(key => ["status","run_id","parent_run_id","method","requested_scope","collection_scope","counts","next_cursor","total_count","diagnostics","limitations"].includes(key)));
+}
+
 // Every operation result is checked against its declared wire contract.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
@@ -1013,6 +1140,15 @@ export function validateOperationOutput(name: string, value: unknown): void {
       break;
     case "recordings.reanalyze":
       if (!isReanalysisResult(value)) throw new Error("Hunin returned an invalid recordings.reanalyze result.");
+      break;
+    case "calls.plan":
+      if (!isCountPlanResult(value)) throw new Error("Hunin returned an invalid calls.plan result.");
+      break;
+    case "calls.measure":
+      if (!isCountMeasurement(value)) throw new Error("Hunin returned an invalid calls.measure result.");
+      break;
+    case "calls.query":
+      if (!isCallCounts(value)) throw new Error("Hunin returned an invalid calls.query result.");
       break;
     default: throw new Error(`No output contract for operation: ${name}`);
   }
