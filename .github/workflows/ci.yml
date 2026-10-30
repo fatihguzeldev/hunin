@@ -147,11 +147,16 @@ jobs:
         env:
           HUNIN_EXECUTABLE_LAUNCH_EVIDENCE: collector-evidence/executable-launch
         run: |
-          import pathlib, shutil, subprocess, sys
+          import os, pathlib, shutil, subprocess, sys
           path = pathlib.Path('collector-evidence/core-sdk-rust.log')
           path.parent.mkdir(parents=True, exist_ok=True)
+          environment = dict(os.environ)
+          if sys.platform != 'win32':
+              environment['HUNIN_TEST_COUNTS_PYTHON'] = sys.executable
           with path.open('w+b') as log:
-              result = subprocess.run(['cargo', '+stable', 'test', '--locked', '--all'], stdout=log, stderr=subprocess.STDOUT)
+              log.write(('Actual counting interpreter: ' + environment.get('HUNIN_TEST_COUNTS_PYTHON', 'Windows collection unverified; separate prerequisite control') + '\n').encode())
+              log.flush()
+              result = subprocess.run(['cargo', '+stable', 'test', '--locked', '--all'], env=environment, stdout=log, stderr=subprocess.STDOUT)
               log.seek(0)
               shutil.copyfileobj(log, sys.stdout.buffer)
           sys.exit(result.returncode)
@@ -161,6 +166,36 @@ jobs:
         with:
           name: core-rust-failure-${{ matrix.platform }}
           path: collector-evidence/core-sdk-rust.log
+      - name: Verify automatic Python counting semantics on the actual host interpreter
+        if: always() && runner.os != 'Windows'
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, sys
+          directory = pathlib.Path('collector-evidence/call-counts')
+          directory.mkdir(parents=True, exist_ok=True)
+          environment = dict(os.environ, HUNIN_TEST_COUNTS_PYTHON=sys.executable)
+          with (directory / 'python-controls.log').open('w+b') as log:
+              result = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'collectors/counts', '-p', 'test_python.py'], env=environment, stdout=log, stderr=subprocess.STDOUT)
+              log.seek(0)
+              sys.stdout.buffer.write(log.read())
+          (directory / 'runtime.json').write_text(json.dumps({'executable':sys.executable,'version':sys.version,'controls_passed':result.returncode == 0,'scope':'CPython main GIL interpreter; starts/resumes, threads, shutdown, selection, bounds and abnormal exit. Native compiler fixture and Engine lifecycle controls run in the core Rust gate.'}, indent=2))
+          sys.exit(result.returncode)
+      - name: Record Windows count prerequisites without claiming native collection
+        if: always() && runner.os == 'Windows'
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, sys
+          directory = pathlib.Path('collector-evidence/call-counts')
+          directory.mkdir(parents=True, exist_ok=True)
+          probe = subprocess.run([sys.executable, '-B', 'collectors/counts/build.py', '--probe'], capture_output=True, text=True, timeout=15)
+          receipt = {'executable':sys.executable,'version':sys.version,'prerequisites':'available_unverified' if probe.returncode == 0 else 'unavailable','collection_verified':False,'stdout':probe.stdout,'diagnostic':probe.stderr,'returncode':probe.returncode}
+          (directory / 'windows-prerequisites.json').write_text(json.dumps(receipt,indent=2))
+          print(json.dumps(receipt,indent=2))
+          assert probe.returncode in (0, 1), 'prerequisite probe crashed'
+          assert probe.returncode == 0 or probe.stderr.strip(), 'missing explicit prerequisite reason'
+          environment = dict(os.environ, HUNIN_TEST_COUNTS_PYTHON=sys.executable)
+          result = subprocess.run(['cargo','+stable','test','--locked','--lib','collection::counts::tests::missing_python_compiler_is_an_explicit_plan_failure_without_capture_files','--','--exact','--nocapture'],env=environment)
+          sys.exit(result.returncode)
       - name: JavaScript SDK tests
         if: always()
         run: node --test sdk/javascript/dist/sdk.test.mjs

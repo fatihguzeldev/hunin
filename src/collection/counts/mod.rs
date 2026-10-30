@@ -170,6 +170,32 @@ mod tests {
     }
 
     #[test]
+    fn missing_python_compiler_is_an_explicit_plan_failure_without_capture_files() {
+        let Some(executable) = std::env::var_os("HUNIN_TEST_COUNTS_PYTHON") else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut request = request(root.path(), "python");
+        request.command = vec![
+            executable.to_string_lossy().into_owned(),
+            "-c".into(),
+            "pass".into(),
+        ];
+        request.env.insert("PATH".into(), String::new());
+        let selected = plan(&request, &CountRequest::default()).unwrap();
+        assert_eq!(selected.status, "blocked");
+        assert!(
+            selected
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("compiler unavailable")),
+            "{:?}",
+            selected.reason
+        );
+        assert!(!request.artifact_dir.exists());
+    }
+
+    #[test]
     #[cfg(unix)]
     fn declared_cpp_recipe_counts_exact_entries_and_preserves_original_binary() {
         let root = tempfile::tempdir().unwrap();
