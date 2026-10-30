@@ -108,40 +108,63 @@ impl Engine {
         let mut timed_out = false;
         let status: Result<std::process::ExitStatus> = loop {
             tokio::select! {
-                status=child.wait()=>{
+                status = child.wait() => {
                     // The elevated ETW owner can share this Job. Even an
                     // unexpected wrapper exit must give it cleanup time before
                     // the common force/drop path closes the remaining tree.
                     #[cfg(windows)]
-                    native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
+                    native::request_stop(
+                        &directory,
+                        &run.runtime,
+                        pid,
+                        native_wrapper_birth.as_deref(),
+                    ).await;
                     break status.context("wait for supervised recording process");
                 }
-                _=cancel.changed()=>{
-                    canceled=true;
+                _ = cancel.changed() => {
+                    canceled = true;
                     #[cfg(windows)]
-                    native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
-                    match tree.stop(&mut child,run.runtime!="none").await {
-                        Ok((status,forced))=>{
-                            if forced {run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}
+                    native::request_stop(
+                        &directory,
+                        &run.runtime,
+                        pid,
+                        native_wrapper_birth.as_deref(),
+                    ).await;
+                    match tree.stop(&mut child, run.runtime != "none").await {
+                        Ok((status, forced)) => {
+                            if forced {
+                                run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());
+                            }
                             break Ok(status);
                         }
-                        Err(error)=>break Err(error),
+                        Err(error) => break Err(error),
                     }
                 }
-                _=&mut timeout=>{
-                    timed_out=true;
+                _ = &mut timeout => {
+                    timed_out = true;
                     #[cfg(windows)]
-                    native::request_stop(&directory,&run.runtime,pid,native_wrapper_birth.as_deref()).await;
-                    match tree.stop(&mut child,run.runtime!="none").await {
-                        Ok((status,forced))=>{
-                            if forced {run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());}
+                    native::request_stop(
+                        &directory,
+                        &run.runtime,
+                        pid,
+                        native_wrapper_birth.as_deref(),
+                    ).await;
+                    match tree.stop(&mut child, run.runtime != "none").await {
+                        Ok((status, forced)) => {
+                            if forced {
+                                run.diagnostics.push("collector/target did not stop within the graceful deadline; owned process tree forced closed".into());
+                            }
                             break Ok(status);
                         }
-                        Err(error)=>break Err(error),
+                        Err(error) => break Err(error),
                     }
                 }
-                rows=observations.recv(),if observations_open=>{
-                    if let Some(rows)=rows {metrics.extend(rows);} else {observations_open=false;}
+                rows = observations.recv(), if observations_open => {
+                    if let Some(rows) = rows {
+                        metrics.extend(rows);
+                    } else {
+                        observations_open = false;
+                    }
                 }
             }
         };
