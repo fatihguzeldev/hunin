@@ -5,7 +5,7 @@ from pathlib import Path, PureWindowsPath
 import unittest
 from unittest.mock import patch
 
-from . import windows_sessions as sessions
+from . import etw_report as sessions
 
 HERE = Path(__file__).resolve().parents[1]
 
