@@ -1,3 +1,4 @@
+import { projectFromUrl } from './projects/context.js';
 import {
   isHttpFailure,
   isOperationFailure,
@@ -49,36 +50,43 @@ export class ApiError extends Error {
   }
 }
 
-export async function operation<K extends keyof Operations>(
-  name: K,
-  params: Operations[K]['input'],
-  signal?: AbortSignal,
-): Promise<Operations[K]['output']> {
-  const response = await fetch('/api/operations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({ operation: name, params }),
-    signal,
-  });
-  const envelope: unknown = await response.json().catch(() => {
-    throw new Error(
-      'Hunin returned an invalid response. Check that the local service is running.',
-    );
-  });
-  if (!envelope || typeof envelope !== 'object')
-    throw new Error('Hunin returned an invalid response envelope.');
-  if ('error' in envelope) {
-    if (!isHttpFailure(envelope))
-      throw new Error('Hunin returned an invalid error envelope.');
-    throw new ApiError(
-      envelope.error.code,
-      envelope.error.message,
-      envelope.error.details,
-    );
-  }
-  if (!response.ok || !isHttpSuccess(envelope))
-    throw new Error(`The local service returned HTTP ${response.status}.`);
-  validateOperationOutput(name, envelope.result);
-  return envelope.result as Operations[K]['output'];
+export function operationForProject(projectId?: string) {
+  return async function operation<K extends keyof Operations>(
+    name: K,
+    params: Operations[K]['input'],
+    signal?: AbortSignal,
+  ): Promise<Operations[K]['output']> {
+    const response = await fetch('/api/operations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ operation: name, params, project_id: projectId }),
+      signal,
+    });
+    const envelope: unknown = await response.json().catch(() => {
+      throw new Error(
+        'Hunin returned an invalid response. Check that the local service is running.',
+      );
+    });
+    if (!envelope || typeof envelope !== 'object')
+      throw new Error('Hunin returned an invalid response envelope.');
+    if ('error' in envelope) {
+      if (!isHttpFailure(envelope))
+        throw new Error('Hunin returned an invalid error envelope.');
+      throw new ApiError(
+        envelope.error.code,
+        envelope.error.message,
+        envelope.error.details,
+      );
+    }
+    if (!response.ok || !isHttpSuccess(envelope))
+      throw new Error(`The local service returned HTTP ${response.status}.`);
+    validateOperationOutput(name, envelope.result);
+    return envelope.result as Operations[K]['output'];
+  };
 }
+
+// Bound once per document; a project switch navigates to a fresh document.
+export const operation = operationForProject(
+  projectFromUrl(globalThis.location?.href),
+);
