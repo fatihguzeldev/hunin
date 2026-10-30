@@ -505,10 +505,7 @@ export class Workspace {
         const back = button(
           `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
           () => {
-            const entry = this.history.state();
-            const depth = entry?.runId === run.id ? entry.sourceReturn : 0;
-            if (depth > 0 && depth < history.length) history.go(-depth);
-            else {
+            if (!this.history.returnToView(run.id)) {
               this.navigationEpoch++;
               investigation.source = undefined;
               this.returningFromSource = true;

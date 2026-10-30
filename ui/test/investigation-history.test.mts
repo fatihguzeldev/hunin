@@ -7,6 +7,7 @@ function browser() {
   const location = { href: 'http://localhost/?retained=1#position' };
   let state: unknown;
   const writes: ('push' | 'replace')[] = [];
+  const traversals: number[] = [];
   const write = (
     mode: 'push' | 'replace',
     value: unknown,
@@ -19,7 +20,12 @@ function browser() {
   return {
     location,
     writes,
+    traversals,
     history: {
+      length: 4,
+      go: (delta?: number) => {
+        traversals.push(delta ?? 0);
+      },
       get state() {
         return state;
       },
@@ -52,6 +58,9 @@ test('browser entries retain per-recording investigation snapshots and source re
   navigation.write({ runId: 'recording', view: 'profile' }, 'push', 2);
   navigation.write({ runId: 'recording', view: 'profile' }, 'replace');
   assert.equal(navigation.state()?.sourceReturn, 2);
+  assert.equal(navigation.returnToView('other-recording'), false);
+  assert.equal(navigation.returnToView('recording'), true);
+  assert.deepEqual(binding.traversals, [-2]);
   state.profile.query = 'later unpersisted edit';
 
   const restored = new Investigations();
@@ -82,6 +91,7 @@ test('leaving source clears its return distance while keeping unrelated URL stat
   investigations.forRun('recording').source = undefined;
   navigation.write({ runId: 'recording', view: 'timeline' });
   assert.equal(navigation.state()?.sourceReturn, 0);
+  assert.equal(navigation.returnToView('recording'), false);
   navigation.write({ runId: '', view: 'capabilities' });
   const url = new URL(binding.location.href);
   assert.equal(url.searchParams.has('run'), false);

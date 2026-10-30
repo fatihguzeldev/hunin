@@ -1,7 +1,10 @@
 import { Investigations } from './state.js';
 
 type Browser = {
-  history: Pick<History, 'state' | 'pushState' | 'replaceState'>;
+  history: Pick<
+    History,
+    'state' | 'pushState' | 'replaceState' | 'length' | 'go'
+  >;
   location: Pick<Location, 'href'>;
 };
 
@@ -46,6 +49,16 @@ export class InvestigationHistory {
     const state = this.state();
     if (runId && state?.runId === runId)
       this.investigations.restore(runId, state.saved);
+  }
+
+  returnToView(runId: string): boolean {
+    const entry = this.state();
+    const depth = entry?.runId === runId ? entry.sourceReturn : 0;
+    if (depth > 0 && depth < this.browser.history.length) {
+      this.browser.history.go(-depth);
+      return true;
+    }
+    return false;
   }
 
   write(
