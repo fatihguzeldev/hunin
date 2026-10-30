@@ -14,10 +14,7 @@ import zipfile
 from . import inventory
 from .metadata import build_metadata, sdk_versions
 
-if __package__.startswith("distribution."):
-    from ..installation.bundle import check_product, probe_binary
-else:
-    from installation.bundle import check_product, probe_binary
+from ..installation.bundle import check_product, probe_binary
 
 PLATFORMS = ("linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "windows-x64")
 RUST_TARGETS = {
@@ -175,7 +172,8 @@ def assemble(root, binary, output, target, rust_toolchain=None, rust_target=None
     return archive
 
 
-def main(root):
+def main():
+    root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
@@ -199,3 +197,7 @@ def main(root):
             args.rust_target,
         )
     )
+
+
+if __name__ == "__main__":
+    main()

@@ -7,10 +7,7 @@ from unittest.mock import patch
 
 from . import assembly as package
 
-if __package__.startswith("distribution."):
-    from ..installation import bundle as installer
-else:
-    from installation import bundle as installer
+from ..installation import bundle as installer
 
 
 RUNTIME_FILES = (
@@ -193,9 +190,9 @@ class PackageTests(unittest.TestCase):
         (root / "bundle-assets.json").write_bytes(
             (root / "distribution/bundle/assets.json").read_bytes()
         )
-        stock = root / "distribution/fetch_samply.py"
-        stock.parent.mkdir(parents=True, exist_ok=True)
-        stock.write_text("unrelated legacy helper")
+        unselected = root / "distribution/unselected.py"
+        unselected.parent.mkdir(parents=True, exist_ok=True)
+        unselected.write_text("unselected development helper")
         native_root = Path(__file__).parents[2] / native["source_root"]
         patches = sorted(
             path.name for path in (native_root / "patches").glob("*.patch")
@@ -313,7 +310,7 @@ class PackageTests(unittest.TestCase):
             files = package.contents(root, binary, "linux-x64")
             for name in unshipped:
                 self.assertFalse(name in files, f"Unexpected runtime asset: {name}")
-            self.assertFalse("fetch_samply.py" in files)
+            self.assertFalse("unselected.py" in files)
 
     def test_native_manifest_patch_cannot_be_omitted_from_runtime_inventory(self):
         with tempfile.TemporaryDirectory() as temporary:

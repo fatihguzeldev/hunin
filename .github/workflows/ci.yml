@@ -189,7 +189,7 @@ jobs:
         run: ctest --test-dir sdk-c-build -C Release --output-on-failure
       - name: Packaging integrity tests
         if: always()
-        run: python -m unittest discover -s distribution -p "test_*.py"
+        run: python -m unittest discover -s distribution -t . -p "test_*.py"
       - name: Build native host executable
         if: always()
         id: build
@@ -253,7 +253,7 @@ jobs:
       - name: Install checksum-pinned Bun
         id: bun
         if: always() && steps.build.outcome == 'success'
-        run: python distribution/fetch_runtime.py bun --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/bun" --github-env
+        run: python -m distribution.provisioning.runtime bun --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/bun" --github-env
       - name: Verify automatic Bun collection
         if: always() && steps.bun.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime bun --executable "${{ env.HUNIN_TEST_BUN }}" --output collector-evidence/bun
@@ -274,7 +274,7 @@ jobs:
       - name: Install checksum-pinned Deno
         id: deno
         if: always() && steps.build.outcome == 'success'
-        run: python distribution/fetch_runtime.py deno --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/deno" --github-env
+        run: python -m distribution.provisioning.runtime deno --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/deno" --github-env
       - name: Verify automatic Deno collection
         if: always() && steps.deno.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime deno --executable "${{ env.HUNIN_TEST_DENO }}" --output collector-evidence/deno
@@ -299,7 +299,7 @@ jobs:
       - name: Install checksum-pinned PyPy
         id: pypy
         if: always() && steps.build.outcome == 'success'
-        run: python distribution/fetch_runtime.py pypy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/pypy" --github-env
+        run: python -m distribution.provisioning.runtime pypy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/pypy" --github-env
       - name: Prepare PyPy sampling dependency
         id: pypy-vmprof
         if: always() && steps.pypy.outcome == 'success' && runner.os != 'Windows'
@@ -327,7 +327,7 @@ jobs:
       - name: Install checksum-pinned GraalPy Community
         id: graalpy
         if: always() && steps.build.outcome == 'success' && matrix.platform != 'macos-x64'
-        run: python distribution/fetch_runtime.py graalpy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/graalpy" --github-env
+        run: python -m distribution.provisioning.runtime graalpy --platform ${{ matrix.platform }} --destination "${{ runner.temp }}/hunin-tools/graalpy" --github-env
       - name: Verify automatic GraalPy collection
         if: always() && steps.graalpy.outcome == 'success'
         run: python collectors/verify.py --binary ${{ matrix.binary }} --runtime graalpy --executable "${{ env.HUNIN_TEST_GRAALPY }}" --output collector-evidence/graalpy
@@ -350,14 +350,14 @@ jobs:
       - name: Assemble host bundle
         id: bundle
         if: always() && steps.build.outcome == 'success' && steps.ui-build.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python distribution/package.py --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist --rust-toolchain stable --rust-target ${{ matrix.rust_target }}
+        run: python -m distribution.bundle.assembly --binary ${{ matrix.binary }} --platform ${{ matrix.platform }} --output dist --rust-toolchain stable --rust-target ${{ matrix.rust_target }}
       - name: Verify installed CLI, MCP, SDK, durable analyzer, comparison and adjacent UI
         id: installed
         if: always() && steps.bundle.outcome == 'success'
-        run: python -c "from pathlib import Path; import subprocess,sys; archives=[p for p in Path('dist').iterdir() if p.name.endswith(('.tar.gz','.zip'))]; assert len(archives)==1,archives; subprocess.run([sys.executable,'distribution/verify_install.py','--archive',str(archives[0]),'--output','collector-evidence/installed-bundle'],check=True)"
+        run: python -c "from pathlib import Path; import subprocess,sys; archives=[p for p in Path('dist').iterdir() if p.name.endswith(('.tar.gz','.zip'))]; assert len(archives)==1,archives; subprocess.run([sys.executable,'-m','distribution.verification.installed','--archive',str(archives[0]),'--output','collector-evidence/installed-bundle'],check=True)"
       - name: Verify installed C SDK context around automatically sampled native work
         if: always() && steps.installed.outcome == 'success' && steps.samply.outcome == 'success'
-        run: python -c "from pathlib import Path; import subprocess,sys; roots=list(Path('collector-evidence/installed-bundle/installed').iterdir()); assert len(roots)==1,roots; subprocess.run([sys.executable,'distribution/verify_native_sdk.py','--installed',str(roots[0]),'--output','collector-evidence/installed-native-sdk'],check=True)"
+        run: python -c "from pathlib import Path; import subprocess,sys; roots=list(Path('collector-evidence/installed-bundle/installed').iterdir()); assert len(roots)==1,roots; subprocess.run([sys.executable,'-m','distribution.verification.native_sdk','--installed',str(roots[0]),'--output','collector-evidence/installed-native-sdk'],check=True)"
       - uses: actions/cache/save@v4
         if: always() && steps.samply.outcome == 'success' && steps.native-cache.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
         with:

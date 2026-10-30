@@ -319,3 +319,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     print(json.dumps(verify(args.archive.resolve(), args.output.resolve()), indent=2))
+
+
+if __name__ == "__main__":
+    main()
