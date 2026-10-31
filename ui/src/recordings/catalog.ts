@@ -3,12 +3,14 @@ import { operation, type Run, type Operations } from '../api.js';
 type RunPage = Operations['runs.list']['output'];
 export type CatalogRead = { current: () => boolean; error?: unknown };
 
-/** The sidebar's bounded recording pages have their own replaceable read lifetime. */
+/** Sidebar and library share bounded recording pages and a replaceable read lifetime. */
 export class RecordingCatalog {
   private items: Run[] = [];
   private cursor: string | undefined;
   private generation = 0;
   private controller: AbortController | undefined;
+  private refreshing = false;
+  private olderRead: Promise<CatalogRead> | undefined;
 
   get runs(): readonly Run[] {
     return this.items;
@@ -18,33 +20,53 @@ export class RecordingCatalog {
     return Boolean(this.cursor);
   }
 
+  get loadingOlder(): boolean {
+    return this.olderRead !== undefined;
+  }
+
   pause(): void {
     this.controller?.abort();
+    this.refreshing = false;
+    this.olderRead = undefined;
   }
 
   refresh(retain: () => string): Promise<CatalogRead> {
     this.pause();
     this.controller = new AbortController();
     this.generation++;
+    const generation = this.generation;
+    this.refreshing = true;
     return this.read(undefined, (page) => {
       const current = this.items.find((run) => run.id === retain());
       this.items = page.runs;
       if (current && !this.items.some((run) => run.id === current.id))
         this.items.push(current);
       this.cursor = page.next_cursor ?? undefined;
+    }).finally(() => {
+      if (generation === this.generation) this.refreshing = false;
     });
   }
 
   older(): Promise<CatalogRead> {
-    if (!this.cursor || !this.controller)
+    if (this.olderRead) return this.olderRead;
+    if (
+      !this.cursor ||
+      !this.controller ||
+      this.controller.signal.aborted ||
+      this.refreshing
+    )
       return Promise.resolve({ current: () => false });
-    return this.read(this.cursor, (page) => {
+    const read = this.read(this.cursor, (page) => {
       const unique = new Map(this.items.map((run) => [run.id, run]));
       for (const run of page.runs)
         if (!unique.has(run.id)) unique.set(run.id, run);
       this.items = [...unique.values()];
       this.cursor = page.next_cursor ?? undefined;
+    }).finally(() => {
+      if (this.olderRead === read) this.olderRead = undefined;
     });
+    this.olderRead = read;
+    return read;
   }
 
   ensure(run: Run): boolean {
