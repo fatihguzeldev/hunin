@@ -1,5 +1,5 @@
 //! Supervised target lifetime: launch, observe, stop and hand off finalization.
-use super::{Engine, StartRequest, blocking, finishing, launch, resources};
+use super::{Engine, StartRequest, blocking, capture_budget, finishing, launch, resources};
 use crate::{
     collection::native,
     host::process,
@@ -86,7 +86,7 @@ impl Engine {
             Ok((run, plan, failure))
         })
         .await;
-        let (mut run, plan, collector_start_failure) = match started {
+        let (mut run, plan, mut collector_start_failure) = match started {
             Ok(value) => value,
             Err(error) => {
                 #[cfg(windows)]
@@ -111,6 +111,9 @@ impl Engine {
         tokio::pin!(timeout);
         let mut canceled = false;
         let mut timed_out = false;
+        let mut budget = capture_budget::CaptureBudget::for_request(&capture);
+        let mut budget_interval = tokio::time::interval(capture_budget::INTERVAL);
+        budget_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let status: Result<std::process::ExitStatus> = loop {
             tokio::select! {
                 status = child.wait() => {
@@ -164,6 +167,23 @@ impl Engine {
                         Err(error) => break Err(error),
                     }
                 }
+                _ = budget_interval.tick(), if budget.is_some() => {
+                    let owned_directory = directory.clone();
+                    let checked = blocking(move || capture_budget::bytes(&owned_directory)).await;
+                    if let Some(failure) = budget.as_mut().unwrap().observe(checked) {
+                        run.diagnostics.push(failure.clone());
+                        collector_start_failure = Some(match collector_start_failure.take() {
+                            Some(previous) => format!("{previous}; {failure}"),
+                            None => failure,
+                        });
+                        break tree.stop(&mut child, true).await.map(|(status, forced)| {
+                            if forced {
+                                run.diagnostics.push("capture budget stop required forced closure of the owned target process tree".into());
+                            }
+                            status
+                        });
+                    }
+                }
                 rows = observations.recv(), if observations_open => {
                     if let Some(rows) = rows {
                         metrics.extend(rows);
@@ -174,6 +194,9 @@ impl Engine {
             }
         };
         tree.force();
+        if let Some(budget) = budget {
+            run.source["capture_budget"] = budget.metadata();
+        }
         let execution_finished_at_us = now_us();
         run.source["supervised_execution_finished_at_us"] = json!(execution_finished_at_us);
         run.source["supervised_elapsed_us"] =

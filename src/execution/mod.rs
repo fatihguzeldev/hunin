@@ -1,5 +1,6 @@
 //! Recording requests and lifecycle composition.
 mod admission;
+mod capture_budget;
 mod correctness;
 mod engine;
 mod finishing;
