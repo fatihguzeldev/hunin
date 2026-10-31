@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { transpileModule, ModuleKind } from 'typescript';
+import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
 import {
   generate,
   generateOperations,
@@ -139,7 +139,10 @@ test('generated transport guards enforce canonical hexadecimal ranges', () => {
     },
   ]);
   const compiled = transpileModule(generated, {
-    compilerOptions: { module: ModuleKind.CommonJS },
+    compilerOptions: {
+      module: ModuleKind.CommonJS,
+      target: ScriptTarget.ES2022,
+    },
   }).outputText;
   const exports: {
     validateOperationOutput?: (name: string, value: unknown) => void;
@@ -152,5 +155,37 @@ test('generated transport guards enforce canonical hexadecimal ranges', () => {
     assert.throws(
       () => validate('hex.check', value),
       /invalid hex.check result/,
+    );
+});
+
+test('generated transport guards enforce Unicode string length limits', () => {
+  const generated = generateOperations([
+    {
+      name: 'bounded.text',
+      inputSchema: {},
+      outputSchema: {
+        type: 'string',
+        maxLength: 2,
+      } as unknown as OperationDefinition['outputSchema'],
+    },
+  ]);
+  const compiled = transpileModule(generated, {
+    compilerOptions: {
+      module: ModuleKind.CommonJS,
+      target: ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const exports: {
+    validateOperationOutput?: (name: string, value: unknown) => void;
+  } = {};
+  new Function('exports', compiled)(exports);
+  for (const value of ['', 'ab', '😀😀', 'a😀'])
+    assert.doesNotThrow(() =>
+      exports.validateOperationOutput!('bounded.text', value),
+    );
+  for (const value of ['abc', '😀😀😀', 'a😀b'])
+    assert.throws(
+      () => exports.validateOperationOutput!('bounded.text', value),
+      /invalid bounded.text result/,
     );
 });

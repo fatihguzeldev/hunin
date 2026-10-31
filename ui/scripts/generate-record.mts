@@ -18,6 +18,7 @@ export type Schema = {
   description?: string;
   pattern?: string;
   minLength?: number;
+  maxLength?: number;
   minItems?: number;
   maxItems?: number;
   uniqueItems?: boolean;
@@ -214,6 +215,7 @@ function outputCondition(
     'maximum',
     'description',
     'minLength',
+    'maxLength',
     'pattern',
     'minItems',
     'maxItems',
@@ -278,6 +280,8 @@ function outputCondition(
       checks.push(`typeof ${value} === "string"`);
       if (schema.minLength !== undefined)
         checks.push(`[...${value}].length >= ${schema.minLength}`);
+      if (schema.maxLength !== undefined)
+        checks.push(`[...${value}].length <= ${schema.maxLength}`);
       if (schema.pattern !== undefined) {
         new RegExp(schema.pattern);
         checks.push(
