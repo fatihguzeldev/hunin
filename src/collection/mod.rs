@@ -1,5 +1,6 @@
 //! Collector selection and adapter composition over one raw-delivery contract.
 mod artifacts;
+pub(crate) mod code_origin;
 mod contract;
 pub(crate) mod counts;
 pub(crate) mod discovery;

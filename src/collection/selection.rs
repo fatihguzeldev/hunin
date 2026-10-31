@@ -197,6 +197,14 @@ pub fn capture_modes(runtime: &str) -> Result<Vec<CaptureModeRegistration>> {
         .filter(|registration| registration.appears_in_capability_family(family))
         .map(RuntimeRegistration::launch_mode)
         .collect::<Vec<_>>();
+    if family == "node" {
+        modes.push(CaptureModeRegistration {
+            mode: "code-origin",
+            launch: select_runtime("node")?,
+            command_requirement: "Pass the original Node command and explicitly select code-origin capture. Compiler export fidelity is checked from retained runtime artifacts.",
+            executable_kind: LaunchExecutableKind::RuntimeInterpreter,
+        });
+    }
     modes.sort_by_key(|mode| mode.mode != "automatic-cpu");
     Ok(modes)
 }

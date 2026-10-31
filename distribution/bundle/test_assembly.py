@@ -25,6 +25,8 @@ RUNTIME_FILES = (
     "collectors/counts/hooks.c",
     "collectors/javascript/dist/plan.mjs",
     "collectors/javascript/dist/host/plan.mjs",
+    "collectors/javascript/dist/code/plan.mjs",
+    "collectors/javascript/dist/code/capture.mjs",
     "collectors/javascript/dist/agents/clock.mjs",
     "collectors/javascript/dist/agents/bun.mjs",
     "collectors/javascript/dist/agents/bun/manifest.mjs",

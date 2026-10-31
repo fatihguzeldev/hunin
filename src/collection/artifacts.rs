@@ -48,6 +48,8 @@ pub(super) fn profile_format(path: &Path) -> Option<&'static str> {
         Some("python-cpu-progress")
     } else if name.ends_with(".cpuprofile") {
         Some("v8-cpuprofile")
+    } else if name.ends_with(".v8code.json") {
+        Some("v8-code")
     } else if name.ends_with(".vmprof") {
         Some("vmprof")
     } else if name.ends_with(".samply.json") || name.ends_with(".samply.json.gz") {

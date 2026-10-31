@@ -56,6 +56,16 @@ impl CapturePlan {
                 diagnostics.push("collector output contract is unspecified".into());
                 (None, "unspecified", vec!["No output or producer completeness was established".into()])
             }
+            CaptureOutput::Profiles { format } if format == "v8-code" => {
+                if let Err(error) = super::code_origin::validate_output(request, &files, &mut reads) {
+                    diagnostics.push(format!("{error:#}"));
+                }
+                (Some("v8-code"), "declared_v8_code_manifests_and_required_sidecars", vec![
+                    "Delivery checks the declared process manifests and explicitly retained tick/code files; it does not enumerate every child process or prove code-origin coverage".into(),
+                    "Wasm custody is a post-workload snapshot of still-live modules; collected modules and forced exits may lack bytes. Compiler exports depend on the selected V8 version and compilation tier".into(),
+                    "Compiler-export mode writes V8 disassembly to target stdout and changes tracing cost; byte-exact stdout non-interference and unprofiled timing are not claimed".into(),
+                ])
+            }
             CaptureOutput::Profiles { format } => (
                 Some(format.as_str()),
                 "declared_profile_artifacts",

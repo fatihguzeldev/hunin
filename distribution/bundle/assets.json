@@ -20,6 +20,8 @@
       "files": {
         "dist/plan.mjs": "dist/plan.mjs",
         "dist/host/plan.mjs": "dist/host/plan.mjs",
+        "dist/code/plan.mjs": "dist/code/plan.mjs",
+        "dist/code/capture.mjs": "dist/code/capture.mjs",
         "dist/agents/clock.mjs": "dist/agents/clock.mjs",
         "dist/agents/bun.mjs": "dist/agents/bun.mjs",
         "dist/agents/bun/manifest.mjs": "dist/agents/bun/manifest.mjs",

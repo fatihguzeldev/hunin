@@ -3,6 +3,7 @@ import { resolve, basename, join, delimiter } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { codeFlags, type CodeOptions } from '../code/plan.mjs';
 
 /** Rust's canonical Win32 paths are not accepted by every runtime resolver. */
 export function toolPath(
@@ -23,10 +24,12 @@ export interface CaptureRequest {
   runtime?: string;
   env?: Record<string, string>;
   inherited_runtime_options?: { NODE_OPTIONS?: string; BUN_OPTIONS?: string };
+  capture_mode?: 'automatic-cpu' | 'code-origin';
+  code_options?: CodeOptions;
 }
 
 export type CaptureOutput =
-  | { kind: 'profiles'; format: 'v8-cpuprofile' }
+  | { kind: 'profiles'; format: 'v8-cpuprofile' | 'v8-code' }
   | { kind: 'deno-workers'; producer_id: string }
   | { kind: 'bun-producers'; session_id: string; root_registration_id: string };
 
@@ -83,6 +86,8 @@ export function plan(request: CaptureRequest) {
     : requestedRuntime;
   if (!['node', 'bun', 'deno'].includes(runtime))
     throw Error(`unsupported JavaScript runtime: ${runtime}`);
+  if (request.capture_mode === 'code-origin' && runtime !== 'node')
+    throw Error('code-origin collection requires Node');
   const directory = toolPath(resolve(artifact_dir));
   const project = toolPath(resolve(cwd));
   const executable = toolPath(command[0]);
@@ -130,9 +135,10 @@ export function plan(request: CaptureRequest) {
     completion_scope?: string;
   };
   const diagnostics = [];
-  diagnostics.push(
-    'JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.',
-  );
+  if (request.capture_mode !== 'code-origin')
+    diagnostics.push(
+      'JavaScript source capture retains bounded project code/map snapshots. Node and Deno enable Inspector Debugger for script identity; this instrumentation contributes overhead. Source maps describe compiler output and do not prove compiler correctness.',
+    );
   let launched: string[];
   if (runtime === 'bun') {
     const sessionId = randomUUID();
@@ -198,6 +204,56 @@ export function plan(request: CaptureRequest) {
     env.NODE_OPTIONS =
       `${effectiveEnv.NODE_OPTIONS ?? ''} --cpu-prof --cpu-prof-dir=${JSON.stringify(directory)} --import=${JSON.stringify(pathToFileURL(preload).href)}`.trim();
     launched = [executable, ...command.slice(1)];
+    if (request.capture_mode === 'code-origin') {
+      const options = request.code_options ?? {};
+      const flags = codeFlags(directory, options);
+      const capabilities = spawnSync(executable, ['--v8-options'], {
+        cwd: project,
+        env: effectiveEnv,
+        encoding: 'utf8',
+        timeout: 10000,
+      });
+      for (const flag of flags) {
+        const name = flag.split('=')[0];
+        if (
+          capabilities.status !== 0 ||
+          !capabilities.stdout.includes(`  ${name} (`)
+        )
+          throw Error(`selected Node runtime does not expose ${name}`);
+      }
+      const capture = toolPath(
+        fileURLToPath(new URL('../code/capture.mjs', import.meta.url)),
+      );
+      env.NODE_OPTIONS = effectiveEnv.NODE_OPTIONS ?? '';
+      env.HUNIN_CODE_MAX_BYTES = String(
+        options.max_artifact_bytes ?? 67_108_864,
+      );
+      env.HUNIN_CODE_COMPILER_EXPORT = options.compiler_export ? '1' : '0';
+      env.HUNIN_CODE_WASM_FUNCTION_INDEX =
+        options.wasm_function_index === undefined
+          ? ''
+          : String(options.wasm_function_index);
+      launched = [
+        executable,
+        ...flags,
+        '--import',
+        pathToFileURL(capture).href,
+        ...command.slice(1),
+      ];
+      collector_identity = {
+        kind: 'node-v8-code',
+        measurement_contract: 'v8-code-v1',
+        completion_scope: 'declared_profile_artifacts',
+      };
+      output = { kind: 'profiles', format: 'v8-code' };
+      diagnostics.push(
+        'V8 code-origin capture retains native tick PCs and code bytes in an isolate-specific runtime-relative clock. Compiler exports and Inspector custody add overhead; code gaps remain explicit. No CPU-profile/native-tick equivalence or complete worker inventory is established.',
+      );
+      if (options.compiler_export)
+        diagnostics.push(
+          'Compiler-export mode writes V8 tracing and Wasm disassembly to target stdout. Exact target stdout equivalence and an unchanged timing/compilation condition are not claimed.',
+        );
+    }
   } else {
     // Only main-isolate Web Workers registered by this adapter are enumerated.
     collector_identity = {

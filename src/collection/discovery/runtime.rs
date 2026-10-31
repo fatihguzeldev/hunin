@@ -219,12 +219,15 @@ pub(super) fn inspect(runtime: &str, names: &[&str], permissions: &Value) -> Val
     }
     let modes = match capture_modes(runtime) {
         Ok(registrations) => registrations.iter().map(|mode| {
-            let (mode_mechanism, mode_availability, mode_basis) = match mode.launch.adapter {
+            let (mode_mechanism, mode_availability, mode_basis) = if mode.mode == "code-origin" {
+                let ready = found.as_ref().is_some_and(|executable| super::super::code_origin::prerequisites(&executable.to_string_lossy(), std::path::Path::new("."), &Default::default(), false).is_ok());
+                ("V8 native tick and code-origin metadata", if ready { "prerequisites_ready" } else { "code_origin_prerequisites_unavailable" }, "Native PC samples and observed code lifecycle; compiler mappings require actual export and identity checks. Other process/isolate coverage is not inferred.")
+            } else { match mode.launch.adapter {
                 CaptureAdapter::GoTestCpu => ("Go runtime pprof", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "aggregated sampled CPU time; one test package per recording"),
                 CaptureAdapter::GoTrace => ("Go execution tracer", if version.is_some(){"prerequisites_ready"}else{"runtime_probe_failed"}, "runtime scheduler/GC events; not a CPU stack profile"),
                 CaptureAdapter::PythonCpuProgress => (CPU_PROGRESS_MECHANISM, cpu_progress_availability.unwrap_or(availability), CPU_PROGRESS_BASIS),
                 _ => (mechanism, availability, basis),
-            };
+            }};
             let default_executable = match mode.executable_kind {
                 LaunchExecutableKind::RuntimeInterpreter | LaunchExecutableKind::GoTool => found.as_ref(),
                 LaunchExecutableKind::TargetExecutable => None,
