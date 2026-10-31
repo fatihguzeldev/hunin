@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 mod artifacts;
 pub(crate) use artifacts::ArtifactByteLimit;
-pub(crate) use artifacts::SourceArtifactBatch;
 mod bootstrap;
 mod count_requests;
 mod documents;

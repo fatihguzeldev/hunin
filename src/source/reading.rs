@@ -74,17 +74,7 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
                 .is_some_and(|p| p.replace('\\', "/") == relative)
         });
     let (text, identity_verified, diagnostic) = if let Some(entry) = retained {
-        let artifact = store.artifact_path(
-            &run.id,
-            entry["artifact_id"]
-                .as_str()
-                .context("snapshot artifact identity missing")?,
-        )?;
-        let content = fs::read(artifact)?;
-        anyhow::ensure!(
-            entry["sha256"].as_str() == Some(format!("{:x}", Sha256::digest(&content)).as_str()),
-            "retained source integrity check failed"
-        );
+        let content = super::bundle::read(store, &run, entry)?;
         (
             String::from_utf8(content)?,
             true,

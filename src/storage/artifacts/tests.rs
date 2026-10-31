@@ -8,50 +8,6 @@ fn store(directory: &Path) -> Store {
 }
 
 #[test]
-fn source_batch_keeps_bytes_private_until_one_atomic_reference_publication() {
-    let root = tempfile::tempdir().unwrap();
-    let store = store(root.path());
-    let mut batch = store.source_artifact_batch("raw-budget").unwrap();
-    let first = batch.stage("first.rs", b"exact bytes").unwrap();
-    let second = batch.stage("second.rs", b"exact bytes").unwrap();
-    assert_ne!(first.id, second.id);
-    assert_eq!(first.sha256, second.sha256);
-    assert!(store.artifacts("raw-budget").unwrap().is_empty());
-    batch.publish().unwrap();
-    assert_eq!(store.artifacts("raw-budget").unwrap().len(), 2);
-    for artifact in [first, second] {
-        assert_eq!(
-            fs::read(store.artifact_path("raw-budget", &artifact.id).unwrap()).unwrap(),
-            b"exact bytes"
-        );
-    }
-    assert!(
-        !fs::read_dir(root.path().join("artifacts"))
-            .unwrap()
-            .any(|e| e
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".pending-"))
-    );
-}
-
-#[test]
-fn removed_run_rejects_all_staged_source_references_and_cleans_pending_bytes() {
-    let root = tempfile::tempdir().unwrap();
-    let store = store(root.path());
-    let mut batch = store.source_artifact_batch("raw-budget").unwrap();
-    batch.stage("first.rs", b"must not be published").unwrap();
-    store.remove_run("raw-budget").unwrap();
-    assert!(batch.publish().is_err());
-    assert!(store.run("raw-budget").is_err());
-    assert_eq!(
-        fs::read_dir(root.path().join("artifacts")).unwrap().count(),
-        0
-    );
-}
-
-#[test]
 fn controlled_staging_publishes_exact_bytes_and_refuses_a_grown_input() {
     let root = tempfile::tempdir().unwrap();
     let inputs = tempfile::tempdir().unwrap();

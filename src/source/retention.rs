@@ -1,8 +1,5 @@
 //! Retain only bounded, identity-matching source bytes before target launch.
-use crate::{
-    model::runs::Run,
-    storage::{SourceArtifactBatch, Store},
-};
+use crate::{model::runs::Run, storage::Store};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -23,7 +20,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             per_file_bytes: 2 * 1024 * 1024,
-            total_read_bytes: 32 * 1024 * 1024,
+            total_read_bytes: super::bundle::MAX_CAPTURE_BYTES,
         }
     }
 }
@@ -52,26 +49,16 @@ pub(crate) fn retain(store: &Store, run: &mut Run) -> Result<()> {
 fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()> {
     let started = Instant::now();
     let root = Path::new(&run.cwd);
-    let mut snapshots = Vec::new();
     let mut skipped = 0;
     let mut bytes = 0;
     let mut reads = Reads::default();
-    let mut artifacts = store.source_artifact_batch(&run.id)?;
+    let mut bundle = super::bundle::Writer::new(store, &run.id);
     for (relative, expected) in run.source["source_files"].as_object().into_iter().flatten() {
         let path = root.join(relative);
-        let reason = match retain_file(
-            &mut artifacts,
-            root,
-            &path,
-            expected.as_str(),
-            limits,
-            &mut reads,
-        )? {
-            Ok(artifact) => {
-                bytes += artifact.size;
-                snapshots.push(
-                    json!({"path":relative,"artifact_id":artifact.id,"sha256":artifact.sha256}),
-                );
+        let reason = match retain_file(root, &path, expected.as_str(), limits, &mut reads)? {
+            Ok(content) => {
+                bundle.push(relative, &content)?;
+                bytes += content.len() as u64;
                 continue;
             }
             Err(reason) => reason,
@@ -87,10 +74,10 @@ fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()
             Skip::IdentityChanged => reads.skips.identity_changed += 1,
         }
     }
-    let publication_started = Instant::now();
-    artifacts.publish()?;
-    reads.artifact_publication_us += publication_started.elapsed().as_micros() as u64;
-    run.source["retained_sources"] = json!(snapshots);
+    let index = bundle.finish()?;
+    reads.artifact_publication_us = index.publication_us;
+    run.source["retained_sources"] = json!(index.snapshots);
+    run.source["source_bundles"] = json!(index.bundles);
     run.source["source_retention"] = json!({"bytes":bytes,"skipped_files":skipped,"scope":"pre-launch UTF-8 project files, at most 2 MiB per file and 32 MiB per recording","build_mapping_verified":false,
         "timings_us":{"total":started.elapsed().as_micros() as u64,"artifact_publication":reads.artifact_publication_us},
         "read_budget":{"name":"source-retention-read-v1","limits":limits,"work":reads,"scope":"all attempted source content reads including mismatches; at most one sentinel byte beyond the remaining read budget","limitations":"Static nonregular files are refused; path replacement races are not an adversarial filesystem guarantee"}});
@@ -108,13 +95,12 @@ enum Skip {
 }
 
 fn retain_file(
-    artifacts: &mut SourceArtifactBatch,
     root: &Path,
     path: &Path,
     expected: Option<&str>,
     limits: Limits,
     reads: &mut Reads,
-) -> Result<std::result::Result<crate::model::runs::Artifact, Skip>> {
+) -> Result<std::result::Result<Vec<u8>, Skip>> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return Ok(Err(Skip::Unavailable));
     };
@@ -165,13 +151,8 @@ fn retain_file(
     if expected != Some(digest.as_str()) {
         return Ok(Err(Skip::IdentityChanged));
     }
-    // Publish exactly the bytes checked above: reopening the pathname could
-    // copy changed/unbounded content under a different identity.
-    let name = canonical.file_name().unwrap().to_string_lossy();
-    let started = Instant::now();
-    let artifact = artifacts.stage(&name, &content);
-    reads.artifact_publication_us += started.elapsed().as_micros() as u64;
-    Ok(Ok(artifact?))
+    // Retain these exact checked bytes; never reopen the project pathname.
+    Ok(Ok(content))
 }
 
 fn read_bounded(file: fs::File, maximum: u64) -> (Vec<u8>, io::Result<usize>) {
@@ -224,11 +205,12 @@ mod tests {
         assert_eq!(run.source["source_retention"]["skipped_files"], 0);
         assert_eq!(run.source["fingerprint"], "original-source-identity");
         assert_eq!(run.source["retained_sources"].as_array().unwrap().len(), 2);
-        let mut contents = store
-            .artifacts(&run.id)
+        assert_eq!(store.artifacts(&run.id).unwrap().len(), 1);
+        let mut contents = run.source["retained_sources"]
+            .as_array()
             .unwrap()
-            .into_iter()
-            .map(|a| fs::read(store.artifact_path(&run.id, &a.id).unwrap()).unwrap())
+            .iter()
+            .map(|entry| super::super::bundle::read(&store, &run, entry).unwrap())
             .collect::<Vec<_>>();
         contents.sort();
         assert_eq!(contents, vec![b"1234".to_vec(), b"5678".to_vec()]);
