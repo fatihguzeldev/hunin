@@ -13,24 +13,25 @@ export function collectionMode(
   const launchInfo = el(
     'p',
     { class: 'metric-note', role: 'status' },
-    'Loading registered collection modes…',
+    'Loading collection methods…',
+  );
+  const discovery = el('p', { class: 'metric-note' });
+  const details = el(
+    'details',
+    { class: 'collection-details hidden' },
+    el('summary', {}, 'Collection prerequisites'),
+    discovery,
   );
   function describeChoice(): void {
     const choice = choices.get(runtime.value);
+    launchInfo.setAttribute('role', 'status');
     launchInfo.textContent = choice
-      ? [
-          choice.commandRequirement,
-          `Discovery: ${choice.availability}.`,
-          choice.defaultExecutable
-            ? `Default interpreter/tool: ${choice.defaultExecutable}.`
-            : 'Supply the target command explicitly.',
-          choice.recordingVerified
-            ? 'Discovery reports recording verification.'
-            : 'Discovery has not verified a recording session.',
-        ]
-          .filter(Boolean)
-          .join(' ')
-      : 'The service detects the runtime from your explicit command. Recording checks its prerequisites when it starts.';
+      ? choice.commandRequirement || 'Use an explicit target command.'
+      : 'Detects the runtime from your command and checks prerequisites at launch.';
+    details.classList.toggle('hidden', !choice);
+    discovery.textContent = choice
+      ? `Prerequisites: ${choice.availability.replaceAll('_', ' ')}. ${choice.recordingVerified ? 'A recording session was verified.' : 'A recording session has not been checked.'}${choice.defaultExecutable ? ` Default executable: ${choice.defaultExecutable}.` : ''}`
+      : '';
     command.placeholder = choice?.defaultExecutable
       ? JSON.stringify([choice.defaultExecutable, 'argument'])
       : '["/path/to/program", "argument"]';
@@ -55,11 +56,12 @@ export function collectionMode(
     })
     .catch((failure: unknown) => {
       if (signal.aborted) return;
-      launchInfo.textContent = `Collection-mode discovery failed. Automatic detection remains available for an explicit command. ${failure instanceof Error ? failure.message : String(failure)}`;
+      launchInfo.setAttribute('role', 'alert');
+      launchInfo.textContent = `Collection methods could not be loaded. Automatic detection remains available. ${failure instanceof Error ? failure.message : String(failure)}`;
     });
   return {
     select: runtime,
-    description: launchInfo,
+    description: el('div', { class: 'stack' }, launchInfo, details),
     value: (): string | undefined => {
       const choice = choices.get(runtime.value);
       if (runtime.value && !choice?.launchRuntime)

@@ -73,7 +73,7 @@ export async function scenarios(
     el(
       'p',
       { class: 'muted' },
-      'Retain the command, working directory, timeout, and correctness expectation for repeatable recordings.',
+      'Reuse a saved command, inputs and checks for repeatable recordings.',
     ),
     feedback,
     list.element,

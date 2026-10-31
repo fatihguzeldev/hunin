@@ -26,34 +26,37 @@ export function workloadFields(): {
     spellcheck: false,
     disabled: true,
   });
+  const outputField = field('Expected stdout', output);
+  outputField.classList.add('hidden');
   mode.addEventListener('change', () => {
     output.disabled = mode.value === 'exit';
+    outputField.classList.toggle('hidden', output.disabled);
+    output.placeholder =
+      mode.value === 'sha256'
+        ? '64-character SHA-256 digest'
+        : 'Exact output, including whitespace and trailing newlines';
   });
   const element = el(
     'details',
     { class: 'panel' },
-    el(
-      'summary',
-      { class: 'panel-body' },
-      'Workload inputs and correctness checks',
-    ),
+    el('summary', { class: 'panel-body' }, 'Inputs and output checks'),
     el(
       'div',
       { class: 'panel-body stack' },
-      field('Environment overrides · JSON object', environment),
-      field('Input files · JSON path array', files),
+      field('Environment · JSON object', environment),
+      field('Input files · JSON array', files),
       el(
         'p',
         { class: 'metric-note' },
-        'Declared input files are fingerprinted relative to the working directory. Include the workload data needed to assess repeatability.',
+        'Input paths are relative to the working directory. Their content is fingerprinted for later comparisons.',
       ),
       field('Expected exit code', exit),
       field('Output validation', mode),
-      field('Expected stdout · exact text or SHA-256', output),
+      outputField,
       el(
         'p',
         { class: 'metric-note' },
-        'Exact stdout includes whitespace and trailing newlines. An exit code check alone does not validate the program’s output.',
+        'Exact output includes whitespace and trailing newlines. Exit-code-only checks do not validate output.',
       ),
     ),
   );

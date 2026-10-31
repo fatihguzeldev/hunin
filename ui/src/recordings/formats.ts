@@ -74,7 +74,7 @@ export function importFormat(signal: AbortSignal): {
   const description = el(
     'p',
     { class: 'metric-note', role: 'status' },
-    'Loading registered profile formats from the local service…',
+    'Loading supported profile formats…',
   );
   const ownership = el('p', { class: 'metric-note' });
   const choices = new Map<string, ImportChoice>();
@@ -82,7 +82,7 @@ export function importFormat(signal: AbortSignal): {
   function describe(): void {
     description.textContent =
       choices.get(select.value)?.description ??
-      'Choose the format produced by your profiler. This catalog lists supported inputs; it does not verify decoder dependencies or a completed import.';
+      'Choose the format produced by your profiler. Required inputs and dependencies are checked during import.';
   }
   function manualFallback(message: string): void {
     const focused = control.contains(document.activeElement);
@@ -92,7 +92,7 @@ export function importFormat(signal: AbortSignal): {
       autocomplete: 'off',
     });
     control.replaceChildren(field('Profile format', manual));
-    description.textContent = `${message} Enter the exact format accepted by the installed service. A filename extension alone does not establish its format.`;
+    description.textContent = `${message} Enter an exact format name accepted by the service.`;
     if (focused) manual.focus();
   }
   select.addEventListener('change', describe);
