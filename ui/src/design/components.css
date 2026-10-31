@@ -216,6 +216,9 @@ pre {
   max-height: 36rem;
   overflow: auto;
 }
+.code-proof-bytes {
+  white-space: pre;
+}
 details > summary {
   cursor: pointer;
   min-height: 36px;

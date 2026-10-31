@@ -44,12 +44,13 @@ export type Investigation = {
   workbench: {
     window?: { start_us: number; end_us: number };
     unit: string;
+    clockDomain?: string;
     selectedFrameId?: string;
     mode: 'functions' | 'stacks';
     query: string;
     sort: 'self' | 'inclusive';
     focusPath: string[];
-    inspectorTab: 'source' | 'callers' | 'evidence';
+    inspectorTab: 'source' | 'callers' | 'evidence' | 'mapping';
     inspectorWide: boolean;
   };
   calls: { functions: FunctionSelection[]; measurementRunId?: string };
@@ -137,6 +138,8 @@ function decode(value: unknown): SavedInvestigation | undefined {
   const workbench = object(state?.workbench);
   if (workbench) {
     result.workbench.unit = text(workbench.unit) ?? '';
+    const clockDomain = text(workbench.clockDomain);
+    if (clockDomain) result.workbench.clockDomain = clockDomain;
     result.workbench.selectedFrameId = text(workbench.selectedFrameId);
     result.workbench.query = text(workbench.query) ?? '';
     result.workbench.mode =
@@ -146,7 +149,8 @@ function decode(value: unknown): SavedInvestigation | undefined {
     result.workbench.focusPath = strings(workbench.focusPath, 128) ?? [];
     result.workbench.inspectorTab =
       workbench.inspectorTab === 'callers' ||
-      workbench.inspectorTab === 'evidence'
+      workbench.inspectorTab === 'evidence' ||
+      workbench.inspectorTab === 'mapping'
         ? workbench.inspectorTab
         : 'source';
     result.workbench.inspectorWide = workbench.inspectorWide === true;

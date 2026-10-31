@@ -6,7 +6,8 @@ import { weight, weightShare } from '../../profile-weight';
 import { hasInspectableSource } from '../../source/paths';
 import { sourcePresentation } from '../../source/presentation';
 import { sourceUnavailable } from '../../source/errors';
-import { linkedRequest } from '../../requests';
+import { linkedLifetime } from '../../requests';
+import { mappedOrigins } from '../../code/view';
 import type { ViewContext } from '../view';
 import {
   shortPath,
@@ -147,6 +148,7 @@ export function inspector(
     id: 'wb-detail-panel',
   });
   function tab(name: typeof state.inspectorTab) {
+    if (signal.aborted) return;
     state.inspectorTab = name;
     context.persist();
     draw();
@@ -155,6 +157,7 @@ export function inspector(
     ['source', 'Source'],
     ['callers', 'Callers'],
     ['evidence', 'Evidence'],
+    ['mapping', 'Mapped origins'],
   ] as const) {
     const control = button(label, () => tab(name), 'wb-inspector-tab');
     control.setAttribute('role', 'tab');
@@ -173,6 +176,7 @@ export function inspector(
   let page = 0;
   let pending: AbortController | undefined;
   function draw() {
+    if (signal.aborted) return;
     const epoch = ++page;
     pending?.abort();
     for (const control of tabs.querySelectorAll<HTMLButtonElement>('button')) {
@@ -206,21 +210,31 @@ export function inspector(
         { class: 'wb-read-status', role: 'status' },
         state.inspectorTab === 'source'
           ? 'Loading source…'
-          : 'Loading evidence…',
+          : state.inspectorTab === 'mapping'
+            ? 'Loading mapped origins…'
+            : 'Loading evidence…',
       ),
     );
     pending = new AbortController();
-    const request = linkedRequest(signal, pending.signal);
+    const lifetime = linkedLifetime(signal, pending.signal);
     const read =
       state.inspectorTab === 'source'
-        ? sourceContent(context, selected!, request.signal)
-        : evidenceContent(context, selected!, request.signal);
+        ? sourceContent(context, selected!, lifetime)
+        : state.inspectorTab === 'mapping'
+          ? mappedOrigins(
+              context,
+              selected!,
+              data.window,
+              data.clock_domain,
+              lifetime,
+            )
+          : evidenceContent(context, selected!, lifetime);
     void read
       .then((content) => {
-        if (!signal.aborted && epoch === page) panel.replaceChildren(content);
+        if (!lifetime.aborted && epoch === page) panel.replaceChildren(content);
       })
       .catch((error: unknown) => {
-        if (signal.aborted || epoch !== page) return;
+        if (lifetime.aborted || epoch !== page) return;
         const unavailable =
           state.inspectorTab === 'source'
             ? sourceUnavailable(error)
@@ -246,27 +260,29 @@ export function inspector(
               {},
               state.inspectorTab === 'source'
                 ? 'Source could not be loaded'
-                : 'Evidence could not be loaded',
+                : state.inspectorTab === 'mapping'
+                  ? 'Mapped origins could not be loaded'
+                  : 'Evidence could not be loaded',
             ),
             el('p', {}, error instanceof Error ? error.message : String(error)),
             button('Try again', draw, 'button'),
             alternatives(),
           ),
         );
-      })
-      .finally(request.finish);
+      });
   }
   tabs.addEventListener('keydown', (event) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
-    const values = ['source', 'callers', 'evidence'] as const;
+    const values = ['source', 'callers', 'evidence', 'mapping'] as const;
     const index = values.indexOf(state.inspectorTab);
     const next =
       event.key === 'Home'
         ? 0
         : event.key === 'End'
-          ? 2
-          : (index + (event.key === 'ArrowLeft' ? 2 : 1)) % 3;
+          ? values.length - 1
+          : (index + (event.key === 'ArrowLeft' ? values.length - 1 : 1)) %
+            values.length;
     tab(values[next]);
     tabs
       .querySelector<HTMLButtonElement>(

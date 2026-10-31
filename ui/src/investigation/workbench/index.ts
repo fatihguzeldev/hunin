@@ -17,7 +17,7 @@ import './workbench.css';
 
 type Selection = Pick<
   Investigation['workbench'],
-  'unit' | 'window' | 'selectedFrameId'
+  'unit' | 'window' | 'selectedFrameId' | 'clockDomain'
 >;
 
 export async function investigate(context: ViewContext): Promise<HTMLElement> {
@@ -50,6 +50,7 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
   let selectedPath: string[] | undefined;
   const selection = (): Selection => ({
     unit: state.unit,
+    clockDomain: state.clockDomain,
     selectedFrameId: state.selectedFrameId,
     window: state.window ? { ...state.window } : undefined,
   });
@@ -60,6 +61,8 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
       {
         run_id: context.run.id,
         weight_unit: state.unit || undefined,
+        clock_domain:
+          state.clockDomain === 'unix_epoch' ? undefined : state.clockDomain,
         start_us: state.window?.start_us,
         end_us: state.window?.end_us,
         frame_id: state.selectedFrameId,
@@ -84,6 +87,18 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
     try {
       let next = await read(linked.signal);
       if (linked.signal.aborted || epoch !== requestEpoch) return;
+      if (
+        initial &&
+        !state.clockDomain &&
+        !next.bounds &&
+        next.clock_domains.length
+      ) {
+        state.clockDomain = next.clock_domains[0];
+        state.window = undefined;
+        state.selectedFrameId = undefined;
+        state.focusPath = [];
+        next = await read(linked.signal);
+      }
       if (initial && state.window && next.bounds) {
         const bounded = clampWindow(state.window, next.bounds);
         if (
@@ -254,6 +269,34 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
       context.persist('push');
       void load();
     });
+    const clocks = el(
+      'select',
+      { 'aria-label': 'Clock domain', class: 'wb-unit' },
+      el('option', { value: 'unix_epoch' }, 'Aligned epoch'),
+    );
+    const domains = new Set([
+      ...data.clock_domains,
+      ...(data.clock_domain ? [data.clock_domain] : []),
+    ]);
+    for (const [index, domain] of [...domains].entries())
+      clocks.append(
+        el(
+          'option',
+          { value: domain, title: domain },
+          `Runtime clock ${index + 1}`,
+        ),
+      );
+    clocks.value = data.clock_domain ?? 'unix_epoch';
+    if (data.clock_domain) clocks.title = data.clock_domain;
+    clocks.addEventListener('change', () => {
+      state.clockDomain = clocks.value;
+      state.window = undefined;
+      state.selectedFrameId = undefined;
+      state.focusPath = [];
+      selectedPath = undefined;
+      context.persist('push');
+      void load();
+    });
     const title = el(
       'div',
       { class: 'wb-scope-bar' },
@@ -268,6 +311,7 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
         ),
       ),
       units,
+      clocks,
     );
     const body = el('div', { class: 'wb-body' });
     const analysis = el('section', {
@@ -364,7 +408,7 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
       el(
         'p',
         {},
-        `${numeric(data.total_sample_count)} aligned samples · ${numeric(data.unaligned_count)} samples without an aligned clock`,
+        `${numeric(data.total_sample_count)} samples in ${data.clock_domain ?? 'the aligned epoch clock'} · ${numeric(data.unaligned_count)} samples outside this clock domain`,
       ),
     );
     for (const diagnostic of data.diagnostics)
@@ -375,7 +419,7 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
       body.prepend(
         empty(
           data.unaligned_count
-            ? 'Samples have no aligned clock'
+            ? 'No samples in this clock domain'
             : 'No stack samples',
           data.unaligned_count
             ? 'The call tree can still show their sampled weights.'
@@ -400,7 +444,7 @@ export async function investigate(context: ViewContext): Promise<HTMLElement> {
         ? el(
             'p',
             { class: 'wb-scope-notice' },
-            `${numeric(data.unaligned_count)} samples are outside this timeline because their clocks are unaligned.`,
+            `${numeric(data.unaligned_count)} samples are outside the selected clock domain and are not included in this timeline.`,
           )
         : null,
       scope,

@@ -25,6 +25,12 @@ export function registerAnalysis(
     required: true,
   });
   const scope = el('select');
+  const output = el(
+    'select',
+    {},
+    el('option', { value: 'observations' }, 'Derived observations'),
+    el('option', { value: 'code-mapping' }, 'Code mappings · v1'),
+  );
   scope.append(
     el('option', { value: 'recording' }, 'This recording’s source'),
     el('option', { value: 'independent' }, 'Source-independent'),
@@ -60,6 +66,7 @@ export function registerAnalysis(
       { class: 'dialog-body' },
       field('Name', name),
       field('Version', version),
+      field('Output contract', output),
       field('Package directory', cwd),
       field('Command · JSON argument array', command),
       field('Applicability', scope),
@@ -132,6 +139,10 @@ export function registerAnalysis(
         runtime.value,
         { ...source, fingerprint: fingerprint.value },
       );
+      const outputContract =
+        output.value === 'code-mapping'
+          ? { name: 'code-mapping' as const, version: 1 as const }
+          : undefined;
       submit.disabled = true;
       submit.textContent = 'Registering…';
       form.setAttribute('aria-busy', 'true');
@@ -145,6 +156,7 @@ export function registerAnalysis(
         command: args,
         requirements,
         dependencies: declared as Record<string, unknown>,
+        ...(outputContract ? { output_contract: outputContract } : {}),
       });
       dialog.close();
       await registered();
