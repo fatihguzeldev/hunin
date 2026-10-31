@@ -1,6 +1,7 @@
 //! Selected observation reads and transaction-scoped snapshots.
 mod query;
 use super::Store;
+use crate::model::runs::{Artifact, Run};
 use anyhow::{Context, Result};
 pub use query::{
     QueryReadPort, QuerySnapshot, ReadBudgetExceeded, ReadDimension, ReadLimits, ReadUsage,
@@ -35,6 +36,37 @@ pub(crate) struct SelectedRecords<'a> {
 }
 
 impl SelectedRecords<'_> {
+    pub fn run(&self) -> Result<Run> {
+        let text: String = self.connection.query_row(
+            "SELECT manifest FROM runs WHERE id=?1",
+            [self.run_id],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub fn artifacts(&self, maximum_bytes: usize) -> Result<Vec<Artifact>> {
+        let mut query = self
+            .connection
+            .prepare("SELECT id,metadata,sha256 FROM artifacts WHERE run_id=?1 ORDER BY id")?;
+        let mut rows = query.query([self.run_id])?;
+        let mut bytes = 0usize;
+        let mut artifacts = Vec::new();
+        while let Some(row) = rows.next()? {
+            let text = row.get_ref(1)?.as_str()?;
+            bytes = bytes.saturating_add(text.len());
+            anyhow::ensure!(
+                bytes <= maximum_bytes,
+                "artifact metadata snapshot exceeds {maximum_bytes} bytes"
+            );
+            artifacts.push(super::artifacts::decode_metadata(
+                text,
+                row.get_ref(2)?.as_str()?,
+                row.get_ref(0)?.as_str()?,
+            )?);
+        }
+        Ok(artifacts)
+    }
     pub fn result_ids(&self) -> &[String] {
         &self.identities
     }
@@ -191,4 +223,38 @@ fn selected_records(connection: &Connection, run_id: &str) -> Result<Vec<Value>>
         .query_map([run_id], |row| row.get::<_, String>(0))?
         .map(|row| Ok(serde_json::from_str(&row?)?))
         .collect()
+}
+
+#[cfg(test)]
+mod metadata_snapshot_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn analyzer_snapshot_keeps_manifest_artifacts_and_observations_on_one_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let mut run: crate::model::runs::Run = serde_json::from_value(json!({"id":"snapshot","name":"snapshot","status":"completed","command":[],"cwd":".","runtime":"none","started_at_us":1,"finished_at_us":2,"exit_code":0,"diagnostics":[],"source":{"fingerprint":"before"},"correctness":{}})).unwrap();
+        store.save_run(&run).unwrap();
+        let original = store
+            .add_artifact_bytes("snapshot", "before.bin", "raw", b"before")
+            .unwrap();
+        store
+            .with_selected_snapshot("snapshot", "excluded", |selected| {
+                run.source["fingerprint"] = json!("after");
+                store.save_run(&run)?;
+                store.add_artifact_bytes("snapshot", "after.bin", "raw", b"after")?;
+                assert_eq!(selected.run()?.source["fingerprint"], "before");
+                let artifacts = selected.artifacts(1024)?;
+                assert_eq!(artifacts.len(), 1);
+                assert_eq!(artifacts[0].id, original.id);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            store.run("snapshot").unwrap().source["fingerprint"],
+            "after"
+        );
+        assert_eq!(store.artifacts("snapshot").unwrap().len(), 2);
+    }
 }

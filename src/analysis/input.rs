@@ -4,7 +4,7 @@ use crate::storage::{RecordReadLimit, Store};
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     io::{self, Write},
 };
 
@@ -17,6 +17,7 @@ pub(super) struct Input {
     pub run_id: String,
     pub result_ids: Vec<String>,
     pub record_ids: HashSet<String>,
+    pub artifacts: BTreeMap<String, crate::model::runs::Artifact>,
 }
 
 pub(super) fn snapshot(
@@ -36,36 +37,39 @@ fn snapshot_with_limit(
     mut checkpoint: impl FnMut() -> Result<()>,
 ) -> Result<Input> {
     checkpoint()?;
-    let run = store.run(run_id)?;
-    let artifacts = store
-        .artifacts(run_id)?
-        .into_iter()
-        .filter(|artifact| !artifact.format.starts_with("analysis-"))
-        .collect::<Vec<_>>();
-    applicability::check(&analysis["requirements"], &run, &artifacts)?;
-    let artifacts: Vec<_> = artifacts
-        .into_iter()
-        .map(|artifact| {
-            checkpoint()?;
-            let path = store.artifact_path(run_id, &artifact.id)?;
-            let mut value = serde_json::to_value(artifact)?;
-            value["path"] = json!(path);
-            Ok(value)
-        })
-        .collect::<Result<_>>()?;
     let source_key = format!("analysis:{}", analysis["id"].as_str().unwrap());
     store.with_selected_snapshot(run_id, &source_key, |selected| {
         checkpoint()?;
+        let run = selected.run()?;
+        let artifacts = selected
+            .artifacts(maximum_bytes)?
+            .into_iter()
+            .filter(|artifact| !artifact.format.starts_with("analysis-"))
+            .collect::<Vec<_>>();
+        applicability::check(&analysis["requirements"], &run, &artifacts)?;
+        let artifact_inventory = artifacts
+            .iter()
+            .map(|artifact| (artifact.id.clone(), artifact.clone()))
+            .collect();
+        let artifact_root = store.root().join("artifacts");
+        let artifacts: Vec<_> = artifacts
+            .into_iter()
+            .map(|artifact| {
+                checkpoint()?;
+                let path = artifact_root.join(&artifact.sha256);
+                let mut value = serde_json::to_value(artifact)?;
+                value["path"] = json!(path);
+                Ok(value)
+            })
+            .collect::<Result<_>>()?;
+        let mut analyzer = json!({"id": analysis["id"], "version": analysis["version"], "package_digest": analysis["package_digest"]});
+        if let Some(contract) = analysis.get("output_contract") { analyzer["output_contract"] = contract.clone(); }
         let header = json!({
             "run": run,
             "records": [],
             "artifacts": artifacts,
             "input_result_sets": selected.result_ids(),
-            "analyzer": {
-                "id": analysis["id"],
-                "version": analysis["version"],
-                "package_digest": analysis["package_digest"],
-            },
+            "analyzer": analyzer,
         });
         let mut output = LimitedBuffer {
             bytes: Vec::new(),
@@ -118,6 +122,7 @@ fn snapshot_with_limit(
             run_id: run_id.to_owned(),
             result_ids: selected.result_ids().to_owned(),
             record_ids,
+            artifacts: artifact_inventory,
         })
     })
 }

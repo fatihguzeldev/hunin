@@ -189,6 +189,98 @@ fn within(dimension: ReadDimension, limit: usize, observed: usize) -> Result<()>
 }
 
 impl QueryReadPort<'_> {
+    fn charge_metadata(&mut self, text: &str) -> Result<()> {
+        self.checkpoint()?;
+        let rows = self.usage.rows.saturating_add(1);
+        let bytes = self.usage.bytes.saturating_add(text.len());
+        within(ReadDimension::Rows, self.limits.maximum_rows, rows)?;
+        within(
+            ReadDimension::RecordBytes,
+            self.limits.maximum_record_bytes,
+            text.len(),
+        )?;
+        within(
+            ReadDimension::Bytes,
+            self.limits.maximum_bytes,
+            bytes.saturating_add(self.usage.identity_bytes),
+        )?;
+        self.usage.rows = rows;
+        self.usage.bytes = bytes;
+        Ok(())
+    }
+
+    /// Metadata and selected observations share this port's SQLite snapshot and budgets.
+    pub fn run(&mut self) -> Result<crate::model::runs::Run> {
+        let connection = self.connection;
+        let mut statement = self
+            .control
+            .sql(connection.prepare("SELECT manifest FROM runs WHERE id=?1"))?;
+        let mut rows = self.control.sql(statement.query([self.run_id]))?;
+        let row = self
+            .control
+            .sql(rows.next())?
+            .context("recording not found")?;
+        let text = row.get_ref(0)?.as_str()?;
+        self.charge_metadata(text)?;
+        Ok(serde_json::from_str(text)?)
+    }
+
+    pub fn artifact_metadata(&mut self, id: &str) -> Result<crate::model::runs::Artifact> {
+        let connection = self.connection;
+        let mut statement = self.control.sql(
+            connection.prepare("SELECT metadata,sha256 FROM artifacts WHERE run_id=?1 AND id=?2"),
+        )?;
+        let mut rows = self
+            .control
+            .sql(statement.query(rusqlite::params![self.run_id, id]))?;
+        let row = self
+            .control
+            .sql(rows.next())?
+            .context("artifact not found in this recording snapshot")?;
+        let text = row.get_ref(0)?.as_str()?;
+        self.charge_metadata(text)?;
+        super::super::artifacts::decode_metadata(text, row.get_ref(1)?.as_str()?, id)
+    }
+
+    pub fn artifacts(&mut self) -> Result<Vec<crate::model::runs::Artifact>> {
+        let connection = self.connection;
+        let mut statement = self.control.sql(
+            connection
+                .prepare("SELECT id,metadata,sha256 FROM artifacts WHERE run_id=?1 ORDER BY id"),
+        )?;
+        let mut rows = self.control.sql(statement.query([self.run_id]))?;
+        let mut artifacts = Vec::new();
+        while let Some(row) = self.control.sql(rows.next())? {
+            let text = row.get_ref(1)?.as_str()?;
+            self.charge_metadata(text)?;
+            artifacts.push(super::super::artifacts::decode_metadata(
+                text,
+                row.get_ref(2)?.as_str()?,
+                row.get_ref(0)?.as_str()?,
+            )?);
+        }
+        Ok(artifacts)
+    }
+
+    /// One bounded discovery page; callers own any sentinel/truncation interpretation.
+    pub fn analysis_packages(&mut self, limit: usize) -> Result<Vec<serde_json::Value>> {
+        anyhow::ensure!(
+            (1..=501).contains(&limit),
+            "analysis package snapshot limit must be 1..501"
+        );
+        let connection = self.connection;
+        let mut statement = self.control.sql(connection.prepare(
+            "SELECT payload FROM documents WHERE namespace='analyses' ORDER BY id LIMIT ?1",
+        ))?;
+        let mut rows = self.control.sql(statement.query([limit as u64]))?;
+        let mut packages = Vec::new();
+        while let Some(row) = self.control.sql(rows.next())? {
+            let text = row.get_ref(0)?.as_str()?;
+            self.charge_metadata(text)?;
+            packages.push(serde_json::from_str(text)?);
+        }
+        Ok(packages)
+    }
     pub fn checkpoint(&self) -> Result<()> {
         self.control.checkpoint()
     }
@@ -417,6 +509,63 @@ impl Store {
 mod tests {
     use super::*;
     use rusqlite::params;
+
+    #[test]
+    fn query_metadata_keeps_snapshot_identity_and_consumes_existing_budgets() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let mut run: crate::model::runs::Run = serde_json::from_value(serde_json::json!({"id":"metadata","name":"before","status":"completed","command":[],"cwd":".","runtime":"none","started_at_us":1,"finished_at_us":2,"exit_code":0,"diagnostics":[],"source":{},"correctness":{}})).unwrap();
+        store.save_run(&run).unwrap();
+        let original = store
+            .add_artifact_bytes("metadata", "original", "raw", b"original")
+            .unwrap();
+        store
+            .save_document("analyses", "before", &serde_json::json!({"id":"before"}))
+            .unwrap();
+        store
+            .with_query_snapshot(
+                "metadata",
+                ReadLimits::default(),
+                || Ok(()),
+                |port| {
+                    run.name = "after".into();
+                    store.save_run(&run)?;
+                    let later = store.add_artifact_bytes("metadata", "later", "raw", b"later")?;
+                    store.save_document("analyses", "after", &serde_json::json!({"id":"after"}))?;
+                    assert_eq!(port.run()?.name, "before");
+                    assert_eq!(
+                        port.artifact_metadata(&original.id)?.sha256,
+                        original.sha256
+                    );
+                    assert!(port.artifact_metadata(&later.id).is_err());
+                    assert_eq!(port.artifacts()?.len(), 1);
+                    assert_eq!(
+                        port.analysis_packages(2)?,
+                        vec![serde_json::json!({"id":"before"})]
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let error = store
+            .with_query_snapshot(
+                "metadata",
+                ReadLimits {
+                    maximum_bytes: 1,
+                    ..Default::default()
+                },
+                || Ok(()),
+                |port| port.run(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<ReadBudgetExceeded>()
+                .unwrap()
+                .dimension,
+            ReadDimension::Bytes
+        );
+    }
     #[derive(Debug)]
     struct Cancelled;
     impl fmt::Display for Cancelled {
