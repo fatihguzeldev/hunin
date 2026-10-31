@@ -146,6 +146,31 @@ fn code_artifact_corruption_and_non_instance_endpoints_cannot_publish() {
 }
 
 #[test]
+fn code_proof_alias_metadata_cannot_expand_a_verified_blob() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let first = store
+        .add_artifact_bytes("run-1", "first.bin", "raw", b"code")
+        .unwrap();
+    let alias = store
+        .add_artifact_bytes("run-1", "alias.bin", "raw", b"code")
+        .unwrap();
+    store.connection().unwrap().execute(
+        "UPDATE artifacts SET metadata=json_set(metadata,'$.size',100) WHERE run_id=?1 AND id=?2",
+        params!["run-1", alias.id],
+    ).unwrap();
+    let mut records = vec![runtime_code("first"), runtime_code("alias")];
+    for (record, artifact) in records.iter_mut().zip([first, alias]) {
+        record["attributes"]["code_instance"]["artifact"] =
+            json!({"artifact_id":artifact.id,"sha256":artifact.sha256});
+    }
+    let error =
+        super::code::prepare_artifacts(&store, "run-1", &records, &mut || Ok(())).unwrap_err();
+    assert!(error.to_string().contains("size"), "{error:#}");
+}
+
+#[test]
 fn unrelated_opaque_attributes_do_not_acquire_code_reference_semantics() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

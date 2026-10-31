@@ -6,10 +6,7 @@ use crate::model::{
 };
 use anyhow::{Context, ensure};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{HashMap, HashSet},
-    io::Read,
-};
+use std::{collections::HashMap, io::Read};
 
 // This streams unique proof blobs; the separate analyzer JSON input limit is 128 MiB.
 const PROOF_BYTES: u64 = 1024 * 1024 * 1024;
@@ -20,16 +17,27 @@ pub(super) fn prepare_artifacts(
     records: &[Value],
     checkpoint: &mut impl FnMut() -> Result<()>,
 ) -> Result<HashMap<String, Artifact>> {
-    let mut artifacts = HashMap::new();
-    let mut hashed = HashSet::new();
+    let mut artifacts = HashMap::<String, Artifact>::new();
+    let mut verified_sizes = HashMap::<String, u64>::new();
     let mut read_bytes = 0u64;
     for record in records {
         checkpoint()?;
         if let Some(code) = code::parse_record(record)? {
             for proof in code.artifact_refs() {
-                let artifact = store.artifact_metadata(run_id, &proof.artifact_id)?;
-                validate_artifact(proof, &artifact)?;
-                if hashed.insert(artifact.sha256.clone()) {
+                checkpoint()?;
+                let artifact = match artifacts.entry(proof.artifact_id.clone()) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(store.artifact_metadata(run_id, &proof.artifact_id)?)
+                    }
+                };
+                validate_artifact(proof, artifact)?;
+                if let Some(size) = verified_sizes.get(&artifact.sha256) {
+                    ensure!(
+                        *size == artifact.size,
+                        "code proof aliases disagree with the verified retained size"
+                    );
+                } else {
                     ensure!(
                         artifact.size <= PROOF_BYTES.saturating_sub(read_bytes),
                         "code-proof-bytes-v1 exceeds the 1 GiB publication limit"
@@ -74,8 +82,8 @@ pub(super) fn prepare_artifacts(
                         "code proof retained bytes disagree with their artifact identity"
                     );
                     read_bytes += size;
+                    verified_sizes.insert(artifact.sha256.clone(), size);
                 }
-                artifacts.insert(artifact.id.clone(), artifact);
             }
         }
     }
