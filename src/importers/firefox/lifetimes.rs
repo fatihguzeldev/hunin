@@ -1,12 +1,16 @@
 //! Mapping-instance evidence retained before Samply converts absolute stacks.
 use crate::importers::output::checked_us;
 use crate::importers::output::{RecordBatch, ReservedRecord, StackBuilder};
+use crate::model::code::{
+    ArtifactRef, CodeAnchor, CodeInstance, CodeRange, CodeUnavailable, CodeValidity, InstanceKind,
+    RangeSpace, Representation, UnavailableState,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     io::Read,
     path::Path,
@@ -14,6 +18,13 @@ use std::{
 
 const UPSTREAM: &str = "da75c28f367454c621e690eeb4e44ec2ebb29a78";
 use super::MAX_LIFETIME_SIDECAR;
+use super::images::Images;
+
+pub(super) struct TypedCode {
+    instance: CodeInstance,
+    reported_code_id: Option<String>,
+}
+pub(super) type CodeEvidence = BTreeMap<String, TypedCode>;
 
 #[derive(Default)]
 pub(super) struct Timeline {
@@ -34,6 +45,194 @@ pub(super) struct Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_native_instances_require_retained_matching_image_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let image = directory.path().join("image.dylib");
+        fs::write(
+            &image,
+            include_bytes!("../fixtures/native-reload/phase_a.macho"),
+        )
+        .unwrap();
+        let library = json!({"name":"library","path":image,"codeId":"CD3C90FFC4B93EF1B5FD3FBD731EA331","arch":"arm64"});
+        let raw = json!({"meta":{"startTime":1700000000000u64},"libs":[library.clone()]});
+        let raw_sha = format!("{:x}", Sha256::digest(serde_json::to_vec(&raw).unwrap()));
+        let process = json!({"key":"p0","pid":"7","start_time_ms":0,"end_time_ms":40});
+        let input = json!({"schema_version":1,"raw_profile_sha256":raw_sha,"epoch_start_ms":1700000000000u64,"truncated":false,"collector":{"upstream_commit":UPSTREAM,"revision":"hunin-native1","os":"linux"},"events":[{"kind":"mapping","op":"add","time_ms":10,"process":process,"load_id":"one","library":library,"start_avma":"0x1000","end_avma":"0x2000","relative_address_at_start":0},{"kind":"mapping","op":"remove","time_ms":30,"process":process,"start_avma":"0x1000"}]});
+        let path = directory.path().join("profile.lifetimes.json");
+        let bytes = serde_json::to_vec(&input).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let timeline = Timeline::load(
+            &path,
+            &raw_sha,
+            Some(&sha),
+            &raw,
+            &mut crate::importers::OutputBudget::default(),
+        )
+        .unwrap()
+        .unwrap();
+        let codes = timeline
+            .code_evidence(&Images::inspect(&raw), "key")
+            .unwrap();
+        assert_eq!(codes.len(), 1);
+        let code = &codes.values().next().unwrap().instance;
+        assert_eq!(code.range.as_ref().unwrap().start, "0x1000");
+        assert_eq!(code.range.as_ref().unwrap().end_exclusive, "0x2000");
+        assert_eq!(
+            code.artifact.as_ref().unwrap().sha256,
+            "480286d563378328069dd80b62cef4f1893ac3f3a072bf224ca4468a3f148d6a"
+        );
+        assert!(code.source.is_none());
+        let legacy_id = codes.keys().next().unwrap();
+        let mut sample = json!({"schema_version":1,"kind":"sample","id":"sample","run_id":"run","producer_id":"native","pid":7,"tid":"8","timestamp_us":1700000000020000u64,"basis":"sampled","weight":3,"weight_unit":"samples","stack":[{"function":"observed","address":"0x100","code_id":"CD3C90FFC4B93EF1B5FD3FBD731EA331"}],"attributes":{"clock":"unix_epoch","clock_alignment":"profile_start_epoch_plus_relative_time"}});
+        let links = vec![
+            json!({"record_id":legacy_id,"relative_address":256,"lookup_address":"0x1100","address":"0x1101"}),
+        ];
+        let mut budget = crate::importers::OutputBudget::default();
+        let mut records = RecordBatch::new(&mut budget, None);
+        assert!(
+            timeline
+                .annotate_code(&mut sample, &links, &codes, &mut records)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(sample["stack"][0]["address"], "0x100");
+        assert_eq!(sample["stack"][0]["code_offset"], "0x1100");
+        assert_eq!(
+            sample["stack"][0]["code_instance_id"],
+            format!("{legacy_id}:code")
+        );
+        assert_eq!(
+            sample["stack"][0]["code_address_basis"],
+            "collector_adjusted_lookup_address"
+        );
+        let mut ambiguous = sample.clone();
+        for field in ["code_instance_id", "code_offset", "code_address_basis"] {
+            ambiguous["stack"][0].as_object_mut().unwrap().remove(field);
+        }
+        let mut ambiguous_codes = CodeEvidence::new();
+        for id in [legacy_id.as_str(), "second-load"] {
+            ambiguous_codes.insert(
+                id.into(),
+                TypedCode {
+                    instance: code.clone(),
+                    reported_code_id: Some("CD3C90FFC4B93EF1B5FD3FBD731EA331".into()),
+                },
+            );
+        }
+        let mut ambiguous_links = links.clone();
+        ambiguous_links.push(json!({"record_id":"second-load","relative_address":256,"lookup_address":"0x3100","address":"0x3101"}));
+        let mut ambiguous_budget = crate::importers::OutputBudget::default();
+        let mut ambiguous_records = RecordBatch::new(&mut ambiguous_budget, None);
+        let unavailable = timeline
+            .annotate_code(
+                &mut ambiguous,
+                &ambiguous_links,
+                &ambiguous_codes,
+                &mut ambiguous_records,
+            )
+            .unwrap();
+        assert!(
+            ambiguous["stack"][0].get("code_instance_id").is_none(),
+            "identical relative PCs in separate loads cannot be joined by filename or symbol"
+        );
+        for record in unavailable {
+            ambiguous_records.append_reserved(record).unwrap();
+        }
+        let unavailable = ambiguous_records.finish().unwrap();
+        assert_eq!(
+            unavailable[0]["attributes"]["code_mapping_unavailable"]["reason_code"],
+            "native_frame_link_ambiguous"
+        );
+        ambiguous_codes.remove("second-load");
+        ambiguous_links[1]["reported_code_id"] = json!("CD3C90FFC4B93EF1B5FD3FBD731EA331");
+        let mut mixed_budget = crate::importers::OutputBudget::default();
+        let mut mixed_records = RecordBatch::new(&mut mixed_budget, None);
+        let mixed = timeline
+            .annotate_code(
+                &mut ambiguous,
+                &ambiguous_links,
+                &ambiguous_codes,
+                &mut mixed_records,
+            )
+            .unwrap();
+        assert!(ambiguous["stack"][0].get("code_instance_id").is_none());
+        assert_eq!(
+            mixed.len(),
+            1,
+            "an unverified load must not borrow a verified sibling's identity"
+        );
+        timeline
+            .emit_records("run", "key", &codes, &mut records)
+            .unwrap();
+        records.push(sample).unwrap();
+        let records = records.finish().unwrap();
+        let store = crate::storage::Store::open(&directory.path().join("store")).unwrap();
+        store
+            .save_run(&crate::model::runs::Run {
+                id: "run".into(),
+                name: "native code custody".into(),
+                status: "completed".into(),
+                command: vec![],
+                cwd: directory.path().to_string_lossy().into_owned(),
+                runtime: "native".into(),
+                started_at_us: 1700000000000000,
+                finished_at_us: Some(1700000000040000),
+                exit_code: Some(0),
+                diagnostics: vec![],
+                source: json!({}),
+                correctness: json!({}),
+            })
+            .unwrap();
+        let artifact = store
+            .add_artifact_bytes(
+                "run",
+                &format!("image-{}.bin", code.artifact.as_ref().unwrap().sha256),
+                "native-image",
+                include_bytes!("../fixtures/native-reload/phase_a.macho"),
+            )
+            .unwrap();
+        assert_eq!(artifact.id, code.artifact.as_ref().unwrap().artifact_id);
+        store
+            .accept("run", "native-code-custody", &records)
+            .unwrap();
+        let params = json!({"observation_id":"sample","frame_index":0});
+        let result = crate::query::read_recording(
+            &store,
+            "run",
+            crate::query::RecordingQuery::CodeInspect(&params),
+            Default::default(),
+            || Ok(()),
+        )
+        .unwrap()
+        .value;
+        assert_eq!(result["instances"].as_array().unwrap().len(), 1);
+        assert_eq!(result["input_artifacts"][0]["status"], "metadata_matches");
+        assert_eq!(result["coverage"]["total"]["weight"], 3.0);
+        assert_eq!(
+            result["coverage"]["unknown"]["weight"], 3.0,
+            "load identity is not a semantic-origin mapping"
+        );
+        assert!(
+            timeline
+                .code_evidence(&Images::default(), "key")
+                .unwrap()
+                .is_empty()
+        );
+        fs::write(
+            &image,
+            include_bytes!("../fixtures/native-reload/phase_b.macho"),
+        )
+        .unwrap();
+        assert!(
+            timeline
+                .code_evidence(&Images::inspect(&raw), "key")
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn repeated_moves_cannot_expand_a_shared_library_before_emitting_records() {
@@ -182,6 +381,82 @@ fn os_pid(value: &Value) -> Result<u64> {
 }
 
 impl Timeline {
+    pub(super) fn code_evidence(&self, images: &Images, key: &str) -> Result<CodeEvidence> {
+        let mut codes = BTreeMap::new();
+        for instance in &self.instances {
+            let Some(image) = images
+                .get(&instance.library)
+                .filter(|image| image["status"] == "identifier_match")
+            else {
+                continue;
+            };
+            let Some(sha) = image["image_sha256"].as_str() else {
+                continue;
+            };
+            let process_start = ms(&instance.process["start_time_ms"])?;
+            let start = checked_us(
+                (self.epoch_ms + instance.start.max(process_start)) * 1000.0,
+                "native code start",
+            )?;
+            let end = instance
+                .end
+                .map(|end| checked_us((self.epoch_ms + end) * 1000.0, "native code end"))
+                .transpose()?;
+            if end.is_some_and(|end| end <= start) {
+                continue;
+            }
+            let data = CodeInstance {
+                schema_version: 1,
+                instance_kind: InstanceKind::Runtime,
+                runtime_instance_id: Some(format!(
+                    "native:{key}:{}",
+                    instance.process["key"].as_str().unwrap()
+                )),
+                representation: Representation::MachineCode,
+                architecture: instance.library["arch"].as_str().map(str::to_owned),
+                code_id: Some(format!("sha256:{sha}")),
+                artifact: Some(ArtifactRef {
+                    artifact_id: crate::model::runs::Artifact::reference_id(
+                        sha,
+                        &format!("image-{sha}.bin"),
+                        "native-image",
+                    ),
+                    sha256: sha.into(),
+                    offset: None,
+                    length: None,
+                }),
+                range: Some(CodeRange {
+                    space: RangeSpace::RuntimeAddress,
+                    start: format!("0x{:x}", instance.start_avma),
+                    end_exclusive: format!("0x{:x}", instance.end_avma),
+                    function_index: None,
+                }),
+                validity: Some(CodeValidity {
+                    clock: "unix_epoch".into(),
+                    alignment: "profile_start_epoch_plus_relative_time".into(),
+                    start_us: Some(start),
+                    end_us: end,
+                    start_censored: instance.start_censored || instance.start < process_start,
+                    end_censored: instance.end_censored,
+                    boundary_basis: format!(
+                        "native_lifetime:{}:{}",
+                        instance.start_basis, instance.end_basis
+                    ),
+                }),
+                label: instance.library["name"].as_str().map(str::to_owned),
+                source: None,
+            };
+            data.validate()?;
+            codes.insert(
+                Self::id(instance, key),
+                TypedCode {
+                    instance: data,
+                    reported_code_id: instance.library["codeId"].as_str().map(str::to_owned),
+                },
+            );
+        }
+        Ok(codes)
+    }
     pub fn load(
         path: &Path,
         raw_sha: &str,
@@ -647,7 +922,13 @@ impl Timeline {
             instance.generation
         )
     }
-    pub fn emit_records(&self, run: &str, key: &str, records: &mut RecordBatch<'_>) -> Result<()> {
+    pub fn emit_records(
+        &self,
+        run: &str,
+        key: &str,
+        codes: &CodeEvidence,
+        records: &mut RecordBatch<'_>,
+    ) -> Result<()> {
         for i in &self.instances {
             records.check()?;
             records.fragment(&i.library)?;
@@ -668,6 +949,9 @@ impl Timeline {
                 )?);
             }
             records.push(record)?;
+            if let Some(code) = codes.get(&Self::id(i, key)) {
+                records.push(json!({"schema_version":1,"kind":"event","id":format!("{}:code",Self::id(i,key)),"run_id":run,"producer_id":format!("profile:{key}:{pid}:{lifetime}"),"pid":pid,"tid":"process","timestamp_us":code.instance.validity.as_ref().unwrap().start_us,"basis":"observed","name":"code.instance","evidence":[Self::id(i,key)],"attributes":{"clock":"unix_epoch","clock_alignment":"profile_start_epoch_plus_relative_time","code_instance":code.instance}}))?;
+            }
         }
         if let Some(outcome) = &self.target_outcome
             && (outcome["state"] == "exited" || outcome["state"] == "signaled")
@@ -694,6 +978,7 @@ impl Timeline {
         time: f64,
         record: &mut Value,
         key: &str,
+        codes: &CodeEvidence,
         records: &mut RecordBatch<'_>,
     ) -> Result<Vec<ReservedRecord>> {
         let sample = self.samples.get(&sample_key(
@@ -765,19 +1050,107 @@ impl Timeline {
             );
             let id = Self::id(instance, key);
             link["record_id"] = json!(id);
+            link["reported_code_id"] = instance.library["codeId"].clone();
             links.push_owned(link, records)?;
             if linked.insert(id.clone()) {
                 relations.push(records.reserve(json!({"schema_version":1,"kind":"relation","id":format!("{}:native-map:{}",record["id"].as_str().unwrap(),relations.len()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":record["timestamp_us"],"basis":"observed","from":record["id"],"to":id,"relation":"sampled_in_code_instance","evidence":[record["id"],id],"attributes":{"clock":"unix_epoch","clock_alignment":"profile_start_epoch_plus_relative_time","source_format":"samply-native-lifetimes","mapping_time_ms":mapping_time,"evidence_complete":self.complete}}))?);
             }
         }
-        record["attributes"]["native_load_instances"] = json!(links.finish());
+        let links = links.finish();
+        relations.extend(self.annotate_code(record, &links, codes, records)?);
+        record["attributes"]["native_load_instances"] = json!(links);
         Ok(relations)
+    }
+
+    fn annotate_code(
+        &self,
+        record: &mut Value,
+        links: &[Value],
+        codes: &CodeEvidence,
+        records: &mut RecordBatch<'_>,
+    ) -> Result<Vec<ReservedRecord>> {
+        if codes.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut candidates: HashMap<(u64, String), BTreeSet<(String, u64)>> = HashMap::new();
+        for link in links {
+            records.frame()?;
+            let Some(id) = link["record_id"].as_str() else {
+                continue;
+            };
+            let (Some(relative), Some(reported)) = (
+                link["relative_address"].as_u64(),
+                codes
+                    .get(id)
+                    .and_then(|code| code.reported_code_id.as_deref())
+                    .or_else(|| link["reported_code_id"].as_str()),
+            ) else {
+                continue;
+            };
+            candidates
+                .entry((relative, reported.to_owned()))
+                .or_default()
+                .insert((id.into(), address(&link["lookup_address"])?));
+        }
+        let timestamp = record["timestamp_us"]
+            .as_u64()
+            .context("native code sample time missing")?;
+        let clock = json!({"clock":record["attributes"]["clock"],"clock_alignment":record["attributes"]["clock_alignment"]});
+        let mut unavailable = vec![];
+        for (index, frame) in record["stack"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            records.frame()?;
+            let (Some(relative), Some(reported)) = (
+                frame["address"]
+                    .as_str()
+                    .and_then(|value| address(&json!(value)).ok()),
+                frame["code_id"].as_str(),
+            ) else {
+                continue;
+            };
+            let Some(matches) = candidates.get(&(relative, reported.into())) else {
+                continue;
+            };
+            if matches.len() != 1 {
+                unavailable.push((index, "native_frame_link_ambiguous"));
+                continue;
+            }
+            let (id, lookup) = matches.first().unwrap();
+            let Some(code) = codes.get(id) else {
+                continue;
+            };
+            let instance = &code.instance;
+            if instance
+                .validity
+                .as_ref()
+                .and_then(|validity| validity.at_in(timestamp, &clock))
+                == Some(false)
+            {
+                unavailable.push((index, "native_mapping_clock_precision"));
+                continue;
+            }
+            let id = format!("{id}:code");
+            let offset = format!("0x{lookup:x}");
+            records.fragment(&id)?;
+            records.fragment(&offset)?;
+            frame["code_instance_id"] = json!(id);
+            frame["code_offset"] = json!(offset);
+            frame["code_address_basis"] = json!("collector_adjusted_lookup_address");
+        }
+        unavailable.into_iter().map(|(index,reason)|{
+            let data=CodeUnavailable{schema_version:1,anchor:CodeAnchor{observation_id:record["id"].as_str().unwrap().into(),frame_index:index},state:UnavailableState::Unknown,reason_code:reason.into()};
+            records.reserve(json!({"schema_version":1,"kind":"event","id":format!("{}:code-unavailable:{index}",record["id"].as_str().unwrap()),"run_id":record["run_id"],"producer_id":record["producer_id"],"pid":record["pid"],"tid":record["tid"],"timestamp_us":timestamp,"basis":"observed","name":"code.mapping_unavailable","evidence":[record["id"]],"attributes":{"clock":clock["clock"],"clock_alignment":clock["clock_alignment"],"code_mapping_unavailable":data}}))
+        }).collect()
     }
     #[cfg(test)]
     pub fn records(&self, run: &str, key: &str) -> Result<Vec<Value>> {
         let mut budget = crate::importers::OutputBudget::default();
         let mut records = RecordBatch::new(&mut budget, None);
-        self.emit_records(run, key, &mut records)?;
+        self.emit_records(run, key, &CodeEvidence::new(), &mut records)?;
         records.finish()
     }
     #[cfg(test)]
@@ -790,7 +1163,14 @@ impl Timeline {
     ) -> Result<Vec<Value>> {
         let mut budget = crate::importers::OutputBudget::default();
         let mut records = RecordBatch::new(&mut budget, None);
-        let relations = self.link_sample_into(thread, time, record, key, &mut records)?;
+        let relations = self.link_sample_into(
+            thread,
+            time,
+            record,
+            key,
+            &CodeEvidence::new(),
+            &mut records,
+        )?;
         for relation in relations {
             records.append_reserved(relation)?;
         }

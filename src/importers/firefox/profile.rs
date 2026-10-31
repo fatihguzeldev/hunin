@@ -33,6 +33,10 @@ pub(super) fn decode_into(
     lifetimes: Option<&super::lifetimes::Timeline>,
     records: &mut RecordBatch<'_>,
 ) -> Result<Vec<String>> {
+    let codes = lifetimes
+        .map(|timeline| timeline.code_evidence(images, key))
+        .transpose()?
+        .unwrap_or_default();
     let sidecar = path.with_extension("syms.json");
     let symbols: Option<Value> = fs::read(&sidecar)
         .ok()
@@ -46,11 +50,15 @@ pub(super) fn decode_into(
         key,
         records,
         &mut unresolved,
-        &NativeContext { images, lifetimes },
+        &NativeContext {
+            images,
+            lifetimes,
+            codes: &codes,
+        },
     )?;
     let mut diagnostics = images.diagnostics();
     if let Some(lifetimes) = lifetimes {
-        lifetimes.emit_records(run_id, key, records)?;
+        lifetimes.emit_records(run_id, key, &codes, records)?;
         diagnostics.extend(lifetimes.diagnostics());
     }
     if unresolved > 0 {
@@ -64,6 +72,7 @@ pub(super) fn decode_into(
 struct NativeContext<'a> {
     images: &'a Images,
     lifetimes: Option<&'a super::lifetimes::Timeline>,
+    codes: &'a super::lifetimes::CodeEvidence,
 }
 
 fn decode_process(
@@ -240,7 +249,14 @@ fn decode_process(
             }
             let relations = lifetimes
                 .map(|timeline| {
-                    timeline.link_sample_into(thread, time_ms, &mut record, key, records)
+                    timeline.link_sample_into(
+                        thread,
+                        time_ms,
+                        &mut record,
+                        key,
+                        native.codes,
+                        records,
+                    )
                 })
                 .transpose()?
                 .unwrap_or_default();
