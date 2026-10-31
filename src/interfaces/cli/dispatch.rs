@@ -16,6 +16,22 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         );
         return Ok(());
     }
+    let host_query = match &cli.command {
+        Command::Capabilities => Some(json!({})),
+        Command::Call {
+            operation,
+            params,
+            json_errors,
+        } if operation == "capabilities" => Some(decode_parameters(params, *json_errors)?),
+        _ => None,
+    };
+    if let Some(params) = host_query {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::operations::host_capabilities(params)?)?
+        );
+        return Ok(());
+    }
     if let Command::Projects { command } = cli.command {
         anyhow::ensure!(
             cli.data_dir.is_none(),
@@ -75,7 +91,7 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         Command::Projects { .. } | Command::Ui { .. } => {
             unreachable!("project management and UI return before selecting an operation store")
         }
-        Command::Capabilities => operations.call("capabilities", json!({})).await?,
+        Command::Capabilities => unreachable!("host discovery returns before project selection"),
         Command::Run {
             name,
             runtime,
@@ -147,15 +163,7 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             params,
             json_errors,
         } => {
-            let parameters = serde_json::from_str::<Value>(&params)
-                .map_err(|error| {
-                    if json_errors {
-                        crate::operations::invalid_parameters_error(error)
-                    } else {
-                        anyhow::Error::new(error)
-                    }
-                })
-                .context("parameters must be a JSON object")?;
+            let parameters = decode_parameters(&params, json_errors)?;
             let mut result = operations.call(&operation, parameters).await?;
             if matches!(
                 operation.as_str(),
@@ -185,6 +193,18 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn decode_parameters(params: &str, json_errors: bool) -> Result<Value> {
+    serde_json::from_str(params)
+        .map_err(|error| {
+            if json_errors {
+                crate::operations::invalid_parameters_error(error)
+            } else {
+                anyhow::Error::new(error)
+            }
+        })
+        .context("parameters must be a JSON object")
 }
 
 fn default_root() -> PathBuf {

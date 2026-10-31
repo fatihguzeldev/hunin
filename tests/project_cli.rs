@@ -35,6 +35,28 @@ fn selected(root: &Path, project: &str, operation: &str, params: Value) -> Value
 }
 
 #[test]
+fn capabilities_discovery_does_not_create_a_project_or_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = temp.path().join("uncreated-registry");
+    for arguments in [vec!["capabilities"], vec!["call", "capabilities", "{}"]] {
+        let capabilities = successful(
+            cli()
+                .arg("--registry-dir")
+                .arg(&registry)
+                .current_dir(temp.path())
+                .args(arguments)
+                .output()
+                .unwrap(),
+        );
+        assert!(capabilities["import_formats"].is_array());
+        assert!(
+            !registry.exists(),
+            "host discovery must not register its working directory"
+        );
+    }
+}
+
+#[test]
 fn cli_and_mcp_select_independent_stores_and_retain_imported_artifacts() {
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("empty.jsonl");

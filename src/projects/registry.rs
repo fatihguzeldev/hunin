@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-const REGISTRY_VERSION: u32 = 1;
+const REGISTRY_VERSION: u32 = 2;
 const LEGACY_ID: &str = "legacy";
 
 #[derive(Clone)]
@@ -44,6 +44,11 @@ impl ProjectRegistry {
             );
             CREATE INDEX IF NOT EXISTS project_workspace ON workspace_aliases(project_id,kind);",
         )?;
+        if version < 2 {
+            // Old aliases remain bound exactly as recorded. Only newly seen Git
+            // identities need fresh, explicit intent to inherit a container.
+            tx.execute_batch("ALTER TABLE workspace_aliases ADD COLUMN git_descendants INTEGER NOT NULL DEFAULT 0 CHECK(git_descendants IN (0,1));")?;
+        }
         tx.pragma_update(None, "user_version", REGISTRY_VERSION)?;
         tx.commit()?;
         Ok(registry)
@@ -107,7 +112,7 @@ impl ProjectRegistry {
         if let Some(workspace) = &workspace {
             workspace_available(&tx, None, workspace)?;
         }
-        let project = self.create_in(&tx, name, workspace.as_ref())?;
+        let project = self.create_in(&tx, name, workspace.as_ref(), true)?;
         tx.commit()?;
         Ok(project)
     }
@@ -183,7 +188,7 @@ impl ProjectRegistry {
             params![identity.id, identity.name, path_text(&store_path)?],
         )?;
         if let Some(workspace) = &workspace {
-            bind_workspace(&tx, &identity.id, workspace)?;
+            bind_workspace(&tx, &identity.id, workspace, true)?;
         }
         let project = by_id(&tx, &identity.id)?.context("registered project disappeared")?;
         tx.commit()?;
@@ -204,11 +209,11 @@ impl ProjectRegistry {
             Some(project) => {
                 // Ordinary non-Git cwd changes are not new workspace roots.
                 if workspace.common_dir.is_some() {
-                    bind_workspace(&tx, &project.id, &workspace)?;
+                    bind_workspace(&tx, &project.id, &workspace, false)?;
                 }
                 by_id(&tx, &project.id)?.context("resolved project disappeared")?
             }
-            None => self.create_in(&tx, &workspace.default_name(), Some(&workspace))?,
+            None => self.create_in(&tx, &workspace.default_name(), Some(&workspace), false)?,
         };
         tx.commit()?;
         Ok(project)
@@ -250,6 +255,7 @@ impl ProjectRegistry {
         tx: &Transaction<'_>,
         name: &str,
         workspace: Option<&Workspace>,
+        explicit_workspace: bool,
     ) -> Result<Project> {
         let parent = self.root.join("projects");
         fs::create_dir_all(&parent)?;
@@ -281,7 +287,7 @@ impl ProjectRegistry {
             params![identity.id, identity.name, path_text(&store_path)?],
         )?;
         if let Some(workspace) = workspace {
-            bind_workspace(tx, &identity.id, workspace)?;
+            bind_workspace(tx, &identity.id, workspace, explicit_workspace)?;
         }
         by_id(tx, &identity.id)?.context("created project disappeared")
     }
@@ -419,8 +425,8 @@ fn workspace_project(connection: &Connection, workspace: &Workspace) -> Result<O
     for path in workspace.root.ancestors().skip(1) {
         let id: Option<String> = connection
             .query_row(
-                "SELECT project_id FROM workspace_aliases WHERE path=?1 AND kind='workspace'",
-                [path_text(path)?],
+                "SELECT project_id FROM workspace_aliases WHERE path=?1 AND kind='workspace' AND (?2 OR git_descendants=1)",
+                params![path_text(path)?, workspace.common_dir.is_none()],
                 |row| row.get(0),
             )
             .optional()?;
@@ -431,7 +437,12 @@ fn workspace_project(connection: &Connection, workspace: &Workspace) -> Result<O
     Ok(None)
 }
 
-fn bind_workspace(tx: &Transaction<'_>, id: &str, workspace: &Workspace) -> Result<()> {
+fn bind_workspace(
+    tx: &Transaction<'_>,
+    id: &str,
+    workspace: &Workspace,
+    explicit: bool,
+) -> Result<()> {
     workspace_available(tx, Some(id), workspace)?;
     for (kind, path) in std::iter::once(("workspace", &workspace.root)).chain(
         workspace
@@ -440,8 +451,9 @@ fn bind_workspace(tx: &Transaction<'_>, id: &str, workspace: &Workspace) -> Resu
             .map(|path| ("git_common", path)),
     ) {
         tx.execute(
-            "INSERT OR IGNORE INTO workspace_aliases(path,kind,project_id) VALUES(?1,?2,?3)",
-            params![path_text(path)?, kind, id],
+            "INSERT INTO workspace_aliases(path,kind,project_id,git_descendants) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(path,kind) DO UPDATE SET git_descendants=MAX(workspace_aliases.git_descendants,excluded.git_descendants)",
+            params![path_text(path)?, kind, id, explicit && workspace.common_dir.is_none() && kind == "workspace"],
         )?;
     }
     Ok(())

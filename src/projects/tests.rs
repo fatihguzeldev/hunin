@@ -409,6 +409,112 @@ fn git(root: &Path, arguments: &[&str]) {
 }
 
 #[test]
+fn automatic_parent_does_not_absorb_new_git_repositories_or_their_recordings() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ProjectRegistry::open(&temp.path().join("registry")).unwrap();
+    let parent = temp.path().join("work");
+    fs::create_dir(&parent).unwrap();
+    let incidental = registry.resolve_or_create(&parent).unwrap();
+    let mut projects = Vec::new();
+    for name in ["alpha", "beta"] {
+        let root = parent.join(name);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let project = registry.resolve_or_create(&root).unwrap();
+        assert_ne!(project.id, incidental.id);
+        registry
+            .open_store(&project)
+            .unwrap()
+            .save_run(&recording(name))
+            .unwrap();
+        projects.push(project);
+    }
+    assert_ne!(projects[0].id, projects[1].id);
+    for (project, name) in projects.iter().zip(["alpha", "beta"]) {
+        assert_eq!(
+            registry
+                .open_store(project)
+                .unwrap()
+                .run("same-recording-id")
+                .unwrap()
+                .name,
+            name
+        );
+    }
+    assert!(
+        registry
+            .open_store(&incidental)
+            .unwrap()
+            .runs(10, 0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn explicit_workspace_container_can_group_new_git_repositories() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ProjectRegistry::open(&temp.path().join("registry")).unwrap();
+    let parent = temp.path().join("intentional-group");
+    fs::create_dir(&parent).unwrap();
+    let group = registry.create("group", Some(&parent)).unwrap();
+    for name in ["alpha", "beta"] {
+        let root = parent.join(name);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        assert_eq!(registry.resolve_or_create(&root).unwrap().id, group.id);
+    }
+}
+
+#[test]
+fn registry_upgrade_preserves_existing_bindings_without_guessing_group_intent() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("registry");
+    let registry = ProjectRegistry::open(&root).unwrap();
+    let workspace = temp.path().join("old-workspace");
+    fs::create_dir(&workspace).unwrap();
+    let original = registry.create("original", Some(&workspace)).unwrap();
+    registry
+        .open_store(&original)
+        .unwrap()
+        .save_run(&recording("retained"))
+        .unwrap();
+    let old = Connection::open(root.join("registry.sqlite")).unwrap();
+    old.execute_batch(
+        "ALTER TABLE workspace_aliases DROP COLUMN git_descendants; PRAGMA user_version=1;",
+    )
+    .unwrap();
+    drop(old);
+    let upgraded = ProjectRegistry::open(&root).unwrap();
+    assert_eq!(
+        upgraded.for_workspace(&workspace).unwrap().unwrap(),
+        original
+    );
+    assert_eq!(
+        upgraded
+            .open_store(&original)
+            .unwrap()
+            .run("same-recording-id")
+            .unwrap()
+            .name,
+        "retained"
+    );
+    let new_repo = workspace.join("new-repo");
+    fs::create_dir_all(new_repo.join(".git")).unwrap();
+    assert_ne!(
+        upgraded.resolve_or_create(&new_repo).unwrap().id,
+        original.id
+    );
+    upgraded
+        .register("original", &original.store_path, Some(&workspace))
+        .unwrap();
+    let grouped_repo = workspace.join("explicitly-grouped");
+    fs::create_dir_all(grouped_repo.join(".git")).unwrap();
+    assert_eq!(
+        upgraded.resolve_or_create(&grouped_repo).unwrap().id,
+        original.id
+    );
+}
+
+#[test]
 fn linked_git_worktrees_share_one_project_while_another_repo_does_not() {
     let temp = tempfile::tempdir().unwrap();
     let registry = ProjectRegistry::open(&temp.path().join("registry")).unwrap();

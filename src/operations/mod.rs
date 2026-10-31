@@ -61,6 +61,28 @@ pub fn catalog() -> &'static Vec<Value> {
     })
 }
 
+/// Host discovery has no project membership or recording-store side effects.
+pub fn host_capabilities(mut params: Value) -> Result<Value> {
+    validate_parameters("capabilities", &mut params)?;
+    let result = capabilities::discover();
+    responses::check(&result)?;
+    Ok(result)
+}
+
+fn validate_parameters(name: &str, params: &mut Value) -> Result<&'static Value> {
+    let definition = catalog()
+        .iter()
+        .find(|s| s["name"] == name)
+        .ok_or_else(errors::Failure::unknown_operation)?;
+    jsonschema::validator_for(&definition["inputSchema"])?
+        .validate(params)
+        .map_err(|error| {
+            errors::Failure::invalid_parameters(format!("invalid operation parameters: {error}"))
+        })?;
+    inputs::canonicalize_integers(&definition["inputSchema"], params);
+    Ok(definition)
+}
+
 impl Operations {
     pub fn new(store: Store) -> Self {
         Self::from_engine(Engine::new(store))
@@ -88,18 +110,7 @@ impl Operations {
         Ok(())
     }
     pub async fn call(&self, name: &str, mut params: Value) -> Result<Value> {
-        let definition = catalog()
-            .iter()
-            .find(|s| s["name"] == name)
-            .ok_or_else(errors::Failure::unknown_operation)?;
-        jsonschema::validator_for(&definition["inputSchema"])?
-            .validate(&params)
-            .map_err(|error| {
-                errors::Failure::invalid_parameters(format!(
-                    "invalid operation parameters: {error}"
-                ))
-            })?;
-        inputs::canonicalize_integers(&definition["inputSchema"], &mut params);
+        let definition = validate_parameters(name, &mut params)?;
         let store = self.engine.store();
         let id = || params["run_id"].as_str().context("run_id required");
         let limit = params["limit"].as_u64().unwrap_or(100) as usize;
