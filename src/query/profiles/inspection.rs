@@ -135,7 +135,7 @@ fn bins(
     let count = count.min(span.max(1) as usize);
     let mut rows = (0..count)
         .map(|index| {
-            let edge = |n| start + (span as u128 * n as u128 / count as u128) as u64;
+            let edge = |n| start + (span as u128 * n as u128).div_ceil(count as u128) as u64;
             Bin {
                 start: edge(index),
                 end: edge(index + 1),

@@ -250,3 +250,40 @@ async fn overflowing_weights_remain_unknown_across_subsequent_samples_and_views(
     assert!(selected["selected"]["self_weight"].is_null());
     assert!(selected["selected"]["callers"][0]["weight"].is_null());
 }
+
+#[tokio::test]
+async fn integer_bin_edges_match_assigned_samples_when_duration_is_not_divisible() {
+    let (_root, store) = fixture();
+    let times = [0, 3, 4, 6, 7, 10];
+    let records = times.into_iter().enumerate().map(|(index,timestamp)|json!({"schema_version":1,"kind":"sample","id":format!("edge-{index}"),"run_id":"recording","producer_id":"profiler","pid":1,"tid":"main","timestamp_us":timestamp,"basis":"sampled","weight":1u64<<index,"weight_unit":"count","stack":[{"function":"edge"}],"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}})).collect::<Vec<_>>();
+    store.accept("recording", "bin-edges", &records).unwrap();
+    let data = inspect(
+        &Operations::new(store),
+        json!({"run_id":"recording","weight_unit":"count","start_us":0,"end_us":10,"bins":3}),
+    )
+    .await;
+    let bins = data["activity"].as_array().unwrap();
+    assert_eq!(
+        bins.iter()
+            .map(|bin| (
+                bin["start_us"].as_u64().unwrap(),
+                bin["end_us"].as_u64().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 4), (4, 7), (7, 10)]
+    );
+    assert_eq!(
+        bins.iter()
+            .map(|bin| bin["weight"].as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![3.0, 12.0, 48.0]
+    );
+    assert_eq!(
+        bins.iter()
+            .map(|bin| bin["sample_count"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![2, 2, 2]
+    );
+    assert_eq!(data["sample_count"], 6);
+    assert_eq!(data["total_weight"], 63.0);
+}
