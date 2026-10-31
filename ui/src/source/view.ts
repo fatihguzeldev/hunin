@@ -4,6 +4,7 @@ import { badge, button, el, empty } from '../dom';
 import type { SourceSelection } from '../investigation/state';
 import { sourceNavigation } from './navigation';
 import { sourcePresentation } from './presentation';
+import { sourceUnavailable } from './errors';
 
 export async function source(
   run: Run,
@@ -22,8 +23,13 @@ export async function source(
       count: 120,
     },
     signal,
-  );
+  ).catch((error: unknown) => {
+    const unavailable = sourceUnavailable(error);
+    if (!unavailable) throw error;
+    return empty(unavailable.title, unavailable.message);
+  });
   signal.throwIfAborted();
+  if (data instanceof HTMLElement) return data;
   const presentation = sourcePresentation(data);
   const code = el(
     'pre',
@@ -69,10 +75,7 @@ export async function source(
           el('div', { class: 'table-scroll' }, code),
         )
       : presentation.content === 'empty-file'
-        ? empty(
-            'Empty source file',
-            'This file contains no source lines.',
-          )
+        ? empty('Empty source file', 'This file contains no source lines.')
         : presentation.content === 'outside-window'
           ? empty(
               'No lines at this position',
