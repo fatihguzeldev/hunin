@@ -125,6 +125,12 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             full,
             name,
             runtime,
+            capture_mode,
+            code_compiler_export,
+            code_function_filter,
+            code_wasm_function_index,
+            code_sampling_interval_us,
+            code_max_artifact_bytes,
             cwd,
             timeout,
             expected_exit_code,
@@ -135,9 +141,32 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             command,
         } => {
             let mut params = json!({"command":command,"expected_exit_code":expected_exit_code,"env":env.into_iter().collect::<std::collections::BTreeMap<_,_>>(),"input_files":input_files});
+            if code_compiler_export
+                || code_function_filter.is_some()
+                || code_wasm_function_index.is_some()
+                || code_sampling_interval_us.is_some()
+                || code_max_artifact_bytes.is_some()
+            {
+                let mut options = json!({});
+                if code_compiler_export {
+                    options["compiler_export"] = json!(true);
+                }
+                for (key, value) in [
+                    ("function_filter", json!(code_function_filter)),
+                    ("wasm_function_index", json!(code_wasm_function_index)),
+                    ("sampling_interval_us", json!(code_sampling_interval_us)),
+                    ("max_artifact_bytes", json!(code_max_artifact_bytes)),
+                ] {
+                    if !value.is_null() {
+                        options[key] = value;
+                    }
+                }
+                params["code_options"] = options;
+            }
             for (key, value) in [
                 ("name", json!(name)),
                 ("runtime", json!(runtime)),
+                ("capture_mode", json!(capture_mode)),
                 ("cwd", json!(cwd)),
                 ("timeout_seconds", json!(timeout)),
                 ("expected_stdout", json!(expected_stdout)),

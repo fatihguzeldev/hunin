@@ -56,6 +56,20 @@ pub(super) enum Command {
         name: Option<String>,
         #[arg(long, value_parser = runtime_names(), ignore_case = true)]
         runtime: Option<String>,
+        /// Explicit deeper collection; ordinary CPU recording remains the default.
+        #[arg(long, value_parser = ["automatic-cpu", "code-origin"])]
+        capture_mode: Option<String>,
+        #[arg(long, requires = "capture_mode")]
+        code_compiler_export: bool,
+        #[arg(long, requires = "capture_mode")]
+        code_function_filter: Option<String>,
+        /// Limit printed Wasm disassembly to this index in each module.
+        #[arg(long, requires = "code_compiler_export")]
+        code_wasm_function_index: Option<u32>,
+        #[arg(long, requires = "capture_mode")]
+        code_sampling_interval_us: Option<u32>,
+        #[arg(long, requires = "capture_mode")]
+        code_max_artifact_bytes: Option<u64>,
         #[arg(long)]
         cwd: Option<PathBuf>,
         #[arg(long)]
@@ -145,4 +159,60 @@ fn parse_environment(value: &str) -> std::result::Result<(String, String), Strin
         return Err("environment names must be nonempty and contain no NUL bytes".into());
     }
     Ok((key.to_owned(), value.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_capture_flags_leave_literal_target_arguments_untouched() {
+        let parsed = Cli::try_parse_from([
+            "hunin",
+            "run",
+            "--capture-mode",
+            "code-origin",
+            "--code-compiler-export",
+            "--code-function-filter",
+            "kernel*",
+            "--code-wasm-function-index",
+            "16",
+            "--",
+            "node",
+            "target.mjs",
+            "--capture-mode",
+            "target-value",
+        ])
+        .unwrap();
+        let Command::Run {
+            capture_mode,
+            code_compiler_export,
+            code_function_filter,
+            code_wasm_function_index,
+            command,
+            ..
+        } = parsed.command
+        else {
+            panic!("expected run")
+        };
+        assert_eq!(capture_mode.as_deref(), Some("code-origin"));
+        assert!(code_compiler_export);
+        assert_eq!(code_function_filter.as_deref(), Some("kernel*"));
+        assert_eq!(code_wasm_function_index, Some(16));
+        assert_eq!(
+            command,
+            ["node", "target.mjs", "--capture-mode", "target-value"]
+        );
+        assert!(
+            Cli::try_parse_from([
+                "hunin",
+                "run",
+                "--code-compiler-export",
+                "--",
+                "node",
+                "target.mjs"
+            ])
+            .is_err()
+        );
+    }
 }
