@@ -15,6 +15,7 @@ pub enum CaptureMode {
 #[serde(default, deny_unknown_fields)]
 pub struct CodeOptions {
     pub compiler_export: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub function_filter: Option<String>,
     pub sampling_interval_us: u32,
     pub max_artifact_bytes: u64,
