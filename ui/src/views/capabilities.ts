@@ -16,7 +16,7 @@ export async function capabilities(signal?: AbortSignal): Promise<HTMLElement> {
     el(
       'p',
       { class: 'muted' },
-      'Discovery checks runtime and collection prerequisites. It does not record a workload or prove that a sampling session can attach to the selected target.',
+      'Installed collection methods and prerequisites. Discovery does not run a workload or verify a recording session.',
     ),
     data.native_sampling_permission
       ? el(
@@ -52,19 +52,11 @@ export async function capabilities(signal?: AbortSignal): Promise<HTMLElement> {
             { class: 'inline' },
             el('h2', {}, runtime.runtime),
             badge(
-              runtime.available
-                ? 'runtime probe passed'
-                : 'runtime unavailable',
+              runtime.available ? 'runtime available' : 'runtime unavailable',
               runtime.available ? 'good' : 'warn',
             ),
           ),
           runtime.version ? el('p', { class: 'mono' }, runtime.version) : null,
-          runtime.executable
-            ? el('p', { class: 'mono source-label' }, runtime.executable)
-            : null,
-          runtime.verification
-            ? el('p', { class: 'metric-note' }, runtime.verification)
-            : null,
           el(
             'div',
             { class: 'inline' },
@@ -83,17 +75,39 @@ export async function capabilities(signal?: AbortSignal): Promise<HTMLElement> {
                   mode.availability === 'prerequisites_ready' ? 'good' : 'warn',
                 ),
               ),
-              el('p', {}, mode.mechanism),
-              el('p', { class: 'metric-note' }, mode.basis),
-              badge(
-                mode.recording_verified
-                  ? 'recording verified'
-                  : 'recording not verified by discovery',
-                mode.recording_verified ? 'good' : 'warn',
+              el(
+                'details',
+                {},
+                el('summary', {}, 'Method details'),
+                el(
+                  'div',
+                  { class: 'stack' },
+                  el('p', {}, mode.mechanism),
+                  el('p', { class: 'metric-note' }, mode.basis),
+                  badge(
+                    mode.recording_verified
+                      ? 'Recording verified'
+                      : 'Recording not checked',
+                    mode.recording_verified ? 'good' : '',
+                  ),
+                ),
               ),
             ),
           ),
           ...runtime.diagnostics.map((message) => el('p', {}, message)),
+          runtime.executable || runtime.verification
+            ? el(
+                'details',
+                {},
+                el('summary', {}, 'Runtime details'),
+                runtime.executable
+                  ? el('p', { class: 'mono source-label' }, runtime.executable)
+                  : null,
+                runtime.verification
+                  ? el('p', { class: 'metric-note' }, runtime.verification)
+                  : null,
+              )
+            : null,
         ),
       ),
     ),

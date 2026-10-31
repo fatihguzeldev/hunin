@@ -31,7 +31,7 @@ function plot(series: Series): SVGSVGElement {
       .join(' '),
   );
   line.setAttribute('fill', 'none');
-  line.setAttribute('stroke', '#e1b96a');
+  line.setAttribute('stroke', 'var(--chart-accent)');
   line.setAttribute('stroke-width', '2');
   const title = document.createElementNS(svg.namespaceURI, 'title');
   title.textContent = `PID ${series.pid} · ${series.scope}`;
@@ -78,11 +78,6 @@ async function resourcePage(
   const body = el(
     'div',
     { class: 'stack' },
-    el(
-      'p',
-      { class: 'notice' },
-      'Resource scope is part of each measurement. A process total is shared by its work and cannot be assigned to a request from interval overlap.',
-    ),
     ...series.map((item) =>
       el(
         'section',
@@ -96,16 +91,33 @@ async function resourcePage(
         el(
           'div',
           { class: 'panel-body stack' },
-          el('p', { class: 'metric-note mono' }, identity(item)),
+          el(
+            'p',
+            { class: 'metric-note' },
+            `PID ${item.pid}${item.process_role ? ` · ${item.process_role}` : ''}`,
+          ),
+          item.scope === 'process'
+            ? el(
+                'p',
+                { class: 'metric-note' },
+                'Process total; not attributable to an individual request.',
+              )
+            : null,
           !aligned(item)
             ? el(
                 'p',
                 { class: 'metric-note' },
-                'This clock has no verified epoch placement. Inspect its original timestamps below.',
+                'Clock alignment is unknown. Original timestamps are available in Values.',
               )
             : item.points.length > 1
               ? plot(item)
-              : el('p', {}, 'One observation; no trend can be established.'),
+              : el(
+                  'p',
+                  {},
+                  item.points.length === 1
+                    ? 'One observation; no trend can be established.'
+                    : 'No values on this page.',
+                ),
         ),
         el(
           'details',
@@ -113,7 +125,7 @@ async function resourcePage(
           el(
             'summary',
             { class: 'panel-body' },
-            `${numeric(item.returned_points ?? item.points.length)} of ${numeric(item.point_count ?? item.points.length)} observations · inspect values`,
+            `Values · ${numeric(item.returned_points ?? item.points.length)} of ${numeric(item.point_count ?? item.points.length)} observations`,
           ),
           el(
             'div',
@@ -171,6 +183,11 @@ async function resourcePage(
                 'This page contains part of the series. Use the next resource page for more values.',
               )
             : null,
+          el(
+            'div',
+            { class: 'panel-body' },
+            el('p', { class: 'metric-note mono' }, identity(item)),
+          ),
         ),
       ),
     ),
@@ -179,7 +196,7 @@ async function resourcePage(
     body.append(
       empty(
         'No resource observations',
-        'This recording or window has no accepted process or thread resource series.',
+        'This recording contains no accepted resource series.',
       ),
     );
   if (returned_points !== undefined && total_points !== undefined)
