@@ -1,4 +1,4 @@
-use hunin::{importers, model::runs::Run, storage::Store};
+use hunin::{importers, model::runs::Run, operations::Operations, storage::Store};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::PathBuf};
@@ -27,8 +27,8 @@ fn fixture() -> (tempfile::TempDir, PathBuf) {
     (directory, path)
 }
 
-#[test]
-fn actual_same_address_a_b_a_maps_samples_to_distinct_instances_and_store() {
+#[tokio::test]
+async fn actual_same_address_a_b_a_maps_samples_to_distinct_instances_and_store() {
     let (_directory, path) = fixture();
     let profile = importers::import(&path, "samply", "native-lifetime").unwrap();
     let phases: Vec<_> = profile
@@ -113,13 +113,47 @@ fn actual_same_address_a_b_a_maps_samples_to_distinct_instances_and_store() {
             correctness: json!({}),
         })
         .unwrap();
-    store
-        .accept(
-            "native-lifetime",
-            "actual-native-lifetime",
-            &profile.records,
+    let imported = Operations::new(store.clone())
+        .call(
+            "recordings.import",
+            json!({"run_id":"native-lifetime","path":path,"format":"samply"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(imported["accepted"], true);
+    let stored = store.records("native-lifetime").unwrap();
+    assert_eq!(stored.len(), profile.records.len());
+    let by_id = stored
+        .iter()
+        .map(|record| (record["id"].as_str().unwrap(), record))
+        .collect::<std::collections::HashMap<_, _>>();
+    for record in &profile.records {
+        let id = record["id"].as_str().unwrap();
+        assert_eq!(
+            by_id.get(id).copied(),
+            Some(record),
+            "published native observation {id}"
+        );
+    }
+    let artifacts = store.artifacts("native-lifetime").unwrap();
+    assert!(
+        artifacts
+            .iter()
+            .any(|artifact| artifact.sha256 == profile.raw_sha256)
+    );
+    for image in &profile.binary_snapshots {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.format == "native-image" && artifact.sha256 == image.sha256)
+            .expect("native code proof must be retained before observation publication");
+        let bytes = fs::read(
+            store
+                .artifact_path("native-lifetime", &artifact.id)
+                .unwrap(),
         )
         .unwrap();
+        assert_eq!(bytes, image.content);
+    }
     assert_eq!(
         profile.records,
         importers::import(&path, "samply", "native-lifetime")
