@@ -9,6 +9,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 use std::collections::HashMap;
+mod code;
 
 impl Store {
     /// Validate and publish a whole result set in one transaction. Replays are no-ops.
@@ -60,6 +61,7 @@ impl Store {
             deadline: _,
         } = request;
         self.run(run_id)?;
+        let code_artifacts = code::prepare_artifacts(self, run_id, records, &mut checkpoint)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         checkpoint()?;
@@ -120,6 +122,7 @@ impl Store {
         };
         let existing = selected.keys().cloned().collect();
         ingestion::validate_ids(run_id, records, existing)?;
+        code::validate(&tx, run_id, records, &code_artifacts, &mut checkpoint)?;
         let proposed = ingestion::links(records);
         let mut dependencies =
             publication::validate_relations(&proposed, &selected, &mut checkpoint)?;

@@ -26,6 +26,7 @@ pub(crate) fn validate_ids(
             bail!("observation schema at {}: {error}", error.instance_path);
         }
         crate::model::clocks::validate(&record["attributes"])?;
+        crate::model::code::parse_record(record)?;
         // Time fields feed bounded storage/query arithmetic. Identity and frame
         // metadata retain their schema-valid JSON numbers, even beyond u64.
         for field in ["timestamp_us", "duration_us"] {
@@ -108,6 +109,21 @@ pub(crate) fn links(records: &[Value]) -> Vec<ObservationLinks> {
                         .into_iter()
                         .flatten()
                         .filter_map(Value::as_str),
+                )
+                .chain(
+                    record["stack"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|frame| frame["code_instance_id"].as_str()),
+                )
+                .chain(
+                    (record["relation"] == "code_maps_to").then_some(&record["attributes"]["code_mapping"]["proof"]["semantic_evidence"])
+                        .into_iter().flat_map(|value|value.as_array()).flatten()
+                        .filter_map(Value::as_str),
+                )
+                .chain(
+                    (record["name"] == "code.mapping_unavailable").then_some(&record["attributes"]["code_mapping_unavailable"]["anchor"]["observation_id"]).and_then(Value::as_str),
                 )
                 .map(ObservationId::from)
                 .collect(),

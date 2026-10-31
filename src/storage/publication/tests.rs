@@ -89,6 +89,72 @@ fn event(id: &str) -> Value {
     json!({"schema_version":1,"kind":"event","id":id,"run_id":"run-1","producer_id":"process-lifetime-1","pid":123,"tid":"main","timestamp_us":2,"name":"control","basis":"observed"})
 }
 
+fn runtime_code(id: &str) -> Value {
+    let mut value = event(id);
+    value["name"] = json!("code.instance");
+    value["attributes"] = json!({"code_instance":{"schema_version":1,"instance_kind":"runtime","runtime_instance_id":"process-generation-1","representation":"machine_code","range":{"space":"runtime_address","start":"0x1000","end_exclusive":"0x1100"},"validity":{"clock":"unix_epoch","alignment":"direct_epoch","start_us":1,"end_us":5,"start_censored":false,"end_censored":false,"boundary_basis":"fixture"}}});
+    value
+}
+
+#[test]
+fn frame_instances_are_typed_dependencies_and_superseding_code_invalidates_samples() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    store
+        .accept_import("run-1", "code", "one", &[runtime_code("code-one")])
+        .unwrap();
+    let sample = json!({"schema_version":1,"kind":"sample","id":"sample","run_id":"run-1","producer_id":"fixture","pid":123,"tid":"main","timestamp_us":2,"basis":"sampled","weight":1,"weight_unit":"samples","stack":[{"function":"work","code_instance_id":"code-one","code_offset":"0x1001"}],"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}});
+    store.accept("run-1", "samples", &[sample]).unwrap();
+    store
+        .accept_import("run-1", "code", "two", &[runtime_code("code-two")])
+        .unwrap();
+    assert!(
+        store
+            .records("run-1")
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != "sample")
+    );
+    let mut bad = runtime_code("bad");
+    bad["attributes"]["code_instance"]["instance_kind"] = json!("static");
+    assert!(store.accept("run-1", "bad", &[bad]).is_err());
+}
+
+#[test]
+fn code_artifact_corruption_and_non_instance_endpoints_cannot_publish() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let artifact = store
+        .add_artifact_bytes("run-1", "code.bin", "raw", b"code")
+        .unwrap();
+    let mut code = runtime_code("code");
+    code["attributes"]["code_instance"]["artifact"] =
+        json!({"artifact_id":artifact.id,"sha256":artifact.sha256});
+    std::fs::write(store.artifact_path("run-1", &artifact.id).unwrap(), b"oops").unwrap();
+    assert!(store.accept("run-1", "corrupt-code", &[code]).is_err());
+    store
+        .accept("run-1", "ordinary", &[event("ordinary")])
+        .unwrap();
+    let mapping = json!({"schema_version":1,"kind":"relation","id":"mapping","run_id":"run-1","producer_id":"fixture","pid":123,"tid":"main","timestamp_us":2,"basis":"derived","from":"ordinary","to":"ordinary","relation":"code_maps_to","evidence":["ordinary"],"attributes":{"code_mapping":{"schema_version":1,"from_range":{"space":"runtime_address","start":"0x1000","end_exclusive":"0x1001"},"to_range":{"space":"runtime_address","start":"0x1000","end_exclusive":"0x1001"},"cardinality":"exclusive","proof":{"artifact_refs":[],"method":"fixture","verification":"declared"}}}});
+    assert!(
+        store
+            .accept("run-1", "invalid-mapping", &[mapping])
+            .is_err()
+    );
+}
+
+#[test]
+fn unrelated_opaque_attributes_do_not_acquire_code_reference_semantics() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&run()).unwrap();
+    let mut ordinary = event("opaque");
+    ordinary["attributes"] = json!({"code_mapping":{"proof":{"semantic_evidence":["unresolved-opaque-value"]}},"code_mapping_unavailable":{"anchor":{"observation_id":"opaque-value"}}});
+    assert!(store.accept("run-1", "opaque", &[ordinary]).unwrap());
+}
+
 #[test]
 fn reanalysis_invalidates_dependents_and_keeps_independent_results() {
     let root = tempfile::tempdir().unwrap();
