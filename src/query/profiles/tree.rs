@@ -77,7 +77,7 @@ impl Tree {
         ))
     }
 }
-fn frame_id(frame: &Value) -> String {
+pub(super) fn frame_id(frame: &Value) -> String {
     format!(
         "frame:{:x}",
         Sha256::digest(function_identity(frame).as_bytes())

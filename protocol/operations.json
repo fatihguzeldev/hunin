@@ -749,6 +749,124 @@
     }
   },
   {
+    "name": "profiles.inspect",
+    "description": "Inspect aligned sampled activity, window-scoped functions and call paths from one recording snapshot",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "weight_unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "bins": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 240
+        },
+        "function_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "node_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "depth_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "frame_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["run_id"],
+      "dependentRequired": {
+        "start_us": ["end_us"],
+        "end_us": ["start_us"]
+      },
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/ProfileInspection"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
+      },
+      "hunin/profile-inspection": {
+        "version": 1,
+        "clock": "Only explicitly aligned sample timestamps participate in windows; unaligned_count is excluded selected-unit sample count.",
+        "window": "Inclusive start/end bounds; both must be supplied together. A sample at a bin boundary belongs to the following bin, except the capture/window endpoint belongs to the final bin.",
+        "selected_weight": "Self/leaf weight of frame_id. Selection evidence and observed extent include any stack occurrence, once per sample.",
+        "identity": "Function ids identify function/file/module/code_id. Tree node ids identify an entire call path; frame_id links a node to its function.",
+        "scope": "All calculations and result_identity use one selected-observation transaction. Limits truncate display rows/tree only; totals remain complete within the enforced query budget.",
+        "selection_evidence_limit": 50,
+        "selection_callers_limit": 100,
+        "caller_weights": "Each distinct immediate-caller identity is counted once per matching sample. Recursive occurrences may expose multiple caller rows for one sample; caller weights are overlapping, not a partition.",
+        "outside_window": "An explicit start/end pair is returned unchanged, including outside-capture empty windows. Missing aligned data has null bounds/window and weights; an empty window within a known capture has observed zero weight."
+      }
+    }
+  },
+  {
     "name": "timeline.query",
     "description": "Query aligned observations without inventing causal relationships",
     "inputSchema": {

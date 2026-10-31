@@ -124,6 +124,16 @@ impl Operations {
     }
     pub async fn call(&self, name: &str, mut params: Value) -> Result<Value> {
         let definition = validate_parameters(name, &mut params)?;
+        if name == "profiles.inspect"
+            && let (Some(start), Some(end)) =
+                (params["start_us"].as_u64(), params["end_us"].as_u64())
+            && start > end
+        {
+            return Err(errors::Failure::invalid_parameters(
+                "profile window start must not exceed end",
+            )
+            .into());
+        }
         let store = self.engine.store();
         let id = || params["run_id"].as_str().context("run_id required");
         let limit = params["limit"].as_u64().unwrap_or(100) as usize;
@@ -201,7 +211,8 @@ impl Operations {
                     })
                     .await
             }
-            "profiles.hotspots" | "profiles.tree" | "timeline.query" | "resources.query" => {
+            "profiles.hotspots" | "profiles.tree" | "profiles.inspect" | "timeline.query"
+            | "resources.query" => {
                 let store = store.clone();
                 let run_id = id()?.to_owned();
                 let name = name.to_owned();
@@ -213,6 +224,7 @@ impl Operations {
                                 limit,
                             },
                             "profiles.tree" => query::RecordingQuery::Tree(&params),
+                            "profiles.inspect" => query::RecordingQuery::Inspect(&params),
                             "timeline.query" => query::RecordingQuery::Timeline(&params),
                             "resources.query" => query::RecordingQuery::Resources(&params),
                             _ => unreachable!(),

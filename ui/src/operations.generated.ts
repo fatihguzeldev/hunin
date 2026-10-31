@@ -626,6 +626,112 @@ export type CallCounts = {
   "limitations": Array<string>;
 };
 
+export type ProfileInspectionFunction = {
+  "id": string;
+  "function": string;
+  "file": string | null;
+  "line": number | null;
+  "module": string | null;
+  "code_id": string | null;
+  "source_position_basis": string;
+  "self_weight": number | null;
+  "inclusive_weight": number | null;
+  "weight_unit": string;
+  [key: string]: unknown;
+};
+
+export type ProfileInspectionCaller = {
+  "id": string;
+  "function": string;
+  "file": string | null;
+  "line": number | null;
+  "module": string | null;
+  "code_id": string | null;
+  "weight": number | null;
+  "sample_count": number;
+  [key: string]: unknown;
+};
+
+export type ProfileInspectionNode = {
+  "id": string;
+  "name": string;
+  "file": string | null;
+  "line": number | null;
+  "module": string | null;
+  "code_id": string | null;
+  "source_position_basis": string;
+  "self_weight": number | null;
+  "total_weight": number | null;
+  "child_count": number;
+  "children_truncated": boolean;
+  "depth_truncated": boolean;
+  "children": Array<ProfileInspectionNode>;
+  "frame_id": string;
+  [key: string]: unknown;
+};
+
+export type ProfileInspectionSelection = {
+  "id": string;
+  "function": string;
+  "file": string | null;
+  "line": number | null;
+  "module": string | null;
+  "code_id": string | null;
+  "source_position_basis": string;
+  "self_weight": number | null;
+  "inclusive_weight": number | null;
+  "weight_unit": string;
+  "sample_count": number;
+  "observed_start_us": number;
+  "observed_end_us": number;
+  "callers": Array<ProfileInspectionCaller>;
+  "evidence_ids": Array<string>;
+  "evidence_count": number;
+  "evidence_truncated": boolean;
+  "callers_truncated": boolean;
+  [key: string]: unknown;
+} | null;
+
+export type ProfileInspectionBin = {
+  "start_us": number;
+  "end_us": number;
+  "weight": number | null;
+  "selected_weight": number | null;
+  "sample_count": number;
+  [key: string]: unknown;
+};
+
+export type ProfileInspection = {
+  "result_identity": string;
+  "weight_unit": string;
+  "units": Array<string>;
+  "bounds": {
+  "start_us": number;
+  "end_us": number;
+  [key: string]: unknown;
+} | null;
+  "window": {
+  "start_us": number;
+  "end_us": number;
+  [key: string]: unknown;
+} | null;
+  "sample_count": number;
+  "total_sample_count": number;
+  "total_weight": number | null;
+  "capture_weight": number | null;
+  "unaligned_count": number;
+  "overview": Array<ProfileInspectionBin>;
+  "activity": Array<ProfileInspectionBin>;
+  "functions": Array<ProfileInspectionFunction>;
+  "total_functions": number;
+  "functions_truncated": boolean;
+  "roots": Array<ProfileInspectionNode>;
+  "tree_truncated": boolean;
+  "selected": ProfileInspectionSelection;
+  "diagnostics": Array<string>;
+  [key: string]: unknown;
+};
+
 export type OperationInputs = {
   "capabilities": {
 
@@ -690,6 +796,17 @@ export type OperationInputs = {
   "cursor"?: string;
   "path"?: Array<string>;
   "depth_limit"?: number;
+};
+  "profiles.inspect": {
+  "run_id": string;
+  "weight_unit"?: string;
+  "start_us"?: number;
+  "end_us"?: number;
+  "bins"?: number;
+  "function_limit"?: number;
+  "node_limit"?: number;
+  "depth_limit"?: number;
+  "frame_id"?: string;
 };
   "timeline.query": {
   "run_id": string;
@@ -859,6 +976,7 @@ export type OperationOutputs = {
   "runs.removal": RunRemoval;
   "profiles.hotspots": ProfileHotspots;
   "profiles.tree": ProfileTree;
+  "profiles.inspect": ProfileInspection;
   "timeline.query": Timeline;
   "resources.query": Resources;
   "contexts.query": Contexts;
@@ -1147,6 +1265,30 @@ export function isCallCounts(value: unknown): value is CallCounts {
   return (isOutputObject(value) && Object.hasOwn(value, "status") && Object.hasOwn(value, "run_id") && Object.hasOwn(value, "parent_run_id") && Object.hasOwn(value, "method") && Object.hasOwn(value, "requested_scope") && Object.hasOwn(value, "collection_scope") && Object.hasOwn(value, "counts") && Object.hasOwn(value, "next_cursor") && Object.hasOwn(value, "total_count") && Object.hasOwn(value, "diagnostics") && Object.hasOwn(value, "limitations") && ((value["status"] === "not_collected" || value["status"] === "running" || value["status"] === "complete" || value["status"] === "incomplete" || value["status"] === "failed" || value["status"] === "canceled")) && (typeof value["run_id"] === "string") && ((typeof value["parent_run_id"] === "string") || (value["parent_run_id"] === null)) && ((typeof value["method"] === "string") || (value["method"] === null)) && ((value["requested_scope"] === "all" || value["requested_scope"] === "selected")) && ((value["collection_scope"] === "all" || value["collection_scope"] === "selected" || value["collection_scope"] === "all_then_filter")) && (Array.isArray(value["counts"]) && value["counts"].every(item => isFunctionCount(item))) && ((typeof value["next_cursor"] === "string") || (value["next_cursor"] === null)) && (typeof value["total_count"] === "number" && Number.isInteger(value["total_count"]) && value["total_count"] >= 0) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))) && (Array.isArray(value["limitations"]) && value["limitations"].every(item => (typeof item === "string"))) && Object.keys(value).every(key => ["status","run_id","parent_run_id","method","requested_scope","collection_scope","counts","next_cursor","total_count","diagnostics","limitations"].includes(key)));
 }
 
+export function isProfileInspectionFunction(value: unknown): value is ProfileInspectionFunction {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "function") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && Object.hasOwn(value, "module") && Object.hasOwn(value, "code_id") && Object.hasOwn(value, "source_position_basis") && Object.hasOwn(value, "self_weight") && Object.hasOwn(value, "inclusive_weight") && Object.hasOwn(value, "weight_unit") && (typeof value["id"] === "string") && (typeof value["function"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"])) || (value["line"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["code_id"] === "string") || (value["code_id"] === null)) && (typeof value["source_position_basis"] === "string") && ((typeof value["self_weight"] === "number" && Number.isFinite(value["self_weight"])) || (value["self_weight"] === null)) && ((typeof value["inclusive_weight"] === "number" && Number.isFinite(value["inclusive_weight"])) || (value["inclusive_weight"] === null)) && (typeof value["weight_unit"] === "string"));
+}
+
+export function isProfileInspectionCaller(value: unknown): value is ProfileInspectionCaller {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "function") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && Object.hasOwn(value, "module") && Object.hasOwn(value, "code_id") && Object.hasOwn(value, "weight") && Object.hasOwn(value, "sample_count") && (typeof value["id"] === "string") && (typeof value["function"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"])) || (value["line"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["code_id"] === "string") || (value["code_id"] === null)) && ((typeof value["weight"] === "number" && Number.isFinite(value["weight"])) || (value["weight"] === null)) && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0 && value["sample_count"] <= 9007199254740991));
+}
+
+export function isProfileInspectionNode(value: unknown): value is ProfileInspectionNode {
+  return (isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "name") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && Object.hasOwn(value, "module") && Object.hasOwn(value, "code_id") && Object.hasOwn(value, "source_position_basis") && Object.hasOwn(value, "self_weight") && Object.hasOwn(value, "total_weight") && Object.hasOwn(value, "child_count") && Object.hasOwn(value, "children_truncated") && Object.hasOwn(value, "depth_truncated") && Object.hasOwn(value, "children") && Object.hasOwn(value, "frame_id") && (typeof value["id"] === "string") && (typeof value["name"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"])) || (value["line"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["code_id"] === "string") || (value["code_id"] === null)) && (typeof value["source_position_basis"] === "string") && ((typeof value["self_weight"] === "number" && Number.isFinite(value["self_weight"])) || (value["self_weight"] === null)) && ((typeof value["total_weight"] === "number" && Number.isFinite(value["total_weight"])) || (value["total_weight"] === null)) && (typeof value["child_count"] === "number" && Number.isInteger(value["child_count"]) && value["child_count"] >= 0) && (typeof value["children_truncated"] === "boolean") && (typeof value["depth_truncated"] === "boolean") && (Array.isArray(value["children"]) && value["children"].every(item => isProfileInspectionNode(item))) && (typeof value["frame_id"] === "string"));
+}
+
+export function isProfileInspectionSelection(value: unknown): value is ProfileInspectionSelection {
+  return ((isOutputObject(value) && Object.hasOwn(value, "id") && Object.hasOwn(value, "function") && Object.hasOwn(value, "file") && Object.hasOwn(value, "line") && Object.hasOwn(value, "module") && Object.hasOwn(value, "code_id") && Object.hasOwn(value, "source_position_basis") && Object.hasOwn(value, "self_weight") && Object.hasOwn(value, "inclusive_weight") && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "sample_count") && Object.hasOwn(value, "observed_start_us") && Object.hasOwn(value, "observed_end_us") && Object.hasOwn(value, "callers") && Object.hasOwn(value, "evidence_ids") && Object.hasOwn(value, "evidence_count") && Object.hasOwn(value, "evidence_truncated") && Object.hasOwn(value, "callers_truncated") && (typeof value["id"] === "string") && (typeof value["function"] === "string") && ((typeof value["file"] === "string") || (value["file"] === null)) && ((typeof value["line"] === "number" && Number.isInteger(value["line"])) || (value["line"] === null)) && ((typeof value["module"] === "string") || (value["module"] === null)) && ((typeof value["code_id"] === "string") || (value["code_id"] === null)) && (typeof value["source_position_basis"] === "string") && ((typeof value["self_weight"] === "number" && Number.isFinite(value["self_weight"])) || (value["self_weight"] === null)) && ((typeof value["inclusive_weight"] === "number" && Number.isFinite(value["inclusive_weight"])) || (value["inclusive_weight"] === null)) && (typeof value["weight_unit"] === "string") && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0 && value["sample_count"] <= 9007199254740991) && (typeof value["observed_start_us"] === "number" && Number.isInteger(value["observed_start_us"]) && value["observed_start_us"] >= 0 && value["observed_start_us"] <= 9007199254740991) && (typeof value["observed_end_us"] === "number" && Number.isInteger(value["observed_end_us"]) && value["observed_end_us"] >= 0 && value["observed_end_us"] <= 9007199254740991) && (Array.isArray(value["callers"]) && value["callers"].every(item => isProfileInspectionCaller(item))) && (Array.isArray(value["evidence_ids"]) && value["evidence_ids"].length <= 50 && value["evidence_ids"].every(item => (typeof item === "string"))) && (typeof value["evidence_count"] === "number" && Number.isInteger(value["evidence_count"]) && value["evidence_count"] >= 0 && value["evidence_count"] <= 9007199254740991) && (typeof value["evidence_truncated"] === "boolean") && (typeof value["callers_truncated"] === "boolean")) || (value === null));
+}
+
+export function isProfileInspectionBin(value: unknown): value is ProfileInspectionBin {
+  return (isOutputObject(value) && Object.hasOwn(value, "start_us") && Object.hasOwn(value, "end_us") && Object.hasOwn(value, "weight") && Object.hasOwn(value, "selected_weight") && Object.hasOwn(value, "sample_count") && (typeof value["start_us"] === "number" && Number.isInteger(value["start_us"]) && value["start_us"] >= 0 && value["start_us"] <= 9007199254740991) && (typeof value["end_us"] === "number" && Number.isInteger(value["end_us"]) && value["end_us"] >= 0 && value["end_us"] <= 9007199254740991) && ((typeof value["weight"] === "number" && Number.isFinite(value["weight"])) || (value["weight"] === null)) && ((typeof value["selected_weight"] === "number" && Number.isFinite(value["selected_weight"])) || (value["selected_weight"] === null)) && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0 && value["sample_count"] <= 9007199254740991));
+}
+
+export function isProfileInspection(value: unknown): value is ProfileInspection {
+  return (isOutputObject(value) && Object.hasOwn(value, "result_identity") && Object.hasOwn(value, "weight_unit") && Object.hasOwn(value, "units") && Object.hasOwn(value, "bounds") && Object.hasOwn(value, "window") && Object.hasOwn(value, "sample_count") && Object.hasOwn(value, "total_sample_count") && Object.hasOwn(value, "total_weight") && Object.hasOwn(value, "capture_weight") && Object.hasOwn(value, "unaligned_count") && Object.hasOwn(value, "overview") && Object.hasOwn(value, "activity") && Object.hasOwn(value, "functions") && Object.hasOwn(value, "total_functions") && Object.hasOwn(value, "functions_truncated") && Object.hasOwn(value, "roots") && Object.hasOwn(value, "tree_truncated") && Object.hasOwn(value, "selected") && Object.hasOwn(value, "diagnostics") && (typeof value["result_identity"] === "string") && (typeof value["weight_unit"] === "string") && (Array.isArray(value["units"]) && value["units"].every(item => (typeof item === "string"))) && ((isOutputObject(value["bounds"]) && Object.hasOwn(value["bounds"], "start_us") && Object.hasOwn(value["bounds"], "end_us") && (typeof value["bounds"]["start_us"] === "number" && Number.isInteger(value["bounds"]["start_us"]) && value["bounds"]["start_us"] >= 0 && value["bounds"]["start_us"] <= 9007199254740991) && (typeof value["bounds"]["end_us"] === "number" && Number.isInteger(value["bounds"]["end_us"]) && value["bounds"]["end_us"] >= 0 && value["bounds"]["end_us"] <= 9007199254740991)) || (value["bounds"] === null)) && ((isOutputObject(value["window"]) && Object.hasOwn(value["window"], "start_us") && Object.hasOwn(value["window"], "end_us") && (typeof value["window"]["start_us"] === "number" && Number.isInteger(value["window"]["start_us"]) && value["window"]["start_us"] >= 0 && value["window"]["start_us"] <= 9007199254740991) && (typeof value["window"]["end_us"] === "number" && Number.isInteger(value["window"]["end_us"]) && value["window"]["end_us"] >= 0 && value["window"]["end_us"] <= 9007199254740991)) || (value["window"] === null)) && (typeof value["sample_count"] === "number" && Number.isInteger(value["sample_count"]) && value["sample_count"] >= 0 && value["sample_count"] <= 9007199254740991) && (typeof value["total_sample_count"] === "number" && Number.isInteger(value["total_sample_count"]) && value["total_sample_count"] >= 0 && value["total_sample_count"] <= 9007199254740991) && ((typeof value["total_weight"] === "number" && Number.isFinite(value["total_weight"])) || (value["total_weight"] === null)) && ((typeof value["capture_weight"] === "number" && Number.isFinite(value["capture_weight"])) || (value["capture_weight"] === null)) && (typeof value["unaligned_count"] === "number" && Number.isInteger(value["unaligned_count"]) && value["unaligned_count"] >= 0 && value["unaligned_count"] <= 9007199254740991) && (Array.isArray(value["overview"]) && value["overview"].every(item => isProfileInspectionBin(item))) && (Array.isArray(value["activity"]) && value["activity"].every(item => isProfileInspectionBin(item))) && (Array.isArray(value["functions"]) && value["functions"].every(item => isProfileInspectionFunction(item))) && (typeof value["total_functions"] === "number" && Number.isInteger(value["total_functions"]) && value["total_functions"] >= 0 && value["total_functions"] <= 9007199254740991) && (typeof value["functions_truncated"] === "boolean") && (Array.isArray(value["roots"]) && value["roots"].every(item => isProfileInspectionNode(item))) && (typeof value["tree_truncated"] === "boolean") && isProfileInspectionSelection(value["selected"]) && (Array.isArray(value["diagnostics"]) && value["diagnostics"].every(item => (typeof item === "string"))));
+}
+
 // Every operation result is checked against its declared wire contract.
 export function validateOperationOutput(name: string, value: unknown): void {
   switch (name) {
@@ -1182,6 +1324,9 @@ export function validateOperationOutput(name: string, value: unknown): void {
       break;
     case "profiles.tree":
       if (!isProfileTree(value)) throw new Error("Hunin returned an invalid profiles.tree result.");
+      break;
+    case "profiles.inspect":
+      if (!isProfileInspection(value)) throw new Error("Hunin returned an invalid profiles.inspect result.");
       break;
     case "timeline.query":
       if (!isTimeline(value)) throw new Error("Hunin returned an invalid timeline.query result.");

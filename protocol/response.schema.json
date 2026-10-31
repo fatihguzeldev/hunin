@@ -2191,6 +2191,423 @@
         "limitations"
       ],
       "additionalProperties": false
+    },
+    "ProfileInspectionFunction": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "function": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "source_position_basis": {
+          "type": "string"
+        },
+        "self_weight": {
+          "type": ["number", "null"]
+        },
+        "inclusive_weight": {
+          "type": ["number", "null"]
+        },
+        "weight_unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "function",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "source_position_basis",
+        "self_weight",
+        "inclusive_weight",
+        "weight_unit"
+      ]
+    },
+    "ProfileInspectionCaller": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "function": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "weight": {
+          "type": ["number", "null"]
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "function",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "weight",
+        "sample_count"
+      ]
+    },
+    "ProfileInspectionNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "source_position_basis": {
+          "type": "string"
+        },
+        "self_weight": {
+          "type": ["number", "null"]
+        },
+        "total_weight": {
+          "type": ["number", "null"]
+        },
+        "child_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "children_truncated": {
+          "type": "boolean"
+        },
+        "depth_truncated": {
+          "type": "boolean"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionNode"
+          }
+        },
+        "frame_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "source_position_basis",
+        "self_weight",
+        "total_weight",
+        "child_count",
+        "children_truncated",
+        "depth_truncated",
+        "children",
+        "frame_id"
+      ]
+    },
+    "ProfileInspectionSelection": {
+      "type": ["object", "null"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "function": {
+          "type": "string"
+        },
+        "file": {
+          "type": ["string", "null"]
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "module": {
+          "type": ["string", "null"]
+        },
+        "code_id": {
+          "type": ["string", "null"]
+        },
+        "source_position_basis": {
+          "type": "string"
+        },
+        "self_weight": {
+          "type": ["number", "null"]
+        },
+        "inclusive_weight": {
+          "type": ["number", "null"]
+        },
+        "weight_unit": {
+          "type": "string"
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observed_start_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "observed_end_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "callers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionCaller"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50
+        },
+        "evidence_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "evidence_truncated": {
+          "type": "boolean"
+        },
+        "callers_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "function",
+        "file",
+        "line",
+        "module",
+        "code_id",
+        "source_position_basis",
+        "self_weight",
+        "inclusive_weight",
+        "weight_unit",
+        "sample_count",
+        "observed_start_us",
+        "observed_end_us",
+        "callers",
+        "evidence_ids",
+        "evidence_count",
+        "evidence_truncated",
+        "callers_truncated"
+      ]
+    },
+    "ProfileInspectionBin": {
+      "type": "object",
+      "properties": {
+        "start_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "weight": {
+          "type": ["number", "null"]
+        },
+        "selected_weight": {
+          "type": ["number", "null"]
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "start_us",
+        "end_us",
+        "weight",
+        "selected_weight",
+        "sample_count"
+      ]
+    },
+    "ProfileInspection": {
+      "type": "object",
+      "properties": {
+        "result_identity": {
+          "type": "string"
+        },
+        "weight_unit": {
+          "type": "string"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bounds": {
+          "type": ["object", "null"],
+          "properties": {
+            "start_us": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end_us": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["start_us", "end_us"]
+        },
+        "window": {
+          "type": ["object", "null"],
+          "properties": {
+            "start_us": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end_us": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["start_us", "end_us"]
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total_sample_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total_weight": {
+          "type": ["number", "null"]
+        },
+        "capture_weight": {
+          "type": ["number", "null"]
+        },
+        "unaligned_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "overview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionBin"
+          }
+        },
+        "activity": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionBin"
+          }
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionFunction"
+          }
+        },
+        "total_functions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "functions_truncated": {
+          "type": "boolean"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileInspectionNode"
+          }
+        },
+        "tree_truncated": {
+          "type": "boolean"
+        },
+        "selected": {
+          "$ref": "#/$defs/ProfileInspectionSelection"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "result_identity",
+        "weight_unit",
+        "units",
+        "bounds",
+        "window",
+        "sample_count",
+        "total_sample_count",
+        "total_weight",
+        "capture_weight",
+        "unaligned_count",
+        "overview",
+        "activity",
+        "functions",
+        "total_functions",
+        "functions_truncated",
+        "roots",
+        "tree_truncated",
+        "selected",
+        "diagnostics"
+      ]
     }
   }
 }
