@@ -3,15 +3,37 @@ import assert from 'node:assert/strict';
 import {
   clampWindow,
   commonChain,
+  dragMode,
   panWindow,
   resizeWindow,
   zoomWindow,
 } from '../src/investigation/workbench/selection.js';
+import {
+  framePath,
+  nodeAt,
+  rows,
+  type ProfileFunction,
+  type ProfileNode,
+} from '../src/investigation/workbench/model.js';
 
 const bounds = {
   start_us: 1_700_000_000_000_000,
   end_us: 1_700_000_010_000_000,
 };
+
+test('the first drag inside a full-capture selection creates a useful window', () => {
+  assert.equal(dragMode('move', bounds, bounds), 'new');
+  assert.equal(dragMode('start', bounds, bounds), 'start');
+  assert.equal(dragMode('end', bounds, bounds), 'end');
+  assert.equal(
+    dragMode(
+      'move',
+      { start_us: bounds.start_us + 10, end_us: bounds.end_us - 10 },
+      bounds,
+    ),
+    'move',
+  );
+});
 
 test('time selection preserves its width when restored beyond either recording edge', () => {
   assert.deepEqual(
@@ -136,4 +158,63 @@ test('stack collapse never hides a branch, unavailable weight or bounded-away ch
     alter(root);
     assert.equal(commonChain([root]).ancestors.length, 0);
   }
+});
+
+test('function filtering includes source identity and keeps unavailable weights behind measured rows', () => {
+  const frame = (
+    id: string,
+    name: string,
+    self: number | null,
+    file: string | null,
+  ): ProfileFunction => ({
+    id,
+    function: name,
+    file,
+    line: null,
+    module: null,
+    code_id: null,
+    source_position_basis: 'first observed sampled position',
+    self_weight: self,
+    inclusive_weight: self,
+    weight_unit: 'samples',
+  });
+  const values = [
+    frame('unknown', 'request', null, 'src/requests.ts'),
+    frame('known', 'dispatch', 7, 'src/requests.ts'),
+    frame('other', 'request', 10, 'runtime.js'),
+  ];
+  assert.deepEqual(
+    rows(values, 'SRC/REQUESTS', 'self').map((row) => row.id),
+    ['known', 'unknown'],
+  );
+  assert.deepEqual(
+    values.map((row) => row.id),
+    ['unknown', 'known', 'other'],
+  );
+});
+
+test('stack focus restores the exact path occurrence rather than matching repeated function names', () => {
+  const leaf = {
+    ...node('leaf', [], 1),
+    name: 'shared',
+    file: null,
+    line: null,
+    module: null,
+    code_id: null,
+    source_position_basis: '',
+    frame_id: 'shared-frame',
+  } as ProfileNode;
+  const other = { ...leaf, id: 'other-leaf' };
+  const root = {
+    ...leaf,
+    id: 'root',
+    frame_id: 'root-frame',
+    children: [leaf, other],
+  };
+  assert.deepEqual(framePath([root], 'shared-frame'), ['root', 'leaf']);
+  assert.equal(nodeAt([root], ['root', 'other-leaf'])?.id, 'other-leaf');
+  assert.equal(nodeAt([root], ['root', 'stale']), undefined);
+  leaf.total_weight = 3;
+  other.total_weight = 7;
+  assert.deepEqual(framePath([root], 'shared-frame'), ['root', 'other-leaf']);
 });

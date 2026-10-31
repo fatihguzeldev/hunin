@@ -1,5 +1,17 @@
 export type TimeWindow = { start_us: number; end_us: number };
 
+export function dragMode(
+  hit: 'new' | 'move' | 'start' | 'end',
+  window: TimeWindow,
+  bounds: TimeWindow,
+) {
+  return hit === 'move' &&
+    window.start_us <= bounds.start_us &&
+    window.end_us >= bounds.end_us
+    ? 'new'
+    : hit;
+}
+
 export function clampWindow(
   window: TimeWindow,
   bounds: TimeWindow,
