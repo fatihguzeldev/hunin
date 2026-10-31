@@ -217,3 +217,49 @@ test('confirmed removal forgets only that recording private location and prefere
   assert.equal(reload.forRun('removed').source, undefined);
   assert.equal(reload.forRun('kept').profile.query, 'keep this');
 });
+
+test('workbench context persists per recording and invalidates only result-bound selections', () => {
+  const storage = session();
+  const first = new Investigations(storage);
+  first.observeResult('run', 'a');
+  const state = first.forRun('run') as unknown as {
+    workbench: {
+      unit: string;
+      window?: { start_us: number; end_us: number };
+      selectedFrameId?: string;
+      mode: string;
+      query: string;
+      sort: string;
+      focusPath: string[];
+      inspectorTab: string;
+      inspectorWide: boolean;
+    };
+  };
+  assert.ok(state.workbench);
+  Object.assign(state.workbench, {
+    unit: 'microseconds',
+    window: { start_us: 100, end_us: 200 },
+    selectedFrameId: 'measured',
+    mode: 'stacks',
+    query: 'work',
+    sort: 'inclusive',
+    focusPath: ['parent', 'measured'],
+    inspectorTab: 'callers',
+    inspectorWide: true,
+  });
+  first.persist('run');
+  const restored = new Investigations(storage);
+  restored.observeResult('run', 'a');
+  const saved = (restored.forRun('run') as unknown as typeof state).workbench;
+  assert.deepEqual(saved, state.workbench);
+  assert.notDeepEqual(
+    (restored.forRun('other') as unknown as typeof state).workbench,
+    saved,
+  );
+  restored.observeResult('run', 'b');
+  assert.equal(saved.selectedFrameId, undefined);
+  assert.deepEqual(saved.focusPath, []);
+  assert.deepEqual(saved.window, { start_us: 100, end_us: 200 });
+  assert.equal(saved.query, 'work');
+  assert.equal(saved.unit, 'microseconds');
+});

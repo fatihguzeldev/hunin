@@ -41,6 +41,17 @@ export type SourceSelection = {
 };
 
 export type Investigation = {
+  workbench: {
+    window?: { start_us: number; end_us: number };
+    unit: string;
+    selectedFrameId?: string;
+    mode: 'functions' | 'stacks';
+    query: string;
+    sort: 'self' | 'inclusive';
+    focusPath: string[];
+    inspectorTab: 'source' | 'callers' | 'evidence';
+    inspectorWide: boolean;
+  };
   calls: { functions: FunctionSelection[]; measurementRunId?: string };
   profile: ProfileInvestigation;
   timeline: TimelineInvestigation;
@@ -99,6 +110,15 @@ function pageLocation(value: unknown): PageLocation | undefined {
 
 function empty(): Investigation {
   return {
+    workbench: {
+      unit: '',
+      mode: 'functions',
+      query: '',
+      sort: 'self',
+      focusPath: [],
+      inspectorTab: 'source',
+      inspectorWide: false,
+    },
     calls: { functions: [] },
     profile: { unit: '', path: [], breadcrumbs: [], mode: 'tree', query: '' },
     timeline: { kind: '', alignment: 'aligned' },
@@ -114,6 +134,37 @@ function decode(value: unknown): SavedInvestigation | undefined {
   const profile = object(state?.profile);
   if (saved?.version !== 1 || !profile) return undefined;
   const result = empty();
+  const workbench = object(state?.workbench);
+  if (workbench) {
+    result.workbench.unit = text(workbench.unit) ?? '';
+    result.workbench.selectedFrameId = text(workbench.selectedFrameId);
+    result.workbench.query = text(workbench.query) ?? '';
+    result.workbench.mode =
+      workbench.mode === 'stacks' ? 'stacks' : 'functions';
+    result.workbench.sort =
+      workbench.sort === 'inclusive' ? 'inclusive' : 'self';
+    result.workbench.focusPath = strings(workbench.focusPath, 128) ?? [];
+    result.workbench.inspectorTab =
+      workbench.inspectorTab === 'callers' ||
+      workbench.inspectorTab === 'evidence'
+        ? workbench.inspectorTab
+        : 'source';
+    result.workbench.inspectorWide = workbench.inspectorWide === true;
+    const window = object(workbench.window);
+    if (
+      window &&
+      typeof window.start_us === 'number' &&
+      Number.isSafeInteger(window.start_us) &&
+      window.start_us >= 0 &&
+      typeof window.end_us === 'number' &&
+      Number.isSafeInteger(window.end_us) &&
+      window.end_us > window.start_us
+    )
+      result.workbench.window = {
+        start_us: window.start_us,
+        end_us: window.end_us,
+      };
+  }
   result.profile.unit = text(profile.unit) ?? '';
   result.profile.path = strings(profile.path) ?? [];
   result.profile.breadcrumbs = strings(profile.breadcrumbs) ?? [];
@@ -333,6 +384,8 @@ export class Investigations {
       entry.restored &&
       (identity === undefined || entry.resultIdentity === undefined);
     if (changed || unconfirmed) {
+      entry.state.workbench.selectedFrameId = undefined;
+      entry.state.workbench.focusPath = [];
       const profile = entry.state.profile;
       profile.path = [];
       profile.breadcrumbs = [];
