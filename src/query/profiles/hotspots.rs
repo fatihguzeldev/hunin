@@ -40,9 +40,14 @@ pub(crate) fn comparison_hotspots_checked(
 
 pub(in crate::query) struct HotspotAccumulator {
     selected: Option<String>,
-    functions: BTreeMap<String, Value>,
+    functions: BTreeMap<String, Hotspot>,
     total: f64,
     identity: fn(&Value) -> String,
+}
+struct Hotspot {
+    frame: Value,
+    own: f64,
+    inclusive: f64,
 }
 impl HotspotAccumulator {
     fn new(requested_unit: &str, identity: fn(&Value) -> String) -> Self {
@@ -79,12 +84,19 @@ impl HotspotAccumulator {
             if !self.functions.contains_key(&key) {
                 work.entry()?;
             }
-            let row=self.functions.entry(key.clone()).or_insert_with(||json!({"function":frame["function"],"file":frame["file"],"line":frame["line"],"module":frame["module"],"code_id":frame["code_id"],"source_position_basis":"first observed sampled position","self_weight":0.0,"inclusive_weight":0.0,"weight_unit":selected}));
+            let row = self
+                .functions
+                .entry(key.clone())
+                .or_insert_with(|| Hotspot {
+                    frame: frame.clone(),
+                    own: 0.0,
+                    inclusive: 0.0,
+                });
             if inclusive.insert(key) {
-                row["inclusive_weight"] = json!(number(row, "inclusive_weight") + weight);
+                row.inclusive += weight;
             }
             if index + 1 == stack.len() {
-                row["self_weight"] = json!(number(row, "self_weight") + weight);
+                row.own += weight;
             }
         }
         Ok(())
@@ -97,15 +109,19 @@ impl HotspotAccumulator {
         work.check()?;
         let mut rows: Vec<_> = self.functions.into_values().collect();
         rows.sort_by(|a, b| {
-            number(b, "self_weight")
-                .total_cmp(&number(a, "self_weight"))
-                .then_with(|| a["function"].as_str().cmp(&b["function"].as_str()))
+            b.own.total_cmp(&a.own).then_with(|| {
+                a.frame["function"]
+                    .as_str()
+                    .cmp(&b.frame["function"].as_str())
+            })
         });
         let total_functions = rows.len();
         rows.truncate(limit.min(1000));
+        let unit = self.selected.unwrap_or_else(|| "samples".into());
+        let rows=rows.into_iter().map(|row|json!({"function":row.frame["function"],"file":row.frame["file"],"line":row.frame["line"],"module":row.frame["module"],"code_id":row.frame["code_id"],"source_position_basis":"first observed sampled position","self_weight":row.own,"inclusive_weight":row.inclusive,"weight_unit":unit})).collect::<Vec<_>>();
         work.check()?;
         Ok(HotspotCoverage {
-            result: json!({"hotspots":rows,"total_weight":self.total,"weight_unit":self.selected.unwrap_or_else(|| "samples".into())}),
+            result: json!({"hotspots":rows,"total_weight":self.total,"weight_unit":unit}),
             total_functions,
         })
     }
