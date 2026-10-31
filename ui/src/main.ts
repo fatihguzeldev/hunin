@@ -1,3 +1,4 @@
+import { investigate } from './investigation/workbench';
 import { Workspace } from './workspace';
 import { calls } from './views/calls';
 import { profile } from './views/profile';
@@ -8,12 +9,18 @@ import { source } from './source/view';
 import { analyses } from './analysis/view';
 import { comparison } from './views/comparison';
 import './style.css';
+import './design/components.css';
+import './design/layout.css';
+import { initializeTheme } from './design/theme';
 import { selectProject } from './projects/selection';
+
+initializeTheme();
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 void selectProject(root, (project) => {
   new Workspace(
     {
+      investigate: { name: 'Investigate', render: investigate },
       timeline: { name: 'Timeline', render: timeline },
       profile: { name: 'Stack profile', render: profile },
       calls: { name: 'Function calls', render: calls },

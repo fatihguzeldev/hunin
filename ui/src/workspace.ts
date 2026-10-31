@@ -4,7 +4,11 @@ import type { View } from './investigation/view';
 import { AnalysisWatch } from './analysis/watch';
 import { AttemptMonitor } from './analysis/monitor';
 import { attemptActivity } from './analysis/activity';
-import { runSource, runStatusTone } from './recordings/presentation';
+import {
+  captureQuality,
+  targetCheck,
+  runStatusTone,
+} from './recordings/presentation';
 import { RecordingCatalog } from './recordings/catalog';
 import { ImportCatalog } from './recordings/formats';
 import { operation, type Run } from './api';
@@ -15,6 +19,8 @@ import {
 } from './recordings/details';
 import { badge, button, el, empty, errorView, loading } from './dom';
 import { date } from './format';
+import { icon } from './design/icons';
+import { themeControl } from './design/theme';
 import { recordDialog } from './recordings/create';
 import { importRecordingDialog } from './recordings/import';
 import { removeRecordingDialog } from './recordings/remove';
@@ -28,7 +34,9 @@ export class Workspace {
   private catalog = new RecordingCatalog();
   private importCatalog = new ImportCatalog();
   private selected = new URLSearchParams(location.search).get('run') ?? '';
-  private tab = new URLSearchParams(location.search).get('view') ?? 'overview';
+  private tab =
+    new URLSearchParams(location.search).get('view') ??
+    (this.selected ? 'investigate' : 'recordings');
   private rail = el('div', { class: 'run-list', 'aria-label': 'Recordings' });
   private content = el('main', { class: 'workspace', id: 'main' });
   private epoch = 0;
@@ -37,6 +45,9 @@ export class Workspace {
   private query = '';
   private focusSelectedTab = false;
   private poll: ReturnType<typeof setTimeout> | undefined;
+  private libraryPolling: AbortSignal | undefined;
+  private libraryPollOffset = 0;
+  private libraryStatusError: unknown;
   private views: Record<string, View>;
   private investigations: Investigations;
   private history: InvestigationHistory;
@@ -85,8 +96,9 @@ export class Workspace {
       },
     });
     this.views = {
+      ...views,
       overview: {
-        name: 'Overview',
+        name: 'Details',
         render: (context) =>
           overview(
             context.run,
@@ -95,7 +107,6 @@ export class Workspace {
             context.signal,
           ),
       },
-      ...views,
     };
     this.normalizeTab();
     this.history.restore(this.selected);
@@ -117,7 +128,8 @@ export class Workspace {
       );
       const params = new URLSearchParams(location.search);
       this.selected = params.get('run') ?? '';
-      this.tab = params.get('view') ?? 'overview';
+      this.tab =
+        params.get('view') ?? (this.selected ? 'investigate' : 'recordings');
       this.normalizeTab();
       this.history.restore(this.selected);
       this.returningFromSource =
@@ -129,101 +141,293 @@ export class Workspace {
 
   private normalizeTab(): void {
     if (
-      ![...Object.keys(this.views), 'capabilities', 'scenarios'].includes(
-        this.tab,
-      )
+      ![
+        ...Object.keys(this.views),
+        'recordings',
+        'capabilities',
+        'scenarios',
+      ].includes(this.tab)
     )
-      this.tab = 'overview';
+      this.tab = this.selected ? 'investigate' : 'recordings';
   }
 
   mount(root: HTMLElement): void {
     const search = el('input', {
       type: 'search',
       class: 'run-search',
-      placeholder: 'Filter recordings',
-      'aria-label': 'Filter recordings',
+      placeholder: 'Find a recording',
+      'aria-label': 'Find a recording',
     });
     search.addEventListener('input', () => {
       this.query = search.value;
       this.renderRail();
+      if (this.tab === 'recordings') this.renderLibrary();
     });
-    root.replaceChildren(
-      el('a', { class: 'skip-link', href: '#main' }, 'Skip to recording'),
+    const refresh = button(
+      '',
+      () => {
+        void this.reload();
+      },
+      'button subtle icon-button',
+    );
+    refresh.setAttribute('aria-label', 'Refresh recordings');
+    refresh.setAttribute('title', 'Refresh recordings');
+    refresh.append(icon('reset'));
+    const library = button(
+      'Recordings',
+      () => this.navigate('', 'recordings'),
+      'workspace-nav',
+    );
+    library.dataset.view = 'recordings';
+    library.prepend(icon('recording'));
+    const project = this.project.pickerHref
+      ? el(
+          'a',
+          {
+            class: 'workspace-project',
+            href: this.project.pickerHref,
+            'aria-label': `Switch project, current project ${this.project.name}`,
+          },
+          icon('folder'),
+          el('span', {}, this.project.name),
+          icon('down'),
+        )
+      : el(
+          'div',
+          { class: 'workspace-project', title: this.project.storePath },
+          icon('folder'),
+          el('span', {}, this.project.name || 'Local recordings'),
+        );
+    const sidebar = el(
+      'aside',
+      { class: 'sidebar' },
       el(
-        'header',
-        { class: 'app-header' },
-        el(
-          'div',
-          { class: 'brand' },
-          el('img', { src: '/hunin.svg', alt: '' }),
-          'hunin',
-        ),
-        el(
-          'div',
-          { class: 'project-selector', title: this.project.storePath },
-          el(
-            'small',
-            {},
-            this.project.pickerHref
-              ? this.project.legacy
-                ? 'Legacy store'
-                : 'Project'
-              : 'Direct store',
-          ),
-          this.project.pickerHref
-            ? el(
-                'a',
-                {
-                  href: this.project.pickerHref,
-                  'aria-label': `Switch project, current project ${this.project.name}`,
-                },
-                `${this.project.name} ▾`,
-              )
-            : el('span', {}, this.project.storePath),
-        ),
-        el(
-          'div',
-          { class: 'header-actions' },
-          button(
-            'Capabilities',
-            () => this.navigate('', 'capabilities'),
-            'button subtle',
-          ),
-          button(
-            'Scenarios',
-            () => this.navigate('', 'scenarios'),
-            'button subtle',
-          ),
-          button('Import', () => this.openImport(), 'button subtle'),
-          button('+ Record', () => this.openRecording(), 'button primary'),
-        ),
+        'a',
+        {
+          class: 'wordmark',
+          href: this.project.pickerHref ?? '#',
+          'aria-label': 'Hunin projects',
+        },
+        'hunin',
+      ),
+      project,
+      el(
+        'nav',
+        { class: 'workspace-navigation', 'aria-label': 'Workspace' },
+        library,
       ),
       el(
         'div',
-        { class: 'shell' },
-        el(
-          'aside',
-          { class: 'sidebar' },
-          el(
-            'div',
-            { class: 'sidebar-title' },
-            el('h2', {}, 'Recordings'),
-            button(
-              '↻',
-              () => {
-                void this.reload();
-              },
-              'button subtle small',
-            ),
-          ),
-          search,
-          this.rail,
-        ),
-        this.content,
+        { class: 'sidebar-title' },
+        el('h2', {}, 'Recent recordings'),
+        refresh,
       ),
+      search,
+      this.rail,
+      el(
+        'div',
+        { class: 'sidebar-actions' },
+        button('Record', () => this.openRecording(), 'button primary'),
+        button('Import', () => this.openImport(), 'button subtle'),
+      ),
+      el(
+        'nav',
+        { class: 'workspace-tools', 'aria-label': 'Tools' },
+        button(
+          'Scenarios',
+          () => this.navigate('', 'scenarios'),
+          'text-button',
+        ),
+        button(
+          'Runtime support',
+          () => this.navigate('', 'capabilities'),
+          'text-button',
+        ),
+        themeControl(),
+      ),
+    );
+    root.replaceChildren(
+      el('a', { class: 'skip-link', href: '#main' }, 'Skip to recordings'),
+      el('div', { class: 'app-shell' }, sidebar, this.content),
     );
     this.rail.replaceChildren(loading('Loading recordings…'));
     void this.reload();
+  }
+
+  private renderLibrary(): void {
+    const focused = this.content.querySelector<HTMLButtonElement>(
+      '.recording-card:focus',
+    )?.dataset.run;
+    const scroll = this.content.scrollTop;
+    const shown = this.catalog.runs.filter((run) =>
+      `${run.name} ${run.runtime} ${run.id}`
+        .toLowerCase()
+        .includes(this.query.toLowerCase()),
+    );
+    const rows = el('div', {
+      class: 'recording-library',
+      'aria-label': 'Recordings',
+    });
+    for (const run of shown) {
+      const row = button(
+        '',
+        () => this.navigate(run.id, 'investigate'),
+        'recording-card',
+      );
+      row.dataset.run = run.id;
+      row.append(
+        icon('recording'),
+        el(
+          'div',
+          { class: 'recording-card-title' },
+          el('strong', {}, run.name),
+          el('span', {}, run.runtime),
+        ),
+        el(
+          'time',
+          { datetime: new Date(run.started_at_us / 1000).toISOString() },
+          date(new Date(run.started_at_us / 1000).toISOString()),
+        ),
+        badge(run.status, runStatusTone(run.status)),
+        icon('chevron-right'),
+      );
+      rows.append(row);
+    }
+    const title = el(
+      'div',
+      { class: 'library-heading' },
+      el(
+        'div',
+        {},
+        el('p', { class: 'eyebrow' }, this.project.name),
+        el('h1', {}, 'Recordings'),
+        this.catalog.hasOlder
+          ? el(
+              'p',
+              { class: 'muted library-scope' },
+              `${this.catalog.runs.length} recordings loaded. Load older recordings to search more.`,
+            )
+          : null,
+      ),
+      el(
+        'div',
+        { class: 'toolbar' },
+        button('Import', () => this.openImport(), 'button subtle'),
+        button('Record', () => this.openRecording(), 'button primary'),
+      ),
+    );
+    this.content.replaceChildren(
+      title,
+      shown.length
+        ? rows
+        : this.catalog.runs.length
+          ? empty(
+              'No matching recordings',
+              `No recording matches “${this.query}”.`,
+              button('Clear search', () => {
+                this.query = '';
+                const search =
+                  document.querySelector<HTMLInputElement>('.run-search');
+                if (search) search.value = '';
+                this.renderRail();
+                this.renderLibrary();
+              }),
+            )
+          : empty(
+              'No recordings yet',
+              'Record a command or import a profile.',
+              button('Record', () => this.openRecording(), 'button primary'),
+            ),
+    );
+    if (this.catalog.hasOlder) {
+      const more = button(
+        'Load older recordings',
+        () => this.loadOlderRecordings(more),
+        'button subtle library-more',
+      );
+      more.disabled = this.catalog.loadingOlder;
+      this.content.append(more);
+    }
+    if (this.libraryStatusError)
+      this.content.append(
+        errorView(this.libraryStatusError, () => {
+          this.libraryStatusError = undefined;
+          void this.reload(undefined, true);
+        }),
+      );
+    if (focused)
+      this.content
+        .querySelector<HTMLButtonElement>(
+          `.recording-card[data-run="${CSS.escape(focused)}"]`,
+        )
+        ?.focus({ preventScroll: true });
+    this.content.scrollTop = scroll;
+    document.title = `${this.project.name} · Recordings · Hunin`;
+    this.pollLibrary();
+  }
+
+  private pollLibrary(): void {
+    clearTimeout(this.poll);
+    const signal = this.renderController?.signal;
+    if (
+      this.tab !== 'recordings' ||
+      !signal ||
+      signal.aborted ||
+      this.libraryPolling === signal
+    )
+      return;
+    const running = this.catalog.runs.filter((run) => run.status === 'running');
+    if (!running.length) return;
+    const epoch = this.epoch;
+    const selected = Array.from(
+      { length: Math.min(8, running.length) },
+      (_, index) => running[(this.libraryPollOffset + index) % running.length],
+    );
+    this.libraryPollOffset =
+      (this.libraryPollOffset + selected.length) % running.length;
+    this.poll = setTimeout(() => {
+      this.libraryPolling = signal;
+      void (async () => {
+        let changed = Boolean(this.libraryStatusError);
+        for (const previous of selected) {
+          const { run } = await recordingMetadata(previous.id, signal);
+          if (
+            epoch !== this.epoch ||
+            signal.aborted ||
+            this.tab !== 'recordings'
+          )
+            return;
+          changed ||=
+            previous.status !== run.status ||
+            previous.finished_at_us !== run.finished_at_us;
+          this.catalog.observe(run);
+        }
+        this.libraryStatusError = undefined;
+        if (changed) {
+          this.renderRail();
+          this.renderLibrary();
+        }
+      })()
+        .catch((error) => {
+          if (
+            epoch === this.epoch &&
+            !signal.aborted &&
+            this.tab === 'recordings'
+          ) {
+            this.libraryStatusError = error;
+            this.renderLibrary();
+          }
+        })
+        .finally(() => {
+          if (this.libraryPolling === signal) this.libraryPolling = undefined;
+          if (
+            epoch === this.epoch &&
+            !signal.aborted &&
+            this.tab === 'recordings'
+          )
+            this.pollLibrary();
+        });
+    }, 3000);
   }
 
   private openRecording(): void {
@@ -272,7 +476,7 @@ export class Workspace {
           this.renderController?.abort();
           this.attemptMonitor.pause();
           this.selected = '';
-          this.tab = 'overview';
+          this.tab = 'recordings';
           this.writeLocation('replace');
           void this.reload();
         } else void this.reload(undefined, true);
@@ -295,15 +499,14 @@ export class Workspace {
       if ('error' in read) throw read.error;
       if (preserveView || navigation !== this.navigationEpoch) {
         this.renderRail();
+        if (this.tab === 'recordings') this.renderLibrary();
         return;
       }
       if (select) {
         this.selected = select;
-        this.tab = 'overview';
+        this.tab = 'investigate';
         this.writeLocation();
       }
-      if (!this.selected && !['capabilities', 'scenarios'].includes(this.tab))
-        this.selected = this.catalog.runs[0]?.id ?? '';
       this.renderRail();
       await this.render();
     } catch (error) {
@@ -318,6 +521,13 @@ export class Workspace {
   }
 
   private renderRail(): void {
+    for (const control of document.querySelectorAll<HTMLButtonElement>(
+      '.workspace-navigation [data-view]',
+    ))
+      control.setAttribute(
+        'aria-current',
+        control.dataset.view === this.tab ? 'page' : 'false',
+      );
     this.rail.replaceChildren();
     const shown = this.catalog.runs.filter((run) =>
       `${run.name} ${run.runtime} ${run.id}`
@@ -330,8 +540,8 @@ export class Workspace {
         () =>
           this.navigate(
             run.id,
-            ['capabilities', 'scenarios'].includes(this.tab)
-              ? 'overview'
+            ['recordings', 'capabilities', 'scenarios'].includes(this.tab)
+              ? 'investigate'
               : this.tab,
           ),
         `run-item ${run.id === this.selected ? 'active' : ''}`,
@@ -363,30 +573,49 @@ export class Workspace {
         ),
       );
     if (this.catalog.hasOlder) {
-      const older = button(
+      const more = button(
         'Load older recordings',
-        () => {
-          older.disabled = true;
-          void this.catalog
-            .older()
-            .then((read) => {
-              if (!read.current()) return;
-              if ('error' in read)
-                this.rail.append(
-                  errorView(read.error, () => {
-                    void this.reload();
-                  }),
-                );
-              else this.renderRail();
-            })
-            .finally(() => {
-              older.disabled = false;
-            });
-        },
+        () => this.loadOlderRecordings(more),
         'button subtle small',
       );
-      this.rail.append(older);
+      more.disabled = this.catalog.loadingOlder;
+      this.rail.append(more);
     }
+  }
+
+  private loadOlderRecordings(trigger: HTMLButtonElement): void {
+    if (trigger.disabled) return;
+    trigger.disabled = true;
+    const navigation = this.navigationEpoch;
+    const hadFocus = document.activeElement === trigger;
+    void this.catalog
+      .older()
+      .then((read) => {
+        if (!read.current()) return;
+        if (read.error) {
+          if (navigation === this.navigationEpoch)
+            (this.tab === 'recordings' ? this.content : this.rail).append(
+              errorView(read.error, () => {
+                void this.reload();
+              }),
+            );
+          return;
+        }
+        this.renderRail();
+        if (this.tab === 'recordings') {
+          this.renderLibrary();
+          if (hadFocus && navigation === this.navigationEpoch)
+            (
+              this.content.querySelector<HTMLButtonElement>('.library-more') ??
+              this.content.querySelector<HTMLButtonElement>(
+                '.recording-card:last-child',
+              )
+            )?.focus();
+        }
+      })
+      .finally(() => {
+        trigger.disabled = false;
+      });
   }
 
   private navigate(id: string, tab: string): void {
@@ -412,6 +641,7 @@ export class Workspace {
 
   private async render(): Promise<void> {
     const epoch = ++this.epoch;
+    this.content.dataset.view = this.tab;
     this.renderController?.abort();
     const controller = new AbortController();
     this.renderController = controller;
@@ -420,6 +650,10 @@ export class Workspace {
     this.attemptMonitor.select(this.selected);
     this.content.replaceChildren(loading('Loading recording…'));
     try {
+      if (this.tab === 'recordings') {
+        this.renderLibrary();
+        return;
+      }
       if (this.tab === 'capabilities') {
         const view = await capabilities(signal);
         if (epoch === this.epoch) {
@@ -442,8 +676,8 @@ export class Workspace {
         document.title = 'Hunin · recordings';
         this.content.replaceChildren(
           empty(
-            'Make the next change measurable',
-            'Record a workload, inspect its execution, then compare the same workload after your change.',
+            'No recording selected',
+            'Choose a recording from the sidebar.',
             button(
               'Record a workload',
               () => this.openRecording(),
@@ -482,8 +716,8 @@ export class Workspace {
               'p',
               { class: 'notice', role: 'status' },
               invalidation === 'changed'
-                ? 'Selected results changed. Saved observation and source locations were reset; your filters are retained.'
-                : 'This service cannot confirm the saved result identity. Observation and source locations were reset; your filters are retained.',
+                ? 'Results changed. Select an observation again; your filters are kept.'
+                : 'Saved selections could not be verified. Your filters are kept.',
             ),
           ]
         : [];
@@ -513,7 +747,7 @@ export class Workspace {
           el(
             'p',
             { class: 'metric-note' },
-            'Investigation state is remembered on this page only because browser session storage is unavailable.',
+            'Selections are saved on this page only. Browser storage is unavailable.',
           ),
         );
       this.content.replaceChildren(
@@ -538,7 +772,7 @@ export class Workspace {
       if (investigation.source) {
         const selected = investigation.source;
         const back = button(
-          `← Back to ${this.views[this.tab]?.name ?? 'recording'}`,
+          `Back to ${this.views[this.tab]?.name ?? 'recording'}`,
           () => {
             if (!this.history.returnToView(run.id)) {
               this.navigationEpoch++;
@@ -577,7 +811,7 @@ export class Workspace {
             );
         }
       } else {
-        const renderer = this.views[this.tab] ?? this.views.overview;
+        const renderer = this.views[this.tab] ?? this.views.investigate;
         try {
           const body = await renderer.render({
             run,
@@ -693,7 +927,8 @@ export class Workspace {
   }
 
   private header(run: Run): HTMLElement {
-    const source = runSource(run);
+    const quality = captureQuality(run);
+    const target = targetCheck(run);
     const actions = el('div', { class: 'toolbar' });
     const remove = button(
       'Remove recording',
@@ -709,14 +944,28 @@ export class Workspace {
         button(
           'Stop recording',
           () => {
+            const navigation = this.navigationEpoch;
+            const current = () =>
+              this.selected === run.id && navigation === this.navigationEpoch;
             void operation('runs.cancel', { run_id: run.id })
-              .then(() => this.reload())
+              .then(() => {
+                this.messages.set(run.id, 'Stop requested.');
+                void this.reload(undefined, !current());
+              })
               .catch((error) => {
-                this.content.prepend(
-                  errorView(error, () => {
-                    void this.reload();
-                  }),
-                );
+                if (current())
+                  this.content.prepend(
+                    errorView(error, () => {
+                      void this.reload();
+                    }),
+                  );
+                else {
+                  this.messages.set(
+                    run.id,
+                    'The stop request could not be confirmed. Check the recording status.',
+                  );
+                  void this.reload(undefined, true);
+                }
               });
           },
           'button danger',
@@ -755,26 +1004,40 @@ export class Workspace {
       el(
         'div',
         { class: 'run-header' },
-        el('div', { class: 'eyebrow' }, 'Recording'),
-        el('div', { class: 'run-heading' }, el('h1', {}, run.name), actions),
+        el(
+          'div',
+          { class: 'run-heading' },
+          el(
+            'div',
+            {},
+            el('p', { class: 'eyebrow' }, this.project.name),
+            el('h1', {}, run.name || run.id.slice(0, 12)),
+          ),
+          actions,
+        ),
         el(
           'div',
           { class: 'run-meta' },
-          badge(run.status, runStatusTone(run.status)),
           el('span', {}, run.runtime),
           el(
-            'span',
-            {},
-            date(new Date(run.started_at_us / 1_000).toISOString()),
+            'time',
+            { datetime: new Date(run.started_at_us / 1000).toISOString() },
+            date(new Date(run.started_at_us / 1000).toISOString()),
           ),
           el(
-            'code',
-            {},
-            source.revision?.slice(0, 8) ?? source.fingerprint.slice(0, 12),
+            'span',
+            { class: `badge ${quality.tone}`, title: quality.detail },
+            quality.label,
           ),
-          source.dirty ? badge('modified source', 'warn') : null,
+          el(
+            'span',
+            { class: `badge ${target.tone}`, title: target.detail },
+            target.label,
+          ),
         ),
-        el('p', { class: 'source-label mono' }, run.command.join(' ')),
+        quality.tone === 'warn' || quality.tone === 'bad'
+          ? el('p', { class: 'capture-notice' }, quality.detail)
+          : null,
       ),
       tabs,
     );

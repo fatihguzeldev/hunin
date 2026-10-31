@@ -9,6 +9,7 @@ import {
   resolveProjectSelection,
 } from './context.js';
 import './selection.css';
+import { themeControl } from '../design/theme';
 
 export type WorkspaceProject = {
   name: string;
@@ -25,13 +26,13 @@ function picker(catalog: ProjectCatalog, problem?: string): HTMLElement {
     el(
       'div',
       { class: 'project-heading' },
-      el('img', { src: '/hunin.svg', alt: '' }),
+      el(
+        'a',
+        { class: 'picker-wordmark', href: projectUrl(location.href).href },
+        'hunin',
+      ),
       el('h1', {}, 'Projects'),
-    ),
-    el(
-      'p',
-      { class: 'muted' },
-      'Choose a project to open its recordings, captures and analyzers.',
+      themeControl(),
     ),
   );
   if (problem)
@@ -76,7 +77,9 @@ function picker(catalog: ProjectCatalog, problem?: string): HTMLElement {
                 project.workspace_roots.join(' · '),
               )
             : undefined,
-          el('code', { class: 'muted' }, project.store_path),
+          project.workspace_roots.length
+            ? null
+            : el('code', { class: 'muted' }, project.store_path),
           project.legacy
             ? el(
                 'span',
@@ -98,9 +101,9 @@ function picker(catalog: ProjectCatalog, problem?: string): HTMLElement {
   );
   content.append(
     el(
-      'section',
-      { class: 'project-guidance', 'aria-label': 'Register a project' },
-      el('h2', {}, 'Add a project'),
+      'details',
+      { class: 'project-guidance', 'aria-label': 'Add a project' },
+      el('summary', {}, 'Add a project'),
       el(
         'p',
         { class: 'muted' },
