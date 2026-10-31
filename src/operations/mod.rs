@@ -124,7 +124,7 @@ impl Operations {
     }
     pub async fn call(&self, name: &str, mut params: Value) -> Result<Value> {
         let definition = validate_parameters(name, &mut params)?;
-        if name == "profiles.inspect"
+        if matches!(name, "profiles.inspect" | "code.inspect" | "code.plan")
             && let (Some(start), Some(end)) =
                 (params["start_us"].as_u64(), params["end_us"].as_u64())
             && start > end
@@ -211,8 +211,8 @@ impl Operations {
                     })
                     .await
             }
-            "profiles.hotspots" | "profiles.tree" | "profiles.inspect" | "timeline.query"
-            | "resources.query" => {
+            "profiles.hotspots" | "profiles.tree" | "profiles.inspect" | "code.inspect"
+            | "code.plan" | "timeline.query" | "resources.query" => {
                 let store = store.clone();
                 let run_id = id()?.to_owned();
                 let name = name.to_owned();
@@ -225,6 +225,8 @@ impl Operations {
                             },
                             "profiles.tree" => query::RecordingQuery::Tree(&params),
                             "profiles.inspect" => query::RecordingQuery::Inspect(&params),
+                            "code.inspect" => query::RecordingQuery::CodeInspect(&params),
+                            "code.plan" => query::RecordingQuery::CodePlan(&params),
                             "timeline.query" => query::RecordingQuery::Timeline(&params),
                             "resources.query" => query::RecordingQuery::Resources(&params),
                             _ => unreachable!(),

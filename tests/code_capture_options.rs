@@ -56,3 +56,20 @@ fn code_capture_policy_changes_remain_part_of_comparison_settings() {
         "ordinary existing comparison settings remain stable"
     );
 }
+
+#[tokio::test]
+async fn invalid_wasm_disassembly_scope_is_rejected_before_admission() {
+    use hunin::{operations::Operations, storage::Store};
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    let operations = Operations::new(store.clone());
+    for options in [
+        json!({"wasm_function_index":16}),
+        json!({"compiler_export":false,"wasm_function_index":0}),
+        json!({"compiler_export":true,"wasm_function_index":2147483648u64}),
+        json!({"compiler_export":true,"wasm_function_index":-1}),
+    ] {
+        assert!(operations.call("runs.start",json!({"command":["/must-not-launch"],"runtime":"node","cwd":root.path(),"capture_mode":"code-origin","code_options":options})).await.is_err());
+    }
+    assert!(store.runs(100, 0).unwrap().is_empty());
+}

@@ -3397,6 +3397,12 @@
         "status": {
           "type": "string",
           "enum": ["metadata_matches", "mismatch"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
         }
       },
       "required": [

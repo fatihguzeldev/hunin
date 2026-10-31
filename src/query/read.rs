@@ -9,6 +9,8 @@ pub enum RecordingQuery<'a> {
     Hotspots { unit: &'a str, limit: usize },
     Tree(&'a Value),
     Inspect(&'a Value),
+    CodeInspect(&'a Value),
+    CodePlan(&'a Value),
     Timeline(&'a Value),
     Resources(&'a Value),
 }
@@ -20,7 +22,10 @@ pub fn read_recording(
     limits: QueryLimits,
     checkpoint: impl FnMut() -> Result<()> + Send + 'static,
 ) -> Result<QuerySnapshot<Value>> {
-    let inspection = matches!(query, RecordingQuery::Inspect(_));
+    let inspection = matches!(
+        query,
+        RecordingQuery::Inspect(_) | RecordingQuery::CodeInspect(_) | RecordingQuery::CodePlan(_)
+    );
     let mut snapshot =
         store.with_query_snapshot(run_id, limits.read.clone(), checkpoint, |port| {
             let mut work = WorkBudget::new(limits, port.checkpointer());
@@ -46,6 +51,12 @@ pub fn read_recording(
                 }
                 RecordingQuery::Inspect(params) => {
                     super::profiles::inspect(port, params, &mut work)?
+                }
+                RecordingQuery::CodeInspect(params) => {
+                    super::code::inspect(port, params, &mut work)?
+                }
+                RecordingQuery::CodePlan(params) => {
+                    super::code_plan::plan(port, params, &mut work)?
                 }
                 RecordingQuery::Timeline(params) => super::timeline::read(port, params, &mut work)?,
                 RecordingQuery::Resources(params) => {

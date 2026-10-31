@@ -911,6 +911,8 @@ export type CodeArtifactStatus = {
   "metadata_sha256": string;
   "size": number;
   "status": "metadata_matches" | "mismatch";
+  "name"?: string;
+  "format"?: string;
 };
 
 export type CodeInspection = {
@@ -1034,6 +1036,7 @@ export type OperationInputs = {
   "function_filter"?: string;
   "sampling_interval_us"?: number;
   "max_artifact_bytes"?: number;
+  "wasm_function_index"?: number;
 };
 };
   "runs.cancel": {
@@ -1189,6 +1192,7 @@ export type OperationInputs = {
   "function_filter"?: string;
   "sampling_interval_us"?: number;
   "max_artifact_bytes"?: number;
+  "wasm_function_index"?: number;
 };
 };
   "scenarios.run": {
@@ -1635,7 +1639,7 @@ export function isCodeInspectionUnavailable(value: unknown): value is CodeInspec
 }
 
 export function isCodeArtifactStatus(value: unknown): value is CodeArtifactStatus {
-  return (isOutputObject(value) && Object.hasOwn(value, "artifact_id") && Object.hasOwn(value, "sha256") && Object.hasOwn(value, "metadata_sha256") && Object.hasOwn(value, "size") && Object.hasOwn(value, "status") && (typeof value["artifact_id"] === "string" && [...value["artifact_id"]].length >= 1) && (typeof value["sha256"] === "string" && [...value["sha256"]].length >= 1 && new RegExp("^[0-9a-f]{64}$").test(value["sha256"])) && (typeof value["metadata_sha256"] === "string" && [...value["metadata_sha256"]].length >= 1 && new RegExp("^[0-9a-f]{64}$").test(value["metadata_sha256"])) && (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0 && value["size"] <= 9007199254740991) && ((value["status"] === "metadata_matches" || value["status"] === "mismatch") && typeof value["status"] === "string") && Object.keys(value).every(key => ["artifact_id","sha256","metadata_sha256","size","status"].includes(key)));
+  return (isOutputObject(value) && Object.hasOwn(value, "artifact_id") && Object.hasOwn(value, "sha256") && Object.hasOwn(value, "metadata_sha256") && Object.hasOwn(value, "size") && Object.hasOwn(value, "status") && (typeof value["artifact_id"] === "string" && [...value["artifact_id"]].length >= 1) && (typeof value["sha256"] === "string" && [...value["sha256"]].length >= 1 && new RegExp("^[0-9a-f]{64}$").test(value["sha256"])) && (typeof value["metadata_sha256"] === "string" && [...value["metadata_sha256"]].length >= 1 && new RegExp("^[0-9a-f]{64}$").test(value["metadata_sha256"])) && (typeof value["size"] === "number" && Number.isInteger(value["size"]) && value["size"] >= 0 && value["size"] <= 9007199254740991) && ((value["status"] === "metadata_matches" || value["status"] === "mismatch") && typeof value["status"] === "string") && (!Object.hasOwn(value, "name") || (typeof value["name"] === "string")) && (!Object.hasOwn(value, "format") || (typeof value["format"] === "string")) && Object.keys(value).every(key => ["artifact_id","sha256","metadata_sha256","size","status","name","format"].includes(key)));
 }
 
 export function isCodeInspection(value: unknown): value is CodeInspection {

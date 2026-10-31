@@ -415,7 +415,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000\\r\\n]+$"
+              "pattern": "^[^\\u0000\\r\\n]+$",
+              "description": "Filter compiler exports by function name; native tick/code capture is unaffected."
             },
             "sampling_interval_us": {
               "type": "integer",
@@ -426,10 +427,31 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 536870912
+            },
+            "wasm_function_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "description": "Limit printed Wasm disassembly to this function index in every module. Requires compiler_export. Compiler graphs and native sampling remain governed by their own settings; module identity is still verified independently."
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "required": ["wasm_function_index"]
+              },
+              "then": {
+                "required": ["compiler_export"],
+                "properties": {
+                  "compiler_export": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       "required": ["command"],
@@ -2110,7 +2132,8 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 256,
-              "pattern": "^[^\\u0000\\r\\n]+$"
+              "pattern": "^[^\\u0000\\r\\n]+$",
+              "description": "Filter compiler exports by function name; native tick/code capture is unaffected."
             },
             "sampling_interval_us": {
               "type": "integer",
@@ -2121,10 +2144,31 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 536870912
+            },
+            "wasm_function_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647,
+              "description": "Limit printed Wasm disassembly to this function index in every module. Requires compiler_export. Compiler graphs and native sampling remain governed by their own settings; module identity is still verified independently."
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "required": ["wasm_function_index"]
+              },
+              "then": {
+                "required": ["compiler_export"],
+                "properties": {
+                  "compiler_export": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       "required": ["name", "command"],

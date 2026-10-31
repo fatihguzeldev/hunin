@@ -17,6 +17,8 @@ pub struct CodeOptions {
     pub compiler_export: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wasm_function_index: Option<u32>,
     pub sampling_interval_us: u32,
     pub max_artifact_bytes: u64,
 }
@@ -26,6 +28,7 @@ impl Default for CodeOptions {
         Self {
             compiler_export: false,
             function_filter: None,
+            wasm_function_index: None,
             sampling_interval_us: 1000,
             max_artifact_bytes: 64 * 1024 * 1024,
         }
@@ -34,6 +37,15 @@ impl Default for CodeOptions {
 
 impl CodeOptions {
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.wasm_function_index.is_none() || self.compiler_export,
+            "wasm_function_index requires compiler_export"
+        );
+        anyhow::ensure!(
+            self.wasm_function_index
+                .is_none_or(|index| index <= 2_147_483_647),
+            "Wasm disassembly function index must be 0..2147483647"
+        );
         anyhow::ensure!(
             (100..=1_000_000).contains(&self.sampling_interval_us),
             "code sampling interval must be 100..1000000 microseconds"

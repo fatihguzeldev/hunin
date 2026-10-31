@@ -1,3 +1,5 @@
+mod code;
+mod code_plan;
 mod comparison;
 mod profiles;
 mod read;
