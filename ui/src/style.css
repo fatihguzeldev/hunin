@@ -1,30 +1,5 @@
+@import url('./design/tokens.css');
 @import url('./workspace.css');
-
-:root {
-  color-scheme: dark;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  font-size: 14px;
-  font-synthesis: none;
-  --background: #101619;
-  --surface: #151d21;
-  --surface-raised: #1c262b;
-  --surface-hover: #233139;
-  --line: #2b383e;
-  --muted: #9eafb6;
-  --text: #e5ecef;
-  --accent: #e1b96a;
-  --accent-dim: #3c3325;
-  --good: #96c6ad;
-  --bad: #f1a5a0;
-  --blue: #99bdd4;
-  --radius: 5px;
-}
 
 * {
   box-sizing: border-box;

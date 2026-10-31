@@ -1,0 +1,98 @@
+@font-face {
+  font-family: 'Schibsted Grotesk';
+  src: url('/fonts/SchibstedGrotesk-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('/fonts/CommitMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  font-family: 'Schibsted Grotesk', sans-serif;
+  font-size: 14px;
+  font-synthesis: none;
+  --mono: 'Commit Mono', monospace;
+  --bg: #f7f7f2;
+  --background: var(--bg);
+  --surface: #fffffc;
+  --soft: #eeefe7;
+  --surface-raised: var(--soft);
+  --surface-hover: #e9ece2;
+  --text: #25312b;
+  --muted: #626f65;
+  --line: #d8ddd2;
+  --accent: #b74930;
+  --accent-ink: #9c3c26;
+  --selected: #f7eae0;
+  --accent-dim: var(--selected);
+  --good: #2e7352;
+  --bad: #b33238;
+  --warning: #8b5d17;
+  --blue: #3b6268;
+  --rail: #222d28;
+  --rail-text: #edf1e9;
+  --rail-muted: #b1beb1;
+  --chart-neutral: #819084;
+  --chart-accent: #6d8a77;
+  --chart-2: #a5b9a5;
+  --chart-3: #d1ddca;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 24px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius: var(--radius-md);
+  --control-height: 36px;
+  --row-height: 44px;
+  --sidebar-width: 236px;
+  --inspector-width: 360px;
+  --duration-fast: 120ms;
+  --shadow-dialog: 0 16px 64px #17221c24;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #181e1c;
+  --surface: #202724;
+  --soft: #29312e;
+  --surface-hover: #303b35;
+  --text: #e9ede5;
+  --muted: #abb8ad;
+  --line: #3b4740;
+  --accent: #e99c77;
+  --accent-ink: #f1b292;
+  --selected: #3b3028;
+  --good: #a6c9a6;
+  --bad: #f1a49e;
+  --warning: #e2bd7d;
+  --blue: #accbc9;
+  --rail: #141c18;
+  --rail-muted: #afbdaf;
+  --chart-neutral: #91a699;
+  --chart-accent: #a5c1ac;
+  --chart-2: #789c88;
+  --chart-3: #527760;
+  --shadow-dialog: 0 18px 72px #0008;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+  }
+}
