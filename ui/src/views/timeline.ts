@@ -1,3 +1,4 @@
+import { icon } from '../design/icons';
 import { operation } from '../api';
 import { badge, button, el, empty, errorView, field, loading } from '../dom';
 import { duration, numeric } from '../format';
@@ -48,6 +49,18 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
   let request: AbortController | undefined;
   let selectionRequest: AbortController | undefined;
   let epoch = 0;
+  const panControl = (direction: -1 | 1) => {
+    const control = button(
+      '',
+      () => pan(direction),
+      'button small icon-button',
+    );
+    const label = direction < 0 ? 'Earlier time window' : 'Later time window';
+    control.setAttribute('aria-label', label);
+    control.setAttribute('title', label);
+    control.append(icon(direction < 0 ? 'back' : 'arrow'));
+    return control;
+  };
   const body = el(
     'div',
     { class: 'stack' },
@@ -56,8 +69,8 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
       { class: 'toolbar' },
       button('Zoom in', () => zoom(0.5), 'button small'),
       button('Zoom out', () => zoom(2), 'button small'),
-      button('←', () => pan(-1), 'button small'),
-      button('→', () => pan(1), 'button small'),
+      panControl(-1),
+      panControl(1),
       button(
         'Full run',
         () => {
@@ -249,7 +262,7 @@ export async function timeline(context: ViewContext): Promise<HTMLElement> {
       rangeLabel.textContent = unmappedView
         ? 'Unmapped clock · no epoch placement'
         : data.bounds || window
-          ? `${duration((current.start_us - origin) * 1_000)} → ${duration((current.end_us - origin) * 1_000)} from run start`
+          ? `${duration((current.start_us - origin) * 1_000)}–${duration((current.end_us - origin) * 1_000)} from run start`
           : 'No aligned timestamps';
       if (!data.records.length) {
         canvas.replaceChildren(

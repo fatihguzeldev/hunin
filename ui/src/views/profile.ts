@@ -1,3 +1,4 @@
+import { icon } from '../design/icons';
 import { linkedRequest } from '../requests';
 import { operation, type TreeNode } from '../api';
 import { button, el, empty, errorView, loading } from '../dom';
@@ -211,7 +212,7 @@ export async function profile(
       ? el(
           'p',
           { class: 'mono metric-note' },
-          `Children of ${breadcrumbs.join(' → ')}`,
+          `Children of ${breadcrumbs.join(' / ')}`,
         )
       : null,
     el(
@@ -296,11 +297,7 @@ export async function profile(
     ): void {
       if ((query.value && !contains(node)) || count++ >= 2_000) return;
       const toggle = button(
-        node.children.length
-          ? expanded.has(key) || query.value
-            ? '▾'
-            : '▸'
-          : '·',
+        '',
         () => {
           if (expanded.has(key)) expanded.delete(key);
           else expanded.add(key);
@@ -310,6 +307,10 @@ export async function profile(
         },
         'tree-toggle',
       );
+      if (node.children.length)
+        toggle.append(
+          icon(expanded.has(key) || query.value ? 'down' : 'chevron-right'),
+        );
       toggle.disabled = !node.children.length;
       toggle.setAttribute(
         'aria-label',
