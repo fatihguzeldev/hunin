@@ -2,7 +2,7 @@ import { parseCommand } from '../src/command.js';
 import { parseWorkloadOptions } from '../src/workload/options.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { launchChoices } from '../src/workload/choices.js';
+import { launchChoices, launchRequest } from '../src/workload/choices.js';
 import type { Capability } from '../src/api.js';
 
 test('recording choices use backend launch routes and never promote probe executables to workload commands', () => {
@@ -118,4 +118,127 @@ test('workload recipes preserve exact output bytes and reject invalid environmen
     assert.throws(() => parseWorkloadOptions('{}', files, '0', 'exit', ''));
   assert.throws(() => parseWorkloadOptions('{}', '[]', '0', 'sha256', 'abc'));
   assert.throws(() => parseWorkloadOptions('{}', '[]', '1.5', 'exit', ''));
+});
+
+test('one discovered mode supplies the complete recording and saved-scenario capture policy', () => {
+  const runtime: Capability = {
+    runtime: 'node',
+    available: true,
+    probe_status: 'passed',
+    diagnostics: [],
+    modes: [
+      {
+        mode: 'automatic-cpu',
+        mechanism: 'CPU',
+        availability: 'ready',
+        basis: 'discovery',
+        recording_verified: false,
+        selectable: true,
+        launch_runtime: 'node',
+      },
+      {
+        mode: 'code-origin',
+        mechanism: 'code',
+        availability: 'ready',
+        basis: 'discovery',
+        recording_verified: false,
+        selectable: true,
+        launch_runtime: 'node',
+      },
+    ],
+  };
+  const [cpu, code] = launchChoices([runtime]);
+  const options = {
+    compilerExport: false,
+    filter: '',
+    interval: '',
+    budget: '',
+    wasmFunctionIndex: '',
+  };
+  assert.deepEqual(launchRequest(undefined, options), {});
+  assert.deepEqual(launchRequest(cpu, options), { runtime: 'node' });
+  assert.deepEqual(launchRequest(code, options), {
+    runtime: 'node',
+    capture_mode: 'code-origin',
+  });
+  assert.deepEqual(
+    launchRequest(code, {
+      ...options,
+      compilerExport: true,
+      wasmFunctionIndex: '16',
+      budget: '67108864',
+    }),
+    {
+      runtime: 'node',
+      capture_mode: 'code-origin',
+      code_options: {
+        compiler_export: true,
+        wasm_function_index: 16,
+        max_artifact_bytes: 67108864,
+      },
+    },
+  );
+});
+
+test('Go and Python launch aliases retain their existing routes and ignore inactive compiler fields', () => {
+  for (const [runtime, mode, route] of [
+    ['go', 'go-trace', 'go-trace'],
+    ['pypy', 'python-cpu', 'pypy'],
+  ]) {
+    const [choice] = launchChoices([
+      {
+        runtime,
+        available: true,
+        probe_status: 'passed',
+        diagnostics: [],
+        modes: [
+          {
+            mode,
+            mechanism: 'existing',
+            availability: 'ready',
+            basis: 'discovery',
+            recording_verified: false,
+            selectable: true,
+            launch_runtime: route,
+          },
+        ],
+      },
+    ]);
+    assert.deepEqual(
+      launchRequest(choice, {
+        compilerExport: true,
+        filter: 'stale',
+        interval: 'invalid',
+        budget: 'invalid',
+        wasmFunctionIndex: 'invalid',
+      }),
+      { runtime: route },
+    );
+  }
+  const [blocked] = launchChoices([
+    {
+      runtime: 'node',
+      available: false,
+      probe_status: 'missing_tool',
+      diagnostics: [],
+      modes: [
+        {
+          mode: 'code-origin',
+          mechanism: 'code',
+          availability: 'missing_tool',
+          basis: 'discovery',
+          recording_verified: false,
+          selectable: false,
+        },
+      ],
+    },
+  ]);
+  assert.throws(() =>
+    launchRequest(blocked, {
+      compilerExport: false,
+      filter: '',
+      interval: '',
+      budget: '',
+    }),
+  );
 });

@@ -1,9 +1,12 @@
 import type { Capability } from '../api';
+import type { OperationInputs } from '../operations.generated.js';
+import { codeCapture, type CodeCaptureValues } from '../code/capture.js';
 
 export type LaunchChoice = {
   value: string;
   label: string;
   launchRuntime?: string;
+  captureMode?: 'code-origin';
   commandRequirement?: string;
   defaultExecutable?: string | null;
   availability: string;
@@ -32,6 +35,8 @@ export function launchChoices(runtimes: Capability[]): LaunchChoice[] {
         mode.selectable === true && mode.launch_runtime
           ? mode.launch_runtime
           : undefined,
+      captureMode:
+        mode.mode === 'code-origin' ? ('code-origin' as const) : undefined,
       commandRequirement: mode.command_requirement,
       defaultExecutable: mode.default_executable,
       availability: mode.availability,
@@ -44,4 +49,22 @@ export function launchChoices(runtimes: Capability[]): LaunchChoice[] {
             : undefined,
     }));
   });
+}
+
+/** The selected discovered route owns both runtime and any explicit capture policy. */
+export function launchRequest(
+  choice: LaunchChoice | undefined,
+  values: CodeCaptureValues,
+): Pick<
+  OperationInputs['runs.start'],
+  'runtime' | 'capture_mode' | 'code_options'
+> {
+  if (choice && !choice.launchRuntime)
+    throw new Error(
+      'Choose a selectable collection mode or automatic detection.',
+    );
+  return {
+    ...(choice?.launchRuntime ? { runtime: choice.launchRuntime } : {}),
+    ...codeCapture(choice?.captureMode ?? 'automatic-cpu', values),
+  };
 }

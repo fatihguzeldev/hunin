@@ -1,6 +1,7 @@
 import { operation } from '../api';
 import { el } from '../dom';
-import { launchChoices, type LaunchChoice } from './choices';
+import { launchChoices, launchRequest, type LaunchChoice } from './choices';
+import { captureFields } from '../code/capture-fields';
 
 /** Share one backend-owned mode picker without rewriting an explicit workload command. */
 export function collectionMode(
@@ -10,6 +11,7 @@ export function collectionMode(
   const runtime = el('select');
   runtime.append(el('option', { value: '' }, 'Detect automatically'));
   const choices = new Map<string, LaunchChoice>();
+  const capture = captureFields();
   const launchInfo = el(
     'p',
     { class: 'metric-note', role: 'status' },
@@ -24,6 +26,9 @@ export function collectionMode(
   );
   function describeChoice(): void {
     const choice = choices.get(runtime.value);
+    capture.setActive(
+      choice?.captureMode === 'code-origin' && Boolean(choice.launchRuntime),
+    );
     launchInfo.setAttribute('role', 'status');
     launchInfo.textContent = choice
       ? choice.commandRequirement || 'Use an explicit target command.'
@@ -61,14 +66,20 @@ export function collectionMode(
     });
   return {
     select: runtime,
-    description: el('div', { class: 'stack' }, launchInfo, details),
-    value: (): string | undefined => {
+    description: el(
+      'div',
+      { class: 'stack' },
+      launchInfo,
+      details,
+      capture.element,
+    ),
+    value: () => {
       const choice = choices.get(runtime.value);
-      if (runtime.value && !choice?.launchRuntime)
+      if (runtime.value && !choice)
         throw new Error(
           'Choose a selectable collection mode or automatic detection.',
         );
-      return choice?.launchRuntime;
+      return launchRequest(choice, capture.value());
     },
   };
 }

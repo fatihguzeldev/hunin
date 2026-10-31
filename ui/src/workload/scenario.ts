@@ -29,6 +29,8 @@ export function scenarioMetadata(value: unknown) {
     command: strings(row.command),
     cwd: text(row.cwd),
     runtime: text(row.runtime),
+    capture_mode: text(row.capture_mode),
+    code_options: row.code_options,
     timeout_seconds: number(row.timeout_seconds),
     expected_exit_code: number(row.expected_exit_code),
     env: row.env,

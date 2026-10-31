@@ -90,7 +90,7 @@ export function recordDialog(actions: {
       if (!Number.isFinite(seconds) || seconds < 1 || seconds > 86400)
         throw new Error('Timeout must be between 1 and 86400 seconds.');
       const options = workload.value();
-      const runtime = mode.value();
+      const launch = mode.value();
       submit.disabled = true;
       submit.textContent = 'Starting…';
       form.setAttribute('aria-busy', 'true');
@@ -104,7 +104,7 @@ export function recordDialog(actions: {
         name: name.value || undefined,
         command: args,
         cwd: cwd.value,
-        runtime,
+        ...launch,
         timeout_seconds: seconds,
         ...options,
       });

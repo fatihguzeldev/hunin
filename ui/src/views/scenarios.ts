@@ -123,6 +123,9 @@ export async function scenarios(
             { class: 'toolbar' },
             el('h2', {}, scenario.name),
             badge(scenario.runtime || 'auto'),
+            scenario.capture_mode === 'code-origin'
+              ? badge('Code origin')
+              : null,
             el('span', { class: 'spacer' }),
             run,
           ),
@@ -141,12 +144,14 @@ export async function scenarios(
           el(
             'details',
             {},
-            el('summary', {}, 'Workload input and output expectations'),
+            el('summary', {}, 'Recording recipe'),
             el(
               'pre',
               {},
               JSON.stringify(
                 {
+                  capture_mode: scenario.capture_mode,
+                  code_options: scenario.code_options,
                   env: scenario.env ?? {},
                   input_files: scenario.input_files ?? [],
                   expected_stdout: scenario.expected_stdout,
@@ -178,12 +183,13 @@ export async function scenarios(
     try {
       const args = parseCommand(command.value);
       const options = workload.value();
+      const launch = mode.value();
       submit.disabled = true;
       await operation('scenarios.save', {
         name: name.value,
         command: args,
         cwd: cwd.value,
-        runtime: mode.value(),
+        ...launch,
         timeout_seconds: Number(timeout.value),
         ...options,
       });
