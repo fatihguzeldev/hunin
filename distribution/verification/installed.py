@@ -132,6 +132,7 @@ def verify(archive, output):
                     "--data-dir",
                     data,
                     "run",
+                    "--full",
                     "--name",
                     "installed bundle control",
                     "--runtime",

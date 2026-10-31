@@ -127,6 +127,7 @@ int main(void) {
                     "--data-dir",
                     data,
                     "run",
+                    "--full",
                     "--runtime",
                     "native",
                     "--cwd",

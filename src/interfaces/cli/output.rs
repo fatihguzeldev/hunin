@@ -21,6 +21,7 @@ pub(super) fn recording(
         "fingerprint",
         "revision",
         "dirty",
+        "runtime_version",
         "build_source_verified",
         "source_snapshot_complete",
         "source_snapshot_scope",
@@ -31,6 +32,9 @@ pub(super) fn recording(
         "sdk_ingestion",
         "resource_observation",
         "target_outcome",
+        "collector_outcome",
+        "native_session_cleanup",
+        "supervised_pid",
         "supervised_elapsed_us",
         "supervised_execution_scope",
         "preparation",
@@ -62,4 +66,29 @@ pub(super) fn recording(
     ]);
     value["next"] = json!({"inspect":inspect,"hotspots":hotspots,"full_output":"Use run --full, or execute inspect for complete recorded provenance. Generic call and all shared operation responses remain complete."});
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_failure_keeps_collector_failure_distinct_from_unknown_target_outcome() {
+        let value = json!({"run":{"id":"failed-native","status":"failed","source":{
+            "target_outcome":{"state":"unknown"},
+            "collector_outcome":{"exit_code":73},
+            "native_session_cleanup":{"acknowledged":false},
+            "collection_status":"failed",
+            "supervised_pid":42,
+            "collector_settings":{"command":["collector"]}
+        }}});
+        let compact = recording(value, None, &[], false);
+        let source = &compact["run"]["source"];
+        assert_eq!(source["target_outcome"]["state"], "unknown");
+        assert_eq!(source["collector_outcome"]["exit_code"], 73);
+        assert_eq!(source["native_session_cleanup"]["acknowledged"], false);
+        assert_eq!(source["collection_status"], "failed");
+        assert_eq!(source["supervised_pid"], 42);
+        assert!(source.get("collector_settings").is_none());
+    }
 }
