@@ -48,6 +48,10 @@ pub(super) enum Command {
         command: ProjectCommand,
     },
     Run {
+        /// Print complete operation JSON, including full source/provenance lists.
+        /// The default is a compact recording summary with inspection commands.
+        #[arg(long)]
+        full: bool,
         #[arg(long)]
         name: Option<String>,
         #[arg(long, value_parser = runtime_names(), ignore_case = true)]

@@ -3,6 +3,7 @@ mod arguments;
 mod cancellation;
 mod count;
 mod dispatch;
+mod output;
 
 use anyhow::Result;
 use arguments::{Cli, Command};

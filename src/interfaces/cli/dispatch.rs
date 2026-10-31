@@ -82,10 +82,21 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         };
         return interfaces::http::serve_projects(sessions, bind, ui_path(ui_dir)?).await;
     }
+    let mut selected_project = None;
+    let mut selector = Vec::new();
     let store = if let Some(root) = cli.data_dir {
-        Store::open(&root)?
+        let store = Store::open(&root)?;
+        selector.extend(["--data-dir".into(), store.root().display().to_string()]);
+        store
     } else {
+        let custom_registry = cli.registry_dir.is_some();
         let registry = ProjectRegistry::open(&cli.registry_dir.unwrap_or_else(default_root))?;
+        if custom_registry {
+            selector.extend([
+                "--registry-dir".into(),
+                registry.root().display().to_string(),
+            ]);
+        }
         let project = if let Some(selector) = cli.project {
             registry.get(&selector)?
         } else {
@@ -95,6 +106,8 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             };
             registry.resolve_or_create(&cwd)?
         };
+        selector.extend(["--project".into(), project.id.clone()]);
+        selected_project = Some(project.clone());
         registry.open_store(&project)?
     };
     let operations = if machine_errors {
@@ -109,6 +122,7 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         }
         Command::Capabilities => unreachable!("host discovery returns before project selection"),
         Command::Run {
+            full,
             name,
             runtime,
             cwd,
@@ -137,6 +151,8 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
             let id = start["run"]["id"].as_str().unwrap();
             let run = tokio::select! {run=operations.engine.wait(id)=>run?,_=tokio::signal::ctrl_c()=>{operations.engine.cancel(id).await?;operations.engine.wait(id).await?}};
             let result = operations.call("runs.get", json!({"run_id":id})).await?;
+            let result =
+                super::output::recording(result, selected_project.as_ref(), &selector, full);
             println!("{}", serde_json::to_string_pretty(&result)?);
             if run.status != RunStatus::Completed {
                 std::process::exit(1);
