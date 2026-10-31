@@ -36,7 +36,12 @@ pub(super) struct Cli {
 pub(super) enum Command {
     /// Describe compiled contracts without opening a recording store.
     BuildInfo,
+    /// Check runtime availability and prerequisites without creating a project.
     Capabilities,
+    /// Discover operation names; pass a name for its complete public schema.
+    Catalog {
+        operation: Option<String>,
+    },
     /// Manage project discovery without opening every recording database.
     Projects {
         #[command(subcommand)]
@@ -45,7 +50,7 @@ pub(super) enum Command {
     Run {
         #[arg(long)]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = runtime_names(), ignore_case = true)]
         runtime: Option<String>,
         #[arg(long)]
         cwd: Option<PathBuf>,
@@ -81,6 +86,8 @@ pub(super) enum Command {
         #[arg(long)]
         run_id: Option<String>,
     },
+    /// Invoke a public operation. Use `hunin catalog` to list names or
+    /// `hunin catalog <operation>` for its parameters and contract.
     Call {
         /// Emit one shared operation error JSON object to stderr on failure.
         #[arg(long)]
@@ -96,6 +103,16 @@ pub(super) enum Command {
         #[arg(long, env = "HUNIN_UI_DIR")]
         ui_dir: Option<PathBuf>,
     },
+}
+
+fn runtime_names() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(
+        crate::collection::registered_runtimes()
+            .iter()
+            .flat_map(|runtime| std::iter::once(runtime.id).chain(runtime.aliases.iter().copied()))
+            .chain(std::iter::once("none"))
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[derive(Subcommand)]

@@ -16,6 +16,22 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
         );
         return Ok(());
     }
+    if let Command::Catalog { operation } = &cli.command {
+        let catalog = crate::operations::catalog();
+        let value = if let Some(name) = operation {
+            catalog
+                .iter()
+                .find(|entry| entry["name"] == *name)
+                .with_context(|| {
+                    format!("unknown operation {name}; use hunin catalog to list operations")
+                })?
+                .clone()
+        } else {
+            json!({"operations":catalog.iter().map(|entry| json!({"name":entry["name"],"description":entry["description"]})).collect::<Vec<_>>(),"schema_command":"hunin catalog <operation>","runtime_command":"hunin capabilities"})
+        };
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
     let host_query = match &cli.command {
         Command::Capabilities => Some(json!({})),
         Command::Call {
@@ -88,7 +104,7 @@ pub(super) async fn run_cli(cli: Cli, machine_errors: bool) -> Result<()> {
     };
     let value = match cli.command {
         Command::BuildInfo => unreachable!("build-info returns before opening a store"),
-        Command::Projects { .. } | Command::Ui { .. } => {
+        Command::Projects { .. } | Command::Ui { .. } | Command::Catalog { .. } => {
             unreachable!("project management and UI return before selecting an operation store")
         }
         Command::Capabilities => unreachable!("host discovery returns before project selection"),
