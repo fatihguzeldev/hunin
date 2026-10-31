@@ -1516,7 +1516,8 @@
             "capacity_exceeded",
             "request_abandoned",
             "request_deadline_exceeded",
-            "work_budget_exceeded"
+            "work_budget_exceeded",
+            "source_outside_project"
           ]
         },
         "operation": {

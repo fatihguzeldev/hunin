@@ -1408,7 +1408,8 @@
           "work_budget_exceeded",
           "capacity_exceeded",
           "request_abandoned",
-          "request_deadline_exceeded"
+          "request_deadline_exceeded",
+          "source_outside_project"
         ],
         "fallback": "operation_failed",
         "dispatch_unknown": "unknown_operation",

@@ -6,6 +6,17 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf};
 
+#[derive(Debug)]
+pub(crate) struct OutsideProject;
+
+impl std::fmt::Display for OutsideProject {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("source path is outside the measured project")
+    }
+}
+
+impl std::error::Error for OutsideProject {}
+
 pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
     let run = store.run(params["run_id"].as_str().unwrap())?;
     let requested_uri = params["path"].as_str().unwrap();
@@ -60,9 +71,7 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
     };
     let joined = root.join(requested);
     let path = retained_path(&joined);
-    let relative = path
-        .strip_prefix(&root)
-        .context("source path is outside the measured project")?;
+    let relative = path.strip_prefix(&root).map_err(|_| OutsideProject)?;
     let relative = relative.to_string_lossy().replace('\\', "/");
     let retained = run.source["retained_sources"]
         .as_array()
@@ -82,10 +91,9 @@ pub(crate) fn read(store: &Store, params: &Value) -> Result<Value> {
         )
     } else {
         let path = path.canonicalize()?;
-        anyhow::ensure!(
-            path.starts_with(root.canonicalize()?),
-            "source path is outside the measured project"
-        );
+        if !path.starts_with(root.canonicalize()?) {
+            return Err(OutsideProject.into());
+        }
         if fs::metadata(&path)?.len() > 2 * 1024 * 1024 {
             bail!("source file exceeds 2 MiB view limit");
         }

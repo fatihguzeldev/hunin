@@ -134,10 +134,34 @@ async fn source_urls_are_decoded_but_cannot_escape_the_recorded_project() {
     assert_eq!(response["identity_verified"], false);
     let outside = data.path().join("outside.js");
     std::fs::write(&outside, "outside").unwrap();
-    assert!(
-        ops.call("source.read", json!({"run_id":"r","path":outside}))
-            .await
-            .is_err()
+    let error = ops
+        .call("source.read", json!({"run_id":"r","path":outside}))
+        .await
+        .unwrap_err();
+    let failure = hunin::operations::describe_failure("source.read", &error);
+    assert_eq!(failure["code"], "source_outside_project");
+    assert_eq!(failure["operation"], "source.read");
+    assert_eq!(
+        failure["message"],
+        "source path is outside the measured project"
+    );
+    let schema: Value =
+        serde_json::from_str(include_str!("../protocol/response.schema.json")).unwrap();
+    jsonschema::validator_for(&schema["$defs"]["OperationFailure"])
+        .unwrap()
+        .validate(&failure)
+        .unwrap();
+    let mcp = hunin::interfaces::mcp::handle(
+        &ops,
+        &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source.read","arguments":{"run_id":"r","path":outside}}}),
+        true,
+    )
+    .await;
+    assert_eq!(mcp["result"]["_meta"]["hunin/operation-error"], failure);
+    let lookalike = anyhow::anyhow!("source path is outside the measured project");
+    assert_eq!(
+        hunin::operations::describe_failure("source.read", &lookalike)["code"],
+        "operation_failed"
     );
 }
 

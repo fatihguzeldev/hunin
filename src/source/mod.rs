@@ -4,5 +4,5 @@ mod paths;
 mod reading;
 mod retention;
 
-pub(crate) use reading::read;
+pub(crate) use reading::{OutsideProject, read};
 pub(crate) use retention::retain;

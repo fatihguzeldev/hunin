@@ -86,6 +86,7 @@ pub(crate) fn operation_failure(operation: &str, error: &anyhow::Error) -> Value
         Some(Kind::Conflict) => "conflict",
         Some(Kind::ReadAbandoned) => "request_abandoned",
         Some(Kind::ReadDeadline) => "request_deadline_exceeded",
+        None if error.is::<crate::source::OutsideProject>() => "source_outside_project",
         None if capacity.is_some() => "capacity_exceeded",
         None if error.is::<crate::storage::ActiveAnalysisRemoval>() => "conflict",
         None if budget.is_some() => "work_budget_exceeded",
@@ -115,6 +116,7 @@ mod tests {
             anyhow::Error::new(crate::model::CapacityExceeded::new("test_family", 2)),
             anyhow::Error::new(Failure::read_abandoned()),
             anyhow::Error::new(Failure::read_deadline()),
+            anyhow::Error::new(crate::source::OutsideProject),
             anyhow::Error::new(super::super::responses::BudgetExceeded {
                 maximum: 1,
                 observed: 2,
