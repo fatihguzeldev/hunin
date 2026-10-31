@@ -216,6 +216,76 @@ pub(super) fn validate(
                         );
                     }
                 }
+                CodeRecord::FrameMapping(mapping) => {
+                    let sample = lookup(
+                        record["from"]
+                            .as_str()
+                            .context("frame mapping from missing")?,
+                    )?;
+                    ensure!(
+                        sample["kind"] == "sample",
+                        "code frame mapping must originate at a sample"
+                    );
+                    let frame = sample["stack"]
+                        .as_array()
+                        .and_then(|frames| frames.get(mapping.frame_index))
+                        .context("code frame mapping references a missing sampled frame")?;
+                    let target = record["to"].as_str().context("frame mapping to missing")?;
+                    let (owner, endpoint) = instance(target)?;
+                    let time = sample["timestamp_us"]
+                        .as_u64()
+                        .context("sample timestamp missing")?;
+                    if endpoint.instance_kind == InstanceKind::Runtime {
+                        ensure!(
+                            owner["pid"] == sample["pid"],
+                            "frame mapping runtime belongs to another process"
+                        );
+                        ensure!(
+                            endpoint
+                                .validity
+                                .as_ref()
+                                .and_then(|validity| validity.at_in(time, &sample["attributes"]))
+                                == Some(true),
+                            "frame mapping runtime lifetime must contain the sample in a comparable clock"
+                        );
+                    }
+                    if let Some(validity) = &mapping.validity {
+                        ensure!(
+                            validity.at_in(time, &sample["attributes"]) == Some(true),
+                            "frame mapping validity must contain the sample in a comparable clock"
+                        );
+                    }
+                    if let Some(offset) = &mapping.code_offset {
+                        ensure!(
+                            endpoint
+                                .range
+                                .as_ref()
+                                .context("frame mapping offset needs an instance range")?
+                                .contains(code::hex(offset)?)?,
+                            "frame mapping offset is outside its code instance"
+                        );
+                    }
+                    if let Some(inline) = frame["code_instance_id"].as_str() {
+                        ensure!(
+                            inline == target,
+                            "frame mapping conflicts with the retained inline code instance"
+                        );
+                    }
+                    if let (Some(inline), Some(offset)) =
+                        (frame["code_offset"].as_str(), &mapping.code_offset)
+                    {
+                        ensure!(
+                            inline == offset,
+                            "frame mapping conflicts with the retained inline code offset"
+                        );
+                    }
+                    if mapping.proof.verification != code::Verification::Declared {
+                        ensure!(
+                            !mapping.proof.artifact_refs.is_empty(),
+                            "identity/semantic checked frame mapping claims need retained artifact proof"
+                        );
+                    }
+                }
                 CodeRecord::Unavailable(unavailable) => {
                     let anchor = lookup(&unavailable.anchor.observation_id)?;
                     ensure!(anchor["kind"]=="sample" && anchor["stack"].as_array().is_some_and(|frames|unavailable.anchor.frame_index<frames.len()),"code unavailability must anchor an existing sampled frame");

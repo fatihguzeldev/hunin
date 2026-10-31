@@ -273,6 +273,58 @@ pub(crate) struct MappingProof {
     #[serde(default)]
     pub semantic_evidence: Vec<String>,
 }
+impl MappingProof {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.method.is_empty(),
+            "code mapping proof method is empty"
+        );
+        for reference in &self.artifact_refs {
+            reference.validate()?;
+        }
+        if self.verification == Verification::SemanticChecked {
+            ensure!(
+                self.validator.as_ref().is_some_and(|v| !v.is_empty())
+                    && !self.semantic_evidence.is_empty(),
+                "semantic mapping claims need named validator evidence"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A derived association leaves the retained sampled frame unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodeFrameMapping {
+    pub schema_version: u32,
+    pub frame_index: usize,
+    pub code_offset: Option<String>,
+    pub code_address_basis: Option<String>,
+    pub validity: Option<CodeValidity>,
+    pub proof: MappingProof,
+}
+impl CodeFrameMapping {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == 1,
+            "unsupported code frame mapping schema"
+        );
+        if let Some(offset) = &self.code_offset {
+            hex(offset)?;
+        }
+        ensure!(
+            self.code_address_basis
+                .as_ref()
+                .is_none_or(|basis| !basis.trim().is_empty()),
+            "code frame mapping address basis is empty"
+        );
+        if let Some(validity) = &self.validity {
+            validity.validate()?;
+        }
+        self.proof.validate()
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CodeMapping {
@@ -291,21 +343,7 @@ impl CodeMapping {
         if let Some(validity) = &self.validity {
             validity.validate()?;
         }
-        ensure!(
-            !self.proof.method.is_empty(),
-            "code mapping proof method is empty"
-        );
-        for reference in &self.proof.artifact_refs {
-            reference.validate()?;
-        }
-        if self.proof.verification == Verification::SemanticChecked {
-            ensure!(
-                self.proof.validator.as_ref().is_some_and(|v| !v.is_empty())
-                    && !self.proof.semantic_evidence.is_empty(),
-                "semantic mapping claims need named validator evidence"
-            );
-        }
-        Ok(())
+        self.proof.validate()
     }
 }
 
@@ -334,6 +372,7 @@ pub(crate) struct CodeUnavailable {
 pub(crate) enum CodeRecord {
     Instance(CodeInstance),
     Mapping(CodeMapping),
+    FrameMapping(CodeFrameMapping),
     Unavailable(CodeUnavailable),
 }
 impl CodeRecord {
@@ -341,7 +380,15 @@ impl CodeRecord {
         match self {
             Self::Instance(instance) => instance.artifact.iter().collect(),
             Self::Mapping(mapping) => mapping.proof.artifact_refs.iter().collect(),
+            Self::FrameMapping(mapping) => mapping.proof.artifact_refs.iter().collect(),
             Self::Unavailable(_) => vec![],
+        }
+    }
+    pub fn semantic_evidence(&self) -> &[String] {
+        match self {
+            Self::Mapping(mapping) => &mapping.proof.semantic_evidence,
+            Self::FrameMapping(mapping) => &mapping.proof.semantic_evidence,
+            _ => &[],
         }
     }
 }
@@ -399,6 +446,17 @@ pub(crate) fn parse_record(record: &Value) -> Result<Option<CodeRecord>> {
                 .context("invalid code mapping")?;
             mapping.validate()?;
             Ok(Some(CodeRecord::Mapping(mapping)))
+        }
+        (_, Some("code_frame_maps_to")) => {
+            ensure!(
+                record["kind"] == "relation",
+                "code frame mapping must be a relation"
+            );
+            let mapping: CodeFrameMapping =
+                serde_json::from_value(attributes["code_frame_mapping"].clone())
+                    .context("invalid code frame mapping")?;
+            mapping.validate()?;
+            Ok(Some(CodeRecord::FrameMapping(mapping)))
         }
         (Some("code.mapping_unavailable"), _) => {
             ensure!(

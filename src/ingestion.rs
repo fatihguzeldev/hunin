@@ -118,7 +118,11 @@ pub(crate) fn links(records: &[Value]) -> Vec<ObservationLinks> {
                         .filter_map(|frame| frame["code_instance_id"].as_str()),
                 )
                 .chain(
-                    (record["relation"] == "code_maps_to").then_some(&record["attributes"]["code_mapping"]["proof"]["semantic_evidence"])
+                    match record["relation"].as_str() {
+                        Some("code_maps_to") => Some(&record["attributes"]["code_mapping"]["proof"]["semantic_evidence"]),
+                        Some("code_frame_maps_to") => Some(&record["attributes"]["code_frame_mapping"]["proof"]["semantic_evidence"]),
+                        _ => None,
+                    }
                         .into_iter().flat_map(|value|value.as_array()).flatten()
                         .filter_map(Value::as_str),
                 )

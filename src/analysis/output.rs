@@ -79,13 +79,11 @@ pub(super) fn validate(
                     );
                 }
             }
-            if let crate::model::code::CodeRecord::Mapping(mapping) = code {
-                for reference in &mapping.proof.semantic_evidence {
-                    anyhow::ensure!(
-                        input.record_ids.contains(reference),
-                        "semantic mapping evidence must reference the selected analyzer input"
-                    );
-                }
+            for reference in code.semantic_evidence() {
+                anyhow::ensure!(
+                    input.record_ids.contains(reference),
+                    "semantic mapping evidence must reference the selected analyzer input"
+                );
             }
         }
         if record.get("attributes").is_none() {
