@@ -17,6 +17,9 @@ pub(super) fn capture_inputs(
     digest.update(format.as_bytes());
     digest.update([0]);
     snapshot.capture_raw(path, &mut digest)?;
+    if kind == ProfileFormat::Firefox {
+        digest.update(b"native-code-evidence-v1\0");
+    }
     if kind == ProfileFormat::V8 {
         digest.update(
             path.file_name()
