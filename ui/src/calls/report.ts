@@ -4,7 +4,7 @@ import { badge, button, el, empty, loading } from '../dom';
 type CountReport = OperationOutputs['calls.query'];
 
 function recordingLink(id: string, text: string, href: string): HTMLElement {
-  return el('a', { href, class: 'mono' }, `${text}: ${id}`);
+  return el('a', { href, title: id, 'aria-label': `${text}: ${id}` }, text);
 }
 export function countReport(
   data: CountReport,
@@ -48,18 +48,38 @@ export function countReport(
       'p',
       { class: 'metric-note' },
       data.parent_run_id
-        ? 'Window: this separate counting execution. These counts were not collected during the original sampled execution.'
+        ? 'Counts come from a separate execution, not the original sampled recording.'
         : data.status === 'not_collected'
-          ? 'A new counting execution is required; sampled stack weights do not establish function invocation counts.'
-          : 'Window: this counting recording describes its own execution.',
+          ? 'Counting requires a new execution. Stack samples do not measure call counts.'
+          : 'Counts describe this recording’s execution.',
     ),
     el(
-      'p',
+      'details',
       {},
-      `Method: ${data.method ?? 'Not collected'} · requested ${data.requested_scope} · collection ${data.collection_scope.replaceAll('_', ' ')}`,
+      el('summary', {}, 'Collection method'),
+      el(
+        'div',
+        { class: 'stack' },
+        el('p', {}, data.method ?? 'Method not recorded'),
+        el(
+          'p',
+          {},
+          `Requested: ${data.requested_scope === 'all' ? 'all functions' : 'selected functions'}. Collection: ${data.collection_scope.replaceAll('_', ' ')}.`,
+        ),
+        ...data.limitations.map((text) =>
+          el('p', { class: 'metric-note' }, text),
+        ),
+        el('p', { class: 'mono' }, `Counting recording ${data.run_id}`),
+        data.parent_run_id
+          ? el(
+              'p',
+              { class: 'mono' },
+              `Original recording ${data.parent_run_id}`,
+            )
+          : null,
+      ),
     ),
     ...data.diagnostics.map((text) => el('p', { class: 'notice' }, text)),
-    ...data.limitations.map((text) => el('p', { class: 'metric-note' }, text)),
   );
   if (data.status === 'running') {
     const cancel = button('Cancel counting run', () => {
@@ -108,12 +128,14 @@ export function countReport(
                   'code_id' in row.function &&
                     typeof row.function.code_id === 'string'
                     ? el(
-                        'small',
-                        {
-                          class: 'source-label mono',
-                          title: 'Code instance identity',
-                        },
-                        row.function.code_id,
+                        'details',
+                        {},
+                        el(
+                          'summary',
+                          { class: 'source-label' },
+                          'Code identity',
+                        ),
+                        el('code', {}, row.function.code_id),
                       )
                     : null,
                 ),

@@ -171,10 +171,26 @@ export function countForm(
       el(
         'p',
         { class: 'metric-note' },
-        `Requested: ${plan.requested_scope}. Collection: ${plan.collection_scope.replaceAll('_', ' ')}.${plan.requires_rebuild ? ' A rebuild is required.' : ''}`,
+        plan.requires_rebuild
+          ? 'A separate counting build is required.'
+          : 'Uses a separate counting execution.',
       ),
-      ...plan.limitations.map((text) =>
-        el('p', { class: 'metric-note' }, text),
+      el(
+        'details',
+        {},
+        el('summary', {}, 'Method scope'),
+        el(
+          'div',
+          { class: 'stack' },
+          el(
+            'p',
+            {},
+            `Requested: ${plan.requested_scope}. Collection: ${plan.collection_scope.replaceAll('_', ' ')}.`,
+          ),
+          ...plan.limitations.map((text) =>
+            el('p', { class: 'metric-note' }, text),
+          ),
+        ),
       ),
     );
   }
