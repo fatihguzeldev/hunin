@@ -1,5 +1,8 @@
 //! Retain only bounded, identity-matching source bytes before target launch.
-use crate::{model::runs::Run, storage::Store};
+use crate::{
+    model::runs::Run,
+    storage::{SourceArtifactBatch, Store},
+};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -53,11 +56,11 @@ fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()
     let mut skipped = 0;
     let mut bytes = 0;
     let mut reads = Reads::default();
+    let mut artifacts = store.source_artifact_batch(&run.id)?;
     for (relative, expected) in run.source["source_files"].as_object().into_iter().flatten() {
         let path = root.join(relative);
         let reason = match retain_file(
-            store,
-            &run.id,
+            &mut artifacts,
             root,
             &path,
             expected.as_str(),
@@ -84,6 +87,9 @@ fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()
             Skip::IdentityChanged => reads.skips.identity_changed += 1,
         }
     }
+    let publication_started = Instant::now();
+    artifacts.publish()?;
+    reads.artifact_publication_us += publication_started.elapsed().as_micros() as u64;
     run.source["retained_sources"] = json!(snapshots);
     run.source["source_retention"] = json!({"bytes":bytes,"skipped_files":skipped,"scope":"pre-launch UTF-8 project files, at most 2 MiB per file and 32 MiB per recording","build_mapping_verified":false,
         "timings_us":{"total":started.elapsed().as_micros() as u64,"artifact_publication":reads.artifact_publication_us},
@@ -102,8 +108,7 @@ enum Skip {
 }
 
 fn retain_file(
-    store: &Store,
-    run_id: &str,
+    artifacts: &mut SourceArtifactBatch,
     root: &Path,
     path: &Path,
     expected: Option<&str>,
@@ -164,7 +169,7 @@ fn retain_file(
     // copy changed/unbounded content under a different identity.
     let name = canonical.file_name().unwrap().to_string_lossy();
     let started = Instant::now();
-    let artifact = store.add_artifact_bytes(run_id, &name, "source-snapshot", &content);
+    let artifact = artifacts.stage(&name, &content);
     reads.artifact_publication_us += started.elapsed().as_micros() as u64;
     Ok(Ok(artifact?))
 }

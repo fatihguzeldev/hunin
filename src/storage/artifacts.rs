@@ -9,6 +9,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod source;
+pub(crate) use source::SourceArtifactBatch;
+
 #[derive(Debug)]
 pub(crate) struct ArtifactByteLimit {
     pub maximum: u64,
@@ -224,17 +227,7 @@ impl Store {
         } else if !same_artifact_contents(&pending.path, &dest, checkpoint)? {
             bail!("artifact identity mismatch");
         }
-        let reference_id = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&(&pending.sha256, &name, format))?)
-        );
-        let artifact = Artifact {
-            id: reference_id,
-            name: name.to_owned(),
-            size: pending.size,
-            sha256: pending.sha256.clone(),
-            format: format.into(),
-        };
+        let artifact = artifact_reference(name, format, &pending)?;
         checkpoint()?;
         tx.execute(
             "INSERT OR IGNORE INTO artifacts(run_id,id,metadata,sha256) VALUES(?1,?2,?3,?4)",
@@ -309,6 +302,19 @@ impl Store {
         );
         Ok(artifact)
     }
+}
+
+fn artifact_reference(name: &str, format: &str, pending: &PendingArtifact) -> Result<Artifact> {
+    Ok(Artifact {
+        id: format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(&pending.sha256, &name, format))?)
+        ),
+        name: name.to_owned(),
+        size: pending.size,
+        sha256: pending.sha256.clone(),
+        format: format.into(),
+    })
 }
 
 struct PendingArtifact {
