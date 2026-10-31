@@ -8,6 +8,7 @@ use std::{
     fs,
     io::{self, Read},
     path::Path,
+    time::Instant,
 };
 
 #[derive(Clone, Copy, Serialize)]
@@ -37,6 +38,8 @@ struct Skips {
 struct Reads {
     bytes: u64,
     skips: Skips,
+    #[serde(skip)]
+    artifact_publication_us: u64,
 }
 
 pub(crate) fn retain(store: &Store, run: &mut Run) -> Result<()> {
@@ -44,6 +47,7 @@ pub(crate) fn retain(store: &Store, run: &mut Run) -> Result<()> {
 }
 
 fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()> {
+    let started = Instant::now();
     let root = Path::new(&run.cwd);
     let mut snapshots = Vec::new();
     let mut skipped = 0;
@@ -82,6 +86,7 @@ fn retain_with_limits(store: &Store, run: &mut Run, limits: Limits) -> Result<()
     }
     run.source["retained_sources"] = json!(snapshots);
     run.source["source_retention"] = json!({"bytes":bytes,"skipped_files":skipped,"scope":"pre-launch UTF-8 project files, at most 2 MiB per file and 32 MiB per recording","build_mapping_verified":false,
+        "timings_us":{"total":started.elapsed().as_micros() as u64,"artifact_publication":reads.artifact_publication_us},
         "read_budget":{"name":"source-retention-read-v1","limits":limits,"work":reads,"scope":"all attempted source content reads including mismatches; at most one sentinel byte beyond the remaining read budget","limitations":"Static nonregular files are refused; path replacement races are not an adversarial filesystem guarantee"}});
     Ok(())
 }
@@ -158,12 +163,10 @@ fn retain_file(
     // Publish exactly the bytes checked above: reopening the pathname could
     // copy changed/unbounded content under a different identity.
     let name = canonical.file_name().unwrap().to_string_lossy();
-    Ok(Ok(store.add_artifact_bytes(
-        run_id,
-        &name,
-        "source-snapshot",
-        &content,
-    )?))
+    let started = Instant::now();
+    let artifact = store.add_artifact_bytes(run_id, &name, "source-snapshot", &content);
+    reads.artifact_publication_us += started.elapsed().as_micros() as u64;
+    Ok(Ok(artifact?))
 }
 
 fn read_bounded(file: fs::File, maximum: u64) -> (Vec<u8>, io::Result<usize>) {

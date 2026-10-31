@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Instant};
 use tokio::sync::watch;
 
 pub(super) struct Prepared {
@@ -43,6 +43,7 @@ impl Engine {
             runtime: run.runtime.clone(),
             env: request.env,
         };
+        let collector_started = Instant::now();
         let plan = if let Some(counting) = &request.call_counting {
             crate::collection::counts::prepare(&capture, counting)?
         } else if run.runtime == "none" {
@@ -60,6 +61,8 @@ impl Engine {
         } else {
             collection::prepare(&capture)?
         };
+        run.source["preparation"]["collector_us"] =
+            json!(collector_started.elapsed().as_micros() as u64);
         let settings = plan.settings(&capture);
         if let Some(identity) = &plan.collector_identity {
             run.source["collector_identity"] = identity.clone();

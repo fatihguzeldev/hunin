@@ -8,7 +8,7 @@ use crate::model::{
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::{collections::HashMap, sync::atomic::Ordering, time::Instant};
 use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, watch};
 
 struct Prepared {
@@ -109,6 +109,11 @@ impl Engine {
                 .map(|selected| selected.id.to_owned())
                 .unwrap_or(runtime)
         };
+        let started_at_us = now_us();
+        let identity_started = Instant::now();
+        let mut source = identity::source(&cwd, &resolved_command, Some(self.store.root()));
+        source["preparation"] =
+            json!({"source_identity_us":identity_started.elapsed().as_micros() as u64});
         let mut run = Run {
             id: uuid::Uuid::new_v4().to_string(),
             name: request
@@ -119,11 +124,11 @@ impl Engine {
             command: request.command.clone(),
             cwd: cwd.display().to_string(),
             runtime,
-            started_at_us: now_us(),
+            started_at_us,
             finished_at_us: None,
             exit_code: None,
             diagnostics: vec![],
-            source: identity::source(&cwd, &resolved_command, Some(self.store.root())),
+            source,
             correctness: correctness::pending(&recipe),
         };
         self.check_admission()?;
