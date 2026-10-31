@@ -18,22 +18,29 @@ function correctness(value: unknown): HTMLElement {
     { class: 'stack' },
     badge(
       passed === true
-        ? 'correctness passed'
+        ? 'checks passed'
         : passed === false
-          ? 'correctness failed'
-          : 'correctness unknown',
+          ? 'checks failed'
+          : 'checks unknown',
       passed === true ? 'good' : passed === false ? 'bad' : 'warn',
     ),
     el(
       'p',
       { class: 'metric-note' },
       passed == null
-        ? 'Correctness validation is unavailable.'
+        ? 'Workload validation is unavailable.'
         : validation === 'exit_code_and_stdout'
-          ? 'Declared exit code and stdout checks'
-          : 'Exit code check only; output correctness is unvalidated.',
+          ? 'Exit code and output checked.'
+          : validation === 'exit_code_only'
+            ? 'Exit code checked; output not checked.'
+            : 'The validation method was not recorded.',
     ),
-    el('pre', {}, JSON.stringify(value, null, 2)),
+    el(
+      'details',
+      {},
+      el('summary', {}, 'Check details'),
+      el('pre', {}, JSON.stringify(value, null, 2)),
+    ),
   );
 }
 
@@ -331,7 +338,7 @@ function hotspots(data: Comparison): HTMLElement {
       el(
         'p',
         { class: 'metric-note' },
-        'Weights are profiler samples grouped by function/file/module across measured code versions. Names do not establish semantic equivalence; a function not observed in samples is not proven absent from the program.',
+        'Rows match sampled symbols across recordings. A matching name does not prove identical behavior.',
       ),
       el(
         'p',
@@ -350,7 +357,7 @@ function hotspots(data: Comparison): HTMLElement {
       el(
         'p',
         { class: 'metric-note' },
-        '— indicates an unavailable weight or delta. A reported zero for an unobserved counterpart requires a complete returned symbol inventory and available sample unit.',
+        '— means unavailable. Zero is shown only when the complete symbol inventory establishes no observed weight.',
       ),
     ),
     content,
@@ -369,13 +376,12 @@ export function comparisonResults(
       'p',
       { class: 'notice' },
       data.comparable
-        ? 'The recorded workload and settings meet the backend comparison checks. Measurement noise and collection overhead still limit the claim.'
-        : 'These runs do not meet the comparison checks. Changes below describe the observations and cannot be presented as a validated optimization.',
+        ? 'Workload checks match. A single pair of profiled recordings does not establish a speedup.'
+        : 'Comparison checks did not pass. These changes do not establish a speedup.',
     ),
     ...data.reasons.map((reason) => el('p', { class: 'metric-note' }, reason)),
-    ...data.limitations.map((reason) =>
-      el('p', { class: 'metric-note' }, reason),
-    ),
+    metrics(data, context),
+    hotspots(data),
     el(
       'div',
       { class: 'evidence-grid' },
@@ -398,17 +404,17 @@ export function comparisonResults(
       ),
     ),
     el(
-      'section',
+      'details',
       { class: 'panel' },
       el(
-        'div',
-        { class: 'panel-head' },
-        el('h2', {}, 'Source and executable identities'),
+        'summary',
+        { class: 'panel-body' },
+        'Source and executable identities',
       ),
       el(
         'p',
         { class: 'panel-body metric-note' },
-        'Source/build changes can be the optimization under comparison. These retained identities are separate from matching workload inputs and correctness checks.',
+        'Source and executable versions may differ. Workload checks are shown above.',
       ),
       el(
         'div',
@@ -427,7 +433,15 @@ export function comparisonResults(
         ),
       ),
     ),
-    metrics(data, context),
-    hotspots(data),
+    el(
+      'details',
+      { class: 'panel' },
+      el('summary', { class: 'panel-body' }, 'Comparison scope'),
+      el(
+        'div',
+        { class: 'panel-body stack' },
+        ...data.limitations.map((reason) => el('p', {}, reason)),
+      ),
+    ),
   );
 }

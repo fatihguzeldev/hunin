@@ -9,7 +9,7 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
   if (context.runs.length < 2)
     return empty(
       'Record the same workload again',
-      'Comparison needs at least two recordings. Run your workload after a change, then select a baseline here.',
+      'Create a second recording of this workload, then choose a baseline and candidate.',
     );
   const state = context.investigation.comparison;
   state.after ??= context.run.id;
@@ -18,9 +18,7 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
   const before = el('select');
   const after = el('select');
   const unit = el('select');
-  unit.append(
-    el('option', { value: '' }, 'Automatic sample unit · service default'),
-  );
+  unit.append(el('option', { value: '' }, 'Automatic sample unit'));
   if (state.unit) unit.append(el('option', { value: state.unit }, state.unit));
   unit.value = state.unit ?? '';
   const unitInfo = el('p', { class: 'metric-note', role: 'status' });
@@ -74,7 +72,7 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
     content.replaceChildren(
       empty(
         'Comparison selection changed',
-        'Compare these recordings to read their current selected results and limitations.',
+        'Run the comparison for the newly selected recordings.',
       ),
     );
   }
@@ -99,8 +97,8 @@ export async function comparison(context: ViewContext): Promise<HTMLElement> {
     unit.value = state.unit ?? '';
     unit.disabled = data.hotspot_selection === undefined;
     unitInfo.textContent = data.hotspot_selection
-      ? 'Choose the sampled-weight unit to compare. Other units are separate measurements; sample weights do not establish elapsed time or a speed improvement.'
-      : 'This service did not provide explicit sample-unit selection and coverage metadata. Its default comparison remains visible.';
+      ? 'Only weights with the same unit are compared. Sample weights do not measure elapsed time.'
+      : 'Sample-unit selection is unavailable from this service; the default comparison is shown.';
   }
   const historyPicker = recordingHistory(context.signal, (run, side) => {
     known.set(run.id, run);
