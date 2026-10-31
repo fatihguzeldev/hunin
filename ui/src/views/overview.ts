@@ -1,5 +1,5 @@
 import { weight, weightShare } from '../profile-weight';
-import { runCorrectness } from '../recordings/presentation';
+import { captureQuality, targetCheck } from '../recordings/presentation';
 import { operation, type Operations, type Run, type Summary } from '../api';
 import { badge, el, empty } from '../dom';
 import { queryFailureMessage } from '../recordings/details';
@@ -22,7 +22,8 @@ export async function overview(
   source: (file: string, line?: number | null, codeId?: string | null) => void,
   signal?: AbortSignal,
 ): Promise<HTMLElement> {
-  const correctness = runCorrectness(run);
+  const capture = captureQuality(run);
+  const target = targetCheck(run);
   let data: Operations['profiles.hotspots']['output'] | undefined;
   let hotspotError: unknown;
   try {
@@ -52,14 +53,14 @@ export async function overview(
       'div',
       { class: 'stats' },
       stat(
-        'Recording elapsed',
+        'Recording duration',
         elapsed,
         imported
-          ? 'Imported profile · execution duration unavailable'
-          : 'wall clock · whole recording lifecycle',
+          ? 'Target duration not recorded'
+          : 'Includes setup and capture',
       ),
       stat(
-        'Sampled profile',
+        'Profile weight',
         data ? weight(data.total_weight, data.weight_unit) : 'Unavailable',
         summary
           ? `${numeric(summary.sample_count)} stack samples`
@@ -68,82 +69,35 @@ export async function overview(
       stat(
         'Recorded spans',
         summary ? numeric(summary.span_count) : 'Unavailable',
-        'inspect each interval’s basis',
+        'Timeline intervals',
       ),
       stat(
-        'Relationships',
+        'Recorded links',
         summary ? numeric(summary.relation_count) : 'Unavailable',
-        'recorded evidence',
+        'Links between observations',
       ),
     ),
   );
-  if (correctness.passed === false)
-    body.append(
-      el(
-        'p',
-        { class: 'notice' },
-        correctness.actual_exit_code == null
-          ? `Workload check incomplete: no exit result is available for this ${run.status} recording. ${correctness.reason ?? ''}`
-          : `Workload correctness check failed. ${correctness.reason ?? ''}`,
-      ),
-    );
-  if (run.correctness)
-    body.append(
-      el(
-        'details',
-        { class: 'panel' },
-        el(
-          'summary',
-          { class: 'panel-body' },
-          correctness.passed == null
-            ? 'Correctness · unknown'
-            : correctness.validation === 'exit_code_and_stdout'
-              ? 'Correctness · exit code and stdout checks'
-              : 'Correctness · exit code check only',
-        ),
-        correctness.passed == null
-          ? el(
-              'p',
-              { class: 'panel-body metric-note' },
-              'This recording has no verified correctness result.',
-            )
-          : correctness.validation !== 'exit_code_and_stdout'
-            ? el(
-                'p',
-                { class: 'panel-body metric-note' },
-                'The exit result does not validate the program’s output.',
-              )
-            : null,
-        el(
-          'pre',
-          { class: 'panel-body' },
-          JSON.stringify(run.correctness, null, 2),
-        ),
-      ),
-    );
-  else
-    body.append(
-      el(
-        'p',
-        { class: 'metric-note' },
-        'Correctness is unknown; this recording has no retained correctness result.',
-      ),
-    );
   body.append(
     el(
-      'details',
-      { class: 'panel' },
-      el(
-        'summary',
-        { class: 'panel-body' },
-        'Recorded source and runtime metadata',
+      'div',
+      { class: 'evidence-grid' },
+      ...[
+        { label: 'Capture', state: capture },
+        { label: 'Target', state: target },
+      ].map(({ label, state }) =>
+        el(
+          'section',
+          { class: 'panel' },
+          el(
+            'div',
+            { class: 'panel-head' },
+            el('h2', {}, label),
+            badge(state.label, state.tone),
+          ),
+          el('p', { class: 'panel-body' }, state.detail),
+        ),
       ),
-      el(
-        'p',
-        { class: 'panel-body metric-note' },
-        'Retained metadata is available independently of aggregate queries. Source identity and build verification keep their recorded basis.',
-      ),
-      el('pre', { class: 'panel-body' }, JSON.stringify(run.source, null, 2)),
     ),
   );
   const rows = el('tbody');
@@ -235,8 +189,12 @@ export async function overview(
   else
     panel.append(
       empty(
-        'No accepted stack samples',
-        'Inspect the recording diagnostics and collector capabilities.',
+        run.status === 'running'
+          ? 'Waiting for stack samples'
+          : 'No stack samples',
+        run.runtime === 'none'
+          ? 'Automatic profiling was disabled for this recording.'
+          : 'No stack samples have been accepted for this recording.',
       ),
     );
   body.append(
@@ -244,19 +202,19 @@ export async function overview(
     el(
       'p',
       { class: 'metric-note' },
-      'Stack weights describe sampled execution. Inclusive weights include descendants and must not be added together.',
+      'Self excludes called functions. Inclusive includes them; overlapping inclusive weights cannot be added together.',
     ),
   );
   const diagnostics = [...run.diagnostics, ...(summary?.diagnostics ?? [])];
   if (diagnostics.length)
     body.append(
       el(
-        'section',
+        'details',
         { class: 'panel' },
         el(
-          'div',
+          'summary',
           { class: 'panel-head' },
-          el('h2', {}, 'Collection notes'),
+          el('span', {}, 'Collection notes'),
           badge(String(diagnostics.length)),
         ),
         el(
@@ -268,5 +226,23 @@ export async function overview(
         ),
       ),
     );
+  body.append(
+    el(
+      'details',
+      { class: 'panel' },
+      el('summary', { class: 'panel-body' }, 'Workload check details'),
+      el(
+        'pre',
+        { class: 'panel-body' },
+        JSON.stringify(run.correctness, null, 2),
+      ),
+    ),
+    el(
+      'details',
+      { class: 'panel' },
+      el('summary', { class: 'panel-body' }, 'Source and runtime details'),
+      el('pre', { class: 'panel-body' }, JSON.stringify(run.source, null, 2)),
+    ),
+  );
   return body;
 }
