@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mappingAnchors } from '../src/code/selection.js';
+import {
+  mappingAnchors,
+  mappingOccurrenceIndex,
+  mappingScope,
+} from '../src/code/selection.js';
 import { codeCapture } from '../src/code/capture.js';
 import type { Observation } from '../src/record.generated.js';
 import { Investigations } from '../src/investigation/state.js';
@@ -169,4 +173,58 @@ test('Wasm disassembly index is opt-in, compiler-only and does not change ordina
     }),
     {},
   );
+});
+
+test('mapping occurrence survives inspector rebuilds only within its retained result context', () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+  const first = new Investigations(storage);
+  first.observeResult('run', 'same');
+  const window = { start_us: 100, end_us: 200 };
+  const scope = mappingScope('run', 'function', window, 'runtime:1', 'samples');
+  const occurrence = { scope, observationId: 'sample:384', frameIndex: 6 };
+  const state = first.forRun('run').workbench;
+  state.mappingSelection = occurrence;
+  first.persist('run');
+  const restored = new Investigations(storage);
+  restored.observeResult('run', 'same');
+  const saved = restored.forRun('run').workbench;
+  assert.deepEqual(saved.mappingSelection, occurrence);
+  const anchors = [
+    { observation_id: 'sample:383', frame_index: 6 },
+    { observation_id: 'sample:384', frame_index: 6 },
+  ];
+  assert.equal(
+    mappingOccurrenceIndex(anchors, scope, saved.mappingSelection),
+    1,
+  );
+  for (const changed of [
+    mappingScope('other', 'function', window, 'runtime:1', 'samples'),
+    mappingScope('run', 'other-function', window, 'runtime:1', 'samples'),
+    mappingScope(
+      'run',
+      'function',
+      { start_us: 100, end_us: 201 },
+      'runtime:1',
+      'samples',
+    ),
+    mappingScope('run', 'function', window, 'runtime:2', 'samples'),
+    mappingScope('run', 'function', window, 'runtime:1', 'microseconds'),
+  ])
+    assert.equal(
+      mappingOccurrenceIndex(anchors, changed, saved.mappingSelection),
+      0,
+    );
+  assert.equal(
+    mappingOccurrenceIndex(anchors.slice(0, 1), scope, saved.mappingSelection),
+    0,
+  );
+  assert.equal(restored.forRun('other').workbench.mappingSelection, undefined);
+  restored.observeResult('run', 'changed');
+  assert.equal(saved.mappingSelection, undefined);
 });

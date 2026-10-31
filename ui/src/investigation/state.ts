@@ -1,5 +1,6 @@
 import type { PageLocation } from '../pagination.js';
 import type { FunctionSelection } from '../call-counts.js';
+import type { MappingOccurrence } from '../code/selection.js';
 
 export type ProfileInvestigation = {
   unit: string;
@@ -52,6 +53,7 @@ export type Investigation = {
     focusPath: string[];
     inspectorTab: 'source' | 'callers' | 'evidence' | 'mapping';
     inspectorWide: boolean;
+    mappingSelection?: MappingOccurrence;
   };
   calls: { functions: FunctionSelection[]; measurementRunId?: string };
   profile: ProfileInvestigation;
@@ -154,6 +156,21 @@ function decode(value: unknown): SavedInvestigation | undefined {
         ? workbench.inspectorTab
         : 'source';
     result.workbench.inspectorWide = workbench.inspectorWide === true;
+    const mapping = object(workbench.mappingSelection);
+    if (
+      typeof mapping?.scope === 'string' &&
+      mapping.scope.length > 0 &&
+      typeof mapping.observationId === 'string' &&
+      mapping.observationId.length > 0 &&
+      typeof mapping.frameIndex === 'number' &&
+      Number.isSafeInteger(mapping.frameIndex) &&
+      mapping.frameIndex >= 0
+    )
+      result.workbench.mappingSelection = {
+        scope: mapping.scope,
+        observationId: mapping.observationId,
+        frameIndex: mapping.frameIndex,
+      };
     const window = object(workbench.window);
     if (
       window &&
@@ -388,6 +405,7 @@ export class Investigations {
       entry.restored &&
       (identity === undefined || entry.resultIdentity === undefined);
     if (changed || unconfirmed) {
+      delete entry.state.workbench.mappingSelection;
       entry.state.workbench.selectedFrameId = undefined;
       entry.state.workbench.focusPath = [];
       const profile = entry.state.profile;

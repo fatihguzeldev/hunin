@@ -8,6 +8,44 @@ type SelectedFrame = {
   evidence_truncated?: boolean;
 };
 
+export type MappingOccurrence = {
+  scope: string;
+  observationId: string;
+  frameIndex: number;
+};
+
+/** Layout and inspector tabs do not change the evidence being inspected. */
+export function mappingScope(
+  runId: string,
+  functionId: string,
+  window: { start_us: number; end_us: number } | null,
+  clockDomain: string | null,
+  unit: string,
+): string {
+  return JSON.stringify([
+    runId,
+    functionId,
+    window?.start_us ?? null,
+    window?.end_us ?? null,
+    clockDomain,
+    unit,
+  ]);
+}
+
+export function mappingOccurrenceIndex(
+  anchors: readonly { observation_id: string; frame_index: number }[],
+  scope: string,
+  saved: MappingOccurrence | undefined,
+): number {
+  if (!saved || saved.scope !== scope) return 0;
+  const index = anchors.findIndex(
+    (anchor) =>
+      anchor.observation_id === saved.observationId &&
+      anchor.frame_index === saved.frameIndex,
+  );
+  return Math.max(0, index);
+}
+
 /** Anchors are retained sample occurrences, never inferred from a function name alone. */
 export function mappingAnchors(
   records: readonly Observation[],

@@ -12,7 +12,11 @@ import type {
 } from '../operations.generated';
 import { observationLabel, referenceIds } from '../observation';
 import { linkedLifetime, linkedRequest } from '../requests';
-import { mappingAnchors } from './selection';
+import {
+  mappingAnchors,
+  mappingOccurrenceIndex,
+  mappingScope,
+} from './selection';
 import { coverageText } from './coverage';
 import { mappingPlans } from './plans';
 import { mapperActions } from './mappers';
@@ -51,6 +55,20 @@ export async function mappedOrigins(
         `Sample ${value.observation_id.slice(-8)} · frame ${value.frame_index + 1}${value.code_offset ? ` · ${value.code_offset}` : ''}`,
       ),
     );
+  const scope = mappingScope(
+    context.run.id,
+    selected.id,
+    window,
+    clockDomain,
+    selected.weight_unit,
+  );
+  anchor.value = String(
+    mappingOccurrenceIndex(
+      choices.anchors,
+      scope,
+      context.investigation.workbench.mappingSelection,
+    ),
+  );
   const content = el('div', { class: 'stack' });
   const inspection = el('div', {
     class: 'stack',
@@ -725,6 +743,13 @@ export async function mappedOrigins(
     }
   }
   anchor.addEventListener('change', () => {
+    const selected = choices.anchors[Number(anchor.value)];
+    context.investigation.workbench.mappingSelection = {
+      scope,
+      observationId: selected.observation_id,
+      frameIndex: selected.frame_index,
+    };
+    context.persist('replace');
     void load();
   });
   await load();

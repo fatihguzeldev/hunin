@@ -8,6 +8,7 @@ import { sourcePresentation } from '../../source/presentation';
 import { sourceUnavailable } from '../../source/errors';
 import { linkedLifetime } from '../../requests';
 import { mappedOrigins } from '../../code/view';
+import { mappingScope } from '../../code/selection';
 import type { ViewContext } from '../view';
 import {
   shortPath,
@@ -32,6 +33,18 @@ export function inspector(
 ): HTMLElement {
   const selected = data.selected;
   const state = context.investigation.workbench;
+  if (
+    !selected ||
+    state.mappingSelection?.scope !==
+      mappingScope(
+        context.run.id,
+        selected.id,
+        data.window,
+        data.clock_domain,
+        selected.weight_unit,
+      )
+  )
+    delete state.mappingSelection;
   const root = el('aside', {
     class: 'wb-inspector',
     'aria-label': selected
