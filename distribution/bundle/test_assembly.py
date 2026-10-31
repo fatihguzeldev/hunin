@@ -10,6 +10,14 @@ from . import assembly as package, native
 from ..installation.hunin_install import activation, contracts, probe, verification
 
 
+UI_PUBLIC_FONTS = (
+    "CommitMono-Variable.woff2",
+    "CommitMono-OFL.txt",
+    "SchibstedGrotesk-Variable.woff2",
+    "SchibstedGrotesk-OFL.txt",
+)
+
+
 RUNTIME_FILES = (
     "collectors/counts/build.py",
     "collectors/counts/python.py",
@@ -66,6 +74,7 @@ RUNTIME_FILES = (
     "fetch_runtime.py",
     "runtime-assets.json",
     "bundle-assets.json",
+    *("ui/fonts/" + name for name in UI_PUBLIC_FONTS),
 )
 
 
@@ -240,6 +249,9 @@ class PackageTests(unittest.TestCase):
         )
         for name in ("main.js", "vendor.js", "lazy.js", "main.css", "font.woff2"):
             (ui / "assets" / name).write_text(name)
+        (ui / "fonts").mkdir(exist_ok=True)
+        for name in UI_PUBLIC_FONTS:
+            (ui / "fonts" / name).write_bytes(("public font asset: " + name).encode())
         (root / "protocol/record.schema.json").write_text(
             json.dumps({"$id": "https://fixture/record-v1"})
         )
@@ -353,6 +365,8 @@ class PackageTests(unittest.TestCase):
             "sdk/javascript/dist/writer.mjs",
             "sdk/javascript/dist/writer.d.mts",
             "ui/dist/.vite/manifest.json",
+            "ui/dist/fonts/CommitMono-Variable.woff2",
+            "ui/dist/fonts/SchibstedGrotesk-OFL.txt",
         ):
             with self.subTest(asset=name), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -385,6 +399,22 @@ class PackageTests(unittest.TestCase):
             for name in ("main.js", "vendor.js", "lazy.js", "main.css", "font.woff2"):
                 self.assertIn("ui/assets/" + name, files)
             self.assertFalse("ui/assets/unrelated-debug.js" in files)
+
+    def test_ui_public_fonts_and_licenses_are_explicit_runtime_assets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = self.source_tree(root)
+            for name in ("unselected.woff2", "private-notes.txt"):
+                (root / "ui/dist/fonts" / name).write_text("unselected public file")
+            files = package.contents(root, binary, "linux-x64")
+            for name in UI_PUBLIC_FONTS:
+                with self.subTest(asset=name):
+                    self.assertEqual(
+                        files["ui/fonts/" + name],
+                        (root / "ui/dist/fonts" / name).read_bytes(),
+                    )
+            self.assertNotIn("ui/fonts/unselected.woff2", files)
+            self.assertNotIn("ui/fonts/private-notes.txt", files)
 
     def test_ui_manifest_cannot_select_paths_outside_the_build(self):
         with tempfile.TemporaryDirectory() as temporary:

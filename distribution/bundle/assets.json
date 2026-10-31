@@ -180,7 +180,11 @@
       "build": "npm --prefix ui ci && npm --prefix ui run build",
       "files": {
         "index.html": "index.html",
-        "hunin.svg": "hunin.svg"
+        "hunin.svg": "hunin.svg",
+        "fonts/CommitMono-Variable.woff2": "fonts/CommitMono-Variable.woff2",
+        "fonts/CommitMono-OFL.txt": "fonts/CommitMono-OFL.txt",
+        "fonts/SchibstedGrotesk-Variable.woff2": "fonts/SchibstedGrotesk-Variable.woff2",
+        "fonts/SchibstedGrotesk-OFL.txt": "fonts/SchibstedGrotesk-OFL.txt"
       },
       "vite_manifest": ".vite/manifest.json",
       "entry": "index.html"
