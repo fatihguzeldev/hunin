@@ -17,6 +17,7 @@ pub(in crate::analysis) fn verify(
     mut checkpoint: impl FnMut() -> Result<()>,
 ) -> Result<PathBuf> {
     checkpoint()?;
+    crate::analysis::output::validate_contract(analysis.get("output_contract"))?;
     let source = PathBuf::from(
         analysis["package_dir"]
             .as_str()

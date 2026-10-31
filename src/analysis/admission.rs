@@ -144,7 +144,7 @@ impl Engine {
         self.check_preparation(Some(request.deadline))?;
         let analysis = &prepared.analysis;
         let input = &prepared.input;
-        let document = json!({
+        let mut document = json!({
             "id":id,"result_set_id":id,"analysis_id":request.analysis_id,"run_id":request.run_id,
             "version":analysis["version"],"package_digest":analysis["package_digest"],"status":"running",
             "created_at_us":now_us(),"attempt_started_at_us":request.started_at_us,"timeout_seconds":request.timeout,
@@ -153,6 +153,9 @@ impl Engine {
             "phase_timings_us":prepared.timings,"owner":self.owner,"input_result_sets":input.result_ids,
             "input_fingerprint":input.fingerprint,"diagnostics":[],"execution_dir":directory,
         });
+        if let Some(contract) = analysis.get("output_contract") {
+            document["output_contract"] = contract.clone();
+        }
         // The active lock makes this commit + local ownership handoff atomic
         // relative to shutdown's closing gate and cancellation enumeration.
         self.store

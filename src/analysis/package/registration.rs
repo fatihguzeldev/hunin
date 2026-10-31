@@ -211,6 +211,7 @@ fn register_controlled(
         .filter(|v| v.is_object())
         .context("declared applicability requirements are required")?;
     applicability::validate_declaration(required)?;
+    crate::analysis::output::validate_contract(params.get("output_contract"))?;
     let original_executable = executable(&command[0], &cwd)?;
     let executable_sha256 = files::hash(&original_executable, &mut checkpoint)?;
     let executable_is_packaged = original_executable.starts_with(&cwd);
@@ -277,11 +278,17 @@ fn register_controlled(
             .cloned()
             .unwrap_or_else(|| json!({}));
         dependencies::validate(&dependencies, &source)?;
-        let identity = json!({"command":command,"files":files,"requirements":required,"version":params["version"].as_str().unwrap_or("1"),"dependencies":dependencies,"executable_sha256":executable_sha256});
+        let mut identity = json!({"command":command,"files":files,"requirements":required,"version":params["version"].as_str().unwrap_or("1"),"dependencies":dependencies,"executable_sha256":executable_sha256});
+        if let Some(contract) = params.get("output_contract") {
+            identity["output_contract"] = contract.clone();
+        }
         let package_digest = files::digest(&serde_json::to_vec(&identity)?);
         let id = package_digest.clone();
         let managed = base.join(&id);
         let mut analysis = json!({"id":id,"name":name,"version":params["version"].as_str().unwrap_or("1"),"command":command,"requirements":required,"dependencies":dependencies,"package_digest":package_digest,"files":files,"package_dir":managed,"created_at_us":crate::model::now_us(),"executable":{"path":original_executable,"sha256":executable_sha256,"packaged":executable_is_packaged},"dependency_state":"declared"});
+        if let Some(contract) = params.get("output_contract") {
+            analysis["output_contract"] = contract.clone();
+        }
         if !executable_is_packaged {
             analysis["command"][0] = json!(original_executable);
         }

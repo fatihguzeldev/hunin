@@ -1,4 +1,4 @@
-mod applicability;
+pub(crate) mod applicability;
 mod attempt;
 mod dependencies;
 mod engine;

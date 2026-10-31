@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn output_contract_is_validated_and_bound_to_package_identity() {
+    let (_root, store, _source, params) = registration_fixture();
+    let ordinary = register(&store, &params).unwrap();
+    let mut mapping = params.clone();
+    mapping["output_contract"] = json!({"name":"code-mapping","version":1});
+    let registered = register(&store, &mapping).unwrap();
+    assert_ne!(ordinary["analysis"]["id"], registered["analysis"]["id"]);
+    assert_eq!(
+        registered["analysis"]["output_contract"],
+        mapping["output_contract"]
+    );
+    for contract in [
+        json!({"name":"code-mapping","version":2}),
+        json!({"name":"pretend","version":1}),
+        json!({"name":"code-mapping","version":1,"verified":true}),
+    ] {
+        mapping["output_contract"] = contract;
+        assert!(register(&store, &mapping).is_err());
+    }
+}
+
 fn registration_fixture() -> (tempfile::TempDir, Store, PathBuf, Value) {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source");

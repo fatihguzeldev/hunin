@@ -69,6 +69,7 @@ fn expired_or_cancelled_retention_cannot_publish_an_otherwise_valid_result() {
             run_id: "recording".into(),
             result_ids: vec![],
             record_ids: ["input".into()].into_iter().collect(),
+            artifacts: Default::default(),
         };
         let engine = Engine::new(store.clone());
         engine.finish(
