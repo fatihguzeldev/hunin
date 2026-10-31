@@ -75,7 +75,7 @@ test('operation input types are generated from the authoritative transport contr
   assert.ok(generated.includes('"command": Array<string>'));
   assert.ok(generated.includes('export type OperationOutputs'));
   assert.ok(generated.includes('"next_cursor": string | null;'));
-  assert.ok(generated.includes('"encoding": "utf8_lossy";'));
+  assert.ok(generated.includes('"encoding": "utf8_lossy" | "hex";'));
 });
 
 test('operation output generation refuses unsupported validation rules', () => {

@@ -337,7 +337,7 @@
             "minLength": 1
           },
           "uniqueItems": true,
-          "description": "Workload data files whose startup content digests must match in comparisons; relative to cwd."
+          "description": "Explicit workload files, relative to cwd. Content digests must match in comparisons; bounded prelaunch snapshots are retained as workload-input artifacts with explicit unavailable states. This does not prove target consumption."
         },
         "expected_stdout": {
           "type": "string",
@@ -395,6 +395,37 @@
               "type": "integer",
               "minimum": 1024,
               "maximum": 8388608
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "capture_mode": {
+          "type": "string",
+          "enum": ["automatic-cpu", "code-origin"]
+        },
+        "code_options": {
+          "type": "object",
+          "properties": {
+            "compiler_export": {
+              "type": "boolean",
+              "description": "Retain version-dependent compiler graphs and disassembly. V8 diagnostics can change target stdout and collection cost; this does not promise unchanged output bytes or timing."
+            },
+            "function_filter": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            },
+            "sampling_interval_us": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 1000000
+            },
+            "max_artifact_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
             }
           },
           "required": [],
@@ -795,6 +826,11 @@
         "frame_id": {
           "type": "string",
           "minLength": 1
+        },
+        "clock_domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Select this explicit runtime_relative origin. Omitted selects the aligned epoch domain; different origins are never merged."
         }
       },
       "required": ["run_id"],
@@ -854,7 +890,7 @@
       },
       "hunin/profile-inspection": {
         "version": 1,
-        "clock": "Only explicitly aligned sample timestamps participate in windows; unaligned_count is excluded selected-unit sample count.",
+        "clock": "Omitted clock_domain selects aligned epoch samples. An explicit known runtime_relative clock_domain selects only that origin; clock_domains lists available selected-unit relative origins. Different origins and epoch are never blended; unaligned_count counts excluded selected-unit samples.",
         "window": "Inclusive start/end bounds; both must be supplied together. A sample at a bin boundary belongs to the following bin, except the capture/window endpoint belongs to the final bin.",
         "selected_weight": "Self/leaf weight of frame_id. Selection evidence and observed extent include any stack occurrence, once per sample.",
         "identity": "Function ids identify function/file/module/code_id. Tree node ids identify an entire call path; frame_id links a node to its function.",
@@ -1281,7 +1317,7 @@
   },
   {
     "name": "artifacts.read",
-    "description": "Read a bounded UTF-8 raw artifact excerpt",
+    "description": "Read a bounded raw artifact excerpt as text or exact hexadecimal bytes",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1301,6 +1337,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 5000
+        },
+        "encoding": {
+          "type": "string",
+          "enum": ["utf8_lossy", "hex"],
+          "description": "Defaults to UTF-8 with replacement. Hex preserves every returned byte; offsets and limits are always measured in original bytes."
         }
       },
       "required": ["run_id", "artifact_id"],
@@ -1313,7 +1354,8 @@
           "type": "string"
         },
         "encoding": {
-          "const": "utf8_lossy"
+          "type": "string",
+          "enum": ["utf8_lossy", "hex"]
         },
         "next_offset": {
           "type": ["integer", "null"],
@@ -1758,6 +1800,19 @@
             }
           },
           "additionalProperties": false
+        },
+        "output_contract": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "code-mapping"
+            },
+            "version": {
+              "const": 1
+            }
+          },
+          "required": ["name", "version"],
+          "additionalProperties": false
         }
       },
       "required": ["name", "command", "requirements"],
@@ -2029,7 +2084,7 @@
             "minLength": 1
           },
           "uniqueItems": true,
-          "description": "Workload data files whose startup content digests must match in comparisons; relative to cwd."
+          "description": "Explicit workload files, relative to cwd. Content digests must match in comparisons; bounded prelaunch snapshots are retained as workload-input artifacts with explicit unavailable states. This does not prove target consumption."
         },
         "expected_stdout": {
           "type": "string",
@@ -2039,6 +2094,37 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{64}$",
           "description": "SHA256 of exact expected stdout bytes; alternative to expected_stdout."
+        },
+        "capture_mode": {
+          "type": "string",
+          "enum": ["automatic-cpu", "code-origin"]
+        },
+        "code_options": {
+          "type": "object",
+          "properties": {
+            "compiler_export": {
+              "type": "boolean",
+              "description": "Retain version-dependent compiler graphs and disassembly. V8 diagnostics can change target stdout and collection cost; this does not promise unchanged output bytes or timing."
+            },
+            "function_filter": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            },
+            "sampling_interval_us": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 1000000
+            },
+            "max_artifact_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            }
+          },
+          "required": [],
+          "additionalProperties": false
         }
       },
       "required": ["name", "command"],
@@ -2516,6 +2602,260 @@
         "checkpoint_seconds": 10,
         "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
         "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
+      }
+    }
+  },
+  {
+    "name": "code.inspect",
+    "description": "Inspect bounded evidence-backed code instance and mapping facts",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frame_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["samples", "microseconds", "bytes", "count"]
+        },
+        "start_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "clock_domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Select this explicit runtime_relative origin. Omitted selects the aligned epoch domain; different origins are never merged."
+        }
+      },
+      "required": ["run_id", "observation_id"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["start_us"]
+          },
+          "then": {
+            "required": ["end_us"]
+          }
+        },
+        {
+          "if": {
+            "required": ["end_us"]
+          },
+          "then": {
+            "required": ["start_us"]
+          }
+        }
+      ]
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CodeInspection"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1,
+        "snapshot": "One bounded selected observation transaction; artifact metadata identity is separate from current byte verification. Coverage never apportions shared code cost."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
+      },
+      "hunin/code-inspection": {
+        "version": 1,
+        "ranges": "Canonical unsigned hexadecimal ranges are half-open; compare coordinates only within the same instance, space and function index. Mapping edges preserve many-to-many/shared cardinality.",
+        "time": "Omitted clock_domain selects aligned epoch samples; an explicit runtime_relative domain selects only that origin. Other clocks are excluded and counted separately. Requested sample windows include endpoints; code lifetimes/ranges are half-open, censored/unknown validity remains explicit.",
+        "coverage": "Direct mapping coverage counts each matching raw sample once for the selected unit. Shared/overlapping paths never partition contribution; missing mappings remain unknown unless explicitly declared unmapped. Window-unplaceable samples are counted separately.",
+        "proof": "Artifact status compares run-owned snapshot metadata; producer verification claims do not independently prove semantic correctness or reverify live artifact bytes.",
+        "limits": "Each returned fact/proof array is bounded by limit (maximum500); truncated is explicit. Complete coverage is computed before display truncation under shared read/work budgets.",
+        "execution": "Read-only. code.plan returns public operation names and parameters without executing its steps."
+      }
+    }
+  },
+  {
+    "name": "code.plan",
+    "description": "Plan bounded public operations for a code investigation without executing them",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "frame_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["samples", "microseconds", "bytes", "count"]
+        },
+        "start_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "end_us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "goal": {
+          "type": "string",
+          "enum": ["source", "code_origin", "semantic_origin"]
+        },
+        "clock_domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Select this explicit runtime_relative origin. Omitted selects the aligned epoch domain; different origins are never merged."
+        }
+      },
+      "required": ["run_id", "observation_id"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["start_us"]
+          },
+          "then": {
+            "required": ["end_us"]
+          }
+        },
+        {
+          "if": {
+            "required": ["end_us"]
+          },
+          "then": {
+            "required": ["start_us"]
+          }
+        }
+      ]
+    },
+    "outputSchema": {
+      "$ref": "https://hunin.dev/protocol/response-v1.schema.json#/$defs/CodePlan"
+    },
+    "_meta": {
+      "hunin/lifecycle": {
+        "kind": "read",
+        "client_abort": "Stops response interest; does not itself request durable job cancellation. An unaccepted request is not a durable job.",
+        "version": 1,
+        "snapshot": "One bounded selected observation transaction; artifact metadata identity is separate from current byte verification. Coverage never apportions shared code cost."
+      },
+      "hunin/operation-errors": {
+        "typed_origin_codes": [
+          "invalid_parameters",
+          "work_budget_exceeded",
+          "capacity_exceeded",
+          "request_abandoned",
+          "request_deadline_exceeded"
+        ],
+        "fallback": "operation_failed",
+        "dispatch_unknown": "unknown_operation",
+        "http_machine_field": "error.details.operation_error",
+        "mcp_machine_field": "_meta[hunin/operation-error]"
+      },
+      "hunin/encoded-result-budget": {
+        "maximum_bytes": 16777216,
+        "scope": "operation result before transport envelopes",
+        "enforcement": "Serializer byte counting without allocating an encoded copy; does not bound prior database, aggregation, or metadata allocation work."
+      },
+      "hunin/admission": {
+        "kind": "blocking_request_work",
+        "scope": "shared Operations instance and clones",
+        "pool": "aggregation",
+        "maximum_in_flight": 2,
+        "queue": "fail_fast",
+        "reservation": "Held through actual blocking worker completion; independent instances/processes are separate."
+      },
+      "hunin/query-budget": {
+        "policy": "selected-record-query-v1",
+        "maximum_rows": 100000,
+        "maximum_selected_bytes": 134217728,
+        "maximum_record_bytes": 8388608,
+        "maximum_selected_result_sets": 10000,
+        "maximum_sqlite_steps_approx": 10000000,
+        "maximum_frame_visits": 2000000,
+        "maximum_aggregate_entries": 100000,
+        "checkpoint_seconds": 10,
+        "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
+        "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
+      },
+      "hunin/code-inspection": {
+        "version": 1,
+        "ranges": "Canonical unsigned hexadecimal ranges are half-open; compare coordinates only within the same instance, space and function index. Mapping edges preserve many-to-many/shared cardinality.",
+        "time": "Omitted clock_domain selects aligned epoch samples; an explicit runtime_relative domain selects only that origin. Other clocks are excluded and counted separately. Requested sample windows include endpoints; code lifetimes/ranges are half-open, censored/unknown validity remains explicit.",
+        "coverage": "Direct mapping coverage counts each matching raw sample once for the selected unit. Shared/overlapping paths never partition contribution; missing mappings remain unknown unless explicitly declared unmapped. Window-unplaceable samples are counted separately.",
+        "proof": "Artifact status compares run-owned snapshot metadata; producer verification claims do not independently prove semantic correctness or reverify live artifact bytes.",
+        "limits": "Each returned fact/proof array is bounded by limit (maximum500); truncated is explicit. Complete coverage is computed before display truncation under shared read/work budgets.",
+        "execution": "Read-only. code.plan returns public operation names and parameters without executing its steps."
       }
     }
   }
