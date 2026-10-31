@@ -30,13 +30,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "id",
-        "name",
-        "store_path",
-        "workspace_roots",
-        "legacy"
-      ]
+      "required": ["id", "name", "store_path", "workspace_roots", "legacy"]
     },
     "ProjectCatalog": {
       "type": "object",
@@ -49,19 +43,13 @@
           }
         },
         "selected_project_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "direct_store": {
           "type": "boolean"
         },
         "storage_scope": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "description": "Stable browser-state namespace for explicit direct-store mode; null in registry mode."
         }
       },
@@ -102,17 +90,11 @@
           "minimum": 0
         },
         "finished_at_us": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "exit_code": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "diagnostics": {
           "type": "array",
@@ -150,10 +132,7 @@
           "minimum": 0
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ],
+          "type": ["number", "null"],
           "description": "A non-finite floating-point aggregate serializes as null; it must not be relabeled as zero."
         },
         "weight_unit": {
@@ -198,16 +177,10 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "runs",
-        "next_cursor"
-      ]
+      "required": ["runs", "next_cursor"]
     },
     "RunResult": {
       "type": "object",
@@ -216,9 +189,7 @@
           "$ref": "#/$defs/Run"
         }
       },
-      "required": [
-        "run"
-      ]
+      "required": ["run"]
     },
     "RunDetails": {
       "type": "object",
@@ -234,10 +205,7 @@
           "description": "Opaque identity of the selected-observation snapshot used for this summary. It is not a lease spanning later independent queries; older services may omit it."
         }
       },
-      "required": [
-        "run",
-        "summary"
-      ]
+      "required": ["run", "summary"]
     },
     "ImportResult": {
       "type": "object",
@@ -256,11 +224,7 @@
           "description": "Why the independent summary is unavailable after the mutation result was retained."
         }
       },
-      "required": [
-        "run",
-        "accepted",
-        "summary"
-      ]
+      "required": ["run", "accepted", "summary"]
     },
     "ReanalysisResult": {
       "type": "object",
@@ -282,11 +246,7 @@
           "description": "Why the independent summary is unavailable after the mutation result was retained."
         }
       },
-      "required": [
-        "accepted",
-        "diagnostics",
-        "summary"
-      ]
+      "required": ["accepted", "diagnostics", "summary"]
     },
     "OperationError": {
       "type": "object",
@@ -306,19 +266,14 @@
           }
         }
       },
-      "required": [
-        "code",
-        "message"
-      ]
+      "required": ["code", "message"]
     },
     "HttpSuccess": {
       "type": "object",
       "properties": {
         "result": {}
       },
-      "required": [
-        "result"
-      ]
+      "required": ["result"]
     },
     "HttpFailure": {
       "type": "object",
@@ -327,9 +282,7 @@
           "$ref": "#/$defs/OperationError"
         }
       },
-      "required": [
-        "error"
-      ]
+      "required": ["error"]
     },
     "McpToolSuccess": {
       "type": "object",
@@ -346,10 +299,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "type",
-              "text"
-            ]
+            "required": ["type", "text"]
           }
         },
         "structuredContent": {},
@@ -357,11 +307,7 @@
           "const": false
         }
       },
-      "required": [
-        "content",
-        "structuredContent",
-        "isError"
-      ]
+      "required": ["content", "structuredContent", "isError"]
     },
     "McpToolFailure": {
       "type": "object",
@@ -378,10 +324,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "type",
-              "text"
-            ]
+            "required": ["type", "text"]
           }
         },
         "isError": {
@@ -396,10 +339,7 @@
           }
         }
       },
-      "required": [
-        "content",
-        "isError"
-      ]
+      "required": ["content", "isError"]
     },
     "CapabilityMode": {
       "type": "object",
@@ -428,10 +368,7 @@
           "description": "Backend-owned description of the target command this mode requires."
         },
         "default_executable": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "description": "Default workload interpreter/tool only when appropriate for this mode; a collector/probe executable is not a workload default."
         },
         "selectable": {
@@ -457,16 +394,10 @@
           "type": "boolean"
         },
         "executable": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "version": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "probe_status": {
           "type": "string"
@@ -493,12 +424,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "runtime",
-        "available",
-        "probe_status",
-        "diagnostics"
-      ]
+      "required": ["runtime", "available", "probe_status", "diagnostics"]
     },
     "NativeSamplingPermission": {
       "type": "object",
@@ -513,10 +439,7 @@
           "type": "string"
         },
         "perf_event_paranoid": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "prerequisite": {
           "type": "string"
@@ -528,9 +451,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "state"
-      ]
+      "required": ["state"]
     },
     "Capabilities": {
       "type": "object",
@@ -545,10 +466,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "os",
-            "arch"
-          ]
+          "required": ["os", "arch"]
         },
         "runtimes": {
           "type": "array",
@@ -574,10 +492,7 @@
               "minimum": 0
             }
           },
-          "required": [
-            "timeout_seconds_per_command",
-            "output_bytes_per_stream"
-          ]
+          "required": ["timeout_seconds_per_command", "output_bytes_per_stream"]
         },
         "verification": {
           "type": "string"
@@ -627,10 +542,7 @@
         },
         "provenance": {},
         "next_line": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1,
           "description": "Start line for the next bounded source window, or null at the end. Older services may omit continuation metadata."
         },
@@ -660,16 +572,10 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "analyses",
-        "next_cursor"
-      ]
+      "required": ["analyses", "next_cursor"]
     },
     "AnalysisResultDocument": {
       "type": "object",
@@ -678,9 +584,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "selected"
-      ]
+      "required": ["selected"]
     },
     "AnalysisResultPage": {
       "type": "object",
@@ -692,16 +596,10 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "results",
-        "next_cursor"
-      ]
+      "required": ["results", "next_cursor"]
     },
     "AnalysisPackage": {
       "type": "object",
@@ -753,11 +651,7 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "path",
-            "sha256",
-            "packaged"
-          ]
+          "required": ["path", "sha256", "packaged"]
         },
         "dependency_state": {
           "type": "string"
@@ -785,9 +679,7 @@
           "$ref": "#/$defs/AnalysisPackage"
         }
       },
-      "required": [
-        "analysis"
-      ]
+      "required": ["analysis"]
     },
     "AnalysisStarted": {
       "type": "object",
@@ -805,11 +697,7 @@
           }
         }
       },
-      "required": [
-        "result_set_id",
-        "status",
-        "diagnostics"
-      ]
+      "required": ["result_set_id", "status", "diagnostics"]
     },
     "AnalysisCanceled": {
       "type": "object",
@@ -827,11 +715,7 @@
           }
         }
       },
-      "required": [
-        "execution_id",
-        "status",
-        "diagnostics"
-      ]
+      "required": ["execution_id", "status", "diagnostics"]
     },
     "ScenarioPage": {
       "type": "object",
@@ -843,16 +727,10 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "scenarios",
-        "next_cursor"
-      ]
+      "required": ["scenarios", "next_cursor"]
     },
     "ScenarioSaved": {
       "type": "object",
@@ -900,11 +778,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "id",
-        "name",
-        "command"
-      ]
+      "required": ["id", "name", "command"]
     },
     "ScenarioSaveResult": {
       "type": "object",
@@ -913,9 +787,7 @@
           "$ref": "#/$defs/ScenarioSaved"
         }
       },
-      "required": [
-        "scenario"
-      ]
+      "required": ["scenario"]
     },
     "Observation": {
       "$ref": "https://hunin.dev/protocol/record-v1.schema.json"
@@ -932,9 +804,7 @@
               "const": "context"
             }
           },
-          "required": [
-            "kind"
-          ]
+          "required": ["kind"]
         }
       ]
     },
@@ -950,9 +820,7 @@
               "const": "relation"
             }
           },
-          "required": [
-            "kind"
-          ]
+          "required": ["kind"]
         }
       ]
     },
@@ -963,43 +831,25 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "source_position_basis": {
           "type": "string"
         },
         "self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "inclusive_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "weight_unit": {
           "type": "string"
@@ -1027,20 +877,13 @@
           }
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "weight_unit": {
           "type": "string"
         }
       },
-      "required": [
-        "hotspots",
-        "total_weight",
-        "weight_unit"
-      ]
+      "required": ["hotspots", "total_weight", "weight_unit"]
     },
     "TreeNode": {
       "type": "object",
@@ -1052,43 +895,25 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "source_position_basis": {
           "type": "string"
         },
         "self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "child_count": {
           "type": "integer",
@@ -1136,16 +961,10 @@
           "type": "string"
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "scope_self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "path": {
           "type": "array",
@@ -1162,10 +981,7 @@
           "minimum": 0
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "node_limit": {
           "type": "integer",
@@ -1215,16 +1031,10 @@
           "type": "string"
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "bounds": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "start_us": {
               "type": "integer",
@@ -1235,10 +1045,7 @@
               "minimum": 0
             }
           },
-          "required": [
-            "start_us",
-            "end_us"
-          ]
+          "required": ["start_us", "end_us"]
         },
         "unaligned_count": {
           "type": "integer",
@@ -1254,10 +1061,7 @@
               },
               "clock": {}
             },
-            "required": [
-              "producer_id",
-              "clock"
-            ]
+            "required": ["producer_id", "clock"]
           }
         },
         "total_count": {
@@ -1302,10 +1106,7 @@
           "type": "string"
         },
         "context_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "producer_id": {
           "type": "string"
@@ -1347,10 +1148,7 @@
           "type": "string"
         },
         "context_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "thread_id_source": {
           "type": "string"
@@ -1424,10 +1222,7 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "returned_points": {
           "type": "integer",
@@ -1478,17 +1273,10 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         }
       },
-      "required": [
-        "contexts",
-        "relations",
-        "next_cursor"
-      ]
+      "required": ["contexts", "relations", "next_cursor"]
     },
     "Evidence": {
       "type": "object",
@@ -1500,9 +1288,7 @@
           }
         }
       },
-      "required": [
-        "records"
-      ]
+      "required": ["records"]
     },
     "ComparisonMetric": {
       "type": "object",
@@ -1520,28 +1306,16 @@
           "type": "string"
         },
         "before": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "after": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "delta": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "percent_change": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "measurement_quality": {
           "type": "string"
@@ -1600,34 +1374,19 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "before": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "after": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "delta": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "unit": {
           "type": "string"
@@ -1695,10 +1454,7 @@
             "before": {},
             "after": {}
           },
-          "required": [
-            "before",
-            "after"
-          ]
+          "required": ["before", "after"]
         },
         "hotspots": {
           "type": "array",
@@ -1722,10 +1478,7 @@
               }
             }
           },
-          "required": [
-            "before",
-            "after"
-          ]
+          "required": ["before", "after"]
         },
         "limitations": {
           "type": "array",
@@ -1784,10 +1537,7 @@
               "minimum": 1
             }
           },
-          "required": [
-            "scope",
-            "maximum_in_flight"
-          ],
+          "required": ["scope", "maximum_in_flight"],
           "additionalProperties": false
         },
         "budget": {
@@ -1808,20 +1558,11 @@
               "minimum": 0
             }
           },
-          "required": [
-            "scope",
-            "dimension",
-            "limit",
-            "observed"
-          ],
+          "required": ["scope", "dimension", "limit", "observed"],
           "additionalProperties": false
         }
       },
-      "required": [
-        "code",
-        "operation",
-        "message"
-      ],
+      "required": ["code", "operation", "message"],
       "additionalProperties": false
     },
     "ImportFormat": {
@@ -1852,10 +1593,7 @@
         },
         "input_kind": {
           "type": "string",
-          "enum": [
-            "profile",
-            "observations"
-          ]
+          "enum": ["profile", "observations"]
         },
         "requires_existing_recording": {
           "type": "boolean"
@@ -1946,26 +1684,14 @@
         },
         "path_kind": {
           "type": "string",
-          "enum": [
-            "file",
-            "directory",
-            "symlink",
-            "other"
-          ]
+          "enum": ["file", "directory", "symlink", "other"]
         },
         "metadata_reference": {
           "type": "string",
-          "enum": [
-            "present",
-            "absent",
-            "unknown"
-          ]
+          "enum": ["present", "absent", "unknown"]
         },
         "size_bytes": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "description": "Exact decimal bytes when known; no floating point conversion."
         },
         "row_ordinal": {
@@ -1973,9 +1699,7 @@
           "minimum": 1
         }
       },
-      "required": [
-        "kind"
-      ],
+      "required": ["kind"],
       "additionalProperties": false,
       "allOf": [
         {
@@ -1987,11 +1711,7 @@
             }
           },
           "then": {
-            "required": [
-              "sha256",
-              "example_run_id",
-              "example_artifact_id"
-            ]
+            "required": ["sha256", "example_run_id", "example_artifact_id"]
           }
         },
         {
@@ -2003,10 +1723,7 @@
             }
           },
           "then": {
-            "required": [
-              "sha256",
-              "size_bytes"
-            ]
+            "required": ["sha256", "size_bytes"]
           }
         },
         {
@@ -2018,11 +1735,7 @@
             }
           },
           "then": {
-            "required": [
-              "relative_path",
-              "path_kind",
-              "size_bytes"
-            ]
+            "required": ["relative_path", "path_kind", "size_bytes"]
           }
         },
         {
@@ -2034,11 +1747,7 @@
             }
           },
           "then": {
-            "required": [
-              "relative_path",
-              "path_kind",
-              "metadata_reference"
-            ]
+            "required": ["relative_path", "path_kind", "metadata_reference"]
           }
         },
         {
@@ -2050,10 +1759,7 @@
             }
           },
           "then": {
-            "required": [
-              "relative_path",
-              "path_kind"
-            ]
+            "required": ["relative_path", "path_kind"]
           }
         },
         {
@@ -2065,10 +1771,7 @@
             }
           },
           "then": {
-            "required": [
-              "relative_path",
-              "reason"
-            ]
+            "required": ["relative_path", "reason"]
           }
         },
         {
@@ -2080,10 +1783,7 @@
             }
           },
           "then": {
-            "required": [
-              "row_ordinal",
-              "reason"
-            ]
+            "required": ["row_ordinal", "reason"]
           }
         }
       ]
@@ -2107,19 +1807,10 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "not_scanned",
-            "exhausted",
-            "limited",
-            "unavailable"
-          ]
+          "enum": ["not_scanned", "exhausted", "limited", "unavailable"]
         }
       },
-      "required": [
-        "area",
-        "examined",
-        "status"
-      ],
+      "required": ["area", "examined", "status"],
       "additionalProperties": false
     },
     "StorageInspection": {
@@ -2145,12 +1836,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "enum": [
-              "artifact_rows",
-              "filesystem_entries",
-              "findings",
-              "time"
-            ]
+            "enum": ["artifact_rows", "filesystem_entries", "findings", "time"]
           }
         },
         "budgets": {
@@ -2244,42 +1930,29 @@
           "type": "string"
         }
       },
-      "required": [
-        "run"
-      ],
+      "required": ["run"],
       "additionalProperties": false
     },
     "RunRemoval": {
       "type": "object",
       "properties": {
         "receipt": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "additionalProperties": true
         }
       },
-      "required": [
-        "receipt"
-      ],
+      "required": ["receipt"],
       "additionalProperties": false
     },
     "MutationSummary": {
-      "type": [
-        "object",
-        "null"
-      ],
+      "type": ["object", "null"],
       "properties": {
         "sample_count": {
           "type": "integer",
           "minimum": 0
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ],
+          "type": ["number", "null"],
           "description": "A non-finite floating-point aggregate serializes as null; it must not be relabeled as zero."
         },
         "weight_unit": {
@@ -2332,44 +2005,26 @@
           "maximum": 4294967295
         }
       },
-      "required": [
-        "name"
-      ],
+      "required": ["name"],
       "additionalProperties": false
     },
     "CountPlan": {
       "type": "object",
       "properties": {
         "status": {
-          "enum": [
-            "ready",
-            "blocked"
-          ]
+          "enum": ["ready", "blocked"]
         },
         "method": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "requested_scope": {
-          "enum": [
-            "all",
-            "selected"
-          ]
+          "enum": ["all", "selected"]
         },
         "collection_scope": {
-          "enum": [
-            "all",
-            "selected",
-            "all_then_filter"
-          ]
+          "enum": ["all", "selected", "all_then_filter"]
         },
         "functions": {
           "type": "array",
@@ -2406,9 +2061,7 @@
           "$ref": "#/$defs/CountPlan"
         }
       },
-      "required": [
-        "plan"
-      ],
+      "required": ["plan"],
       "additionalProperties": false
     },
     "CountMeasurement": {
@@ -2427,11 +2080,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "plan",
-        "parent_run_id",
-        "reused"
-      ],
+      "required": ["plan", "parent_run_id", "reused"],
       "additionalProperties": false
     },
     "CountFunction": {
@@ -2445,24 +2094,14 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1
         }
       },
-      "required": [
-        "name",
-        "file",
-        "line"
-      ],
+      "required": ["name", "file", "line"],
       "additionalProperties": false
     },
     "FunctionCount": {
@@ -2477,19 +2116,12 @@
           "maximum": 9007199254740991
         },
         "resumes": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991
         }
       },
-      "required": [
-        "function",
-        "calls",
-        "resumes"
-      ],
+      "required": ["function", "calls", "resumes"],
       "additionalProperties": false
     },
     "CallCounts": {
@@ -2509,29 +2141,16 @@
           "type": "string"
         },
         "parent_run_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "method": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "requested_scope": {
-          "enum": [
-            "all",
-            "selected"
-          ]
+          "enum": ["all", "selected"]
         },
         "collection_scope": {
-          "enum": [
-            "all",
-            "selected",
-            "all_then_filter"
-          ]
+          "enum": ["all", "selected", "all_then_filter"]
         },
         "counts": {
           "type": "array",
@@ -2540,10 +2159,7 @@
           }
         },
         "next_cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "total_count": {
           "type": "integer",
@@ -2587,43 +2203,25 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "source_position_basis": {
           "type": "string"
         },
         "self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "inclusive_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "weight_unit": {
           "type": "string"
@@ -2652,34 +2250,19 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "sample_count": {
           "type": "integer",
@@ -2708,43 +2291,25 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "source_position_basis": {
           "type": "string"
         },
         "self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "child_count": {
           "type": "integer",
@@ -2784,10 +2349,7 @@
       ]
     },
     "ProfileInspectionSelection": {
-      "type": [
-        "object",
-        "null"
-      ],
+      "type": ["object", "null"],
       "properties": {
         "id": {
           "type": "string"
@@ -2796,43 +2358,25 @@
           "type": "string"
         },
         "file": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "line": {
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "module": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "source_position_basis": {
           "type": "string"
         },
         "self_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "inclusive_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "weight_unit": {
           "type": "string"
@@ -2912,16 +2456,10 @@
           "maximum": 9007199254740991
         },
         "weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "selected_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "sample_count": {
           "type": "integer",
@@ -2953,10 +2491,7 @@
           }
         },
         "bounds": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "start_us": {
               "type": "integer",
@@ -2969,16 +2504,10 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "start_us",
-            "end_us"
-          ]
+          "required": ["start_us", "end_us"]
         },
         "window": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "start_us": {
               "type": "integer",
@@ -2991,10 +2520,7 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "start_us",
-            "end_us"
-          ]
+          "required": ["start_us", "end_us"]
         },
         "sample_count": {
           "type": "integer",
@@ -3007,16 +2533,10 @@
           "maximum": 9007199254740991
         },
         "total_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "capture_weight": {
-          "type": [
-            "number",
-            "null"
-          ]
+          "type": ["number", "null"]
         },
         "unaligned_count": {
           "type": "integer",
@@ -3068,10 +2588,7 @@
           }
         },
         "clock_domain": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "clock_domains": {
           "type": "array",
@@ -3128,34 +2645,23 @@
           "maximum": 9007199254740991
         }
       },
-      "required": [
-        "artifact_id",
-        "sha256"
-      ],
+      "required": ["artifact_id", "sha256"],
       "additionalProperties": false,
       "allOf": [
         {
           "if": {
-            "required": [
-              "offset"
-            ]
+            "required": ["offset"]
           },
           "then": {
-            "required": [
-              "length"
-            ]
+            "required": ["length"]
           }
         },
         {
           "if": {
-            "required": [
-              "length"
-            ]
+            "required": ["length"]
           },
           "then": {
-            "required": [
-              "offset"
-            ]
+            "required": ["offset"]
           }
         }
       ]
@@ -3165,11 +2671,7 @@
       "properties": {
         "space": {
           "type": "string",
-          "enum": [
-            "runtime_address",
-            "artifact_offset",
-            "function_offset"
-          ]
+          "enum": ["runtime_address", "artifact_offset", "function_offset"]
         },
         "start": {
           "type": "string",
@@ -3182,19 +2684,12 @@
           "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
         },
         "function_index": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991
         }
       },
-      "required": [
-        "space",
-        "start",
-        "end_exclusive"
-      ],
+      "required": ["space", "start", "end_exclusive"],
       "additionalProperties": false
     },
     "CodeValidity": {
@@ -3209,18 +2704,12 @@
           "minLength": 1
         },
         "start_us": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991
         },
         "end_us": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0,
           "maximum": 9007199254740991
         },
@@ -3254,47 +2743,26 @@
         },
         "instance_kind": {
           "type": "string",
-          "enum": [
-            "runtime",
-            "static"
-          ]
+          "enum": ["runtime", "static"]
         },
         "runtime_instance_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "representation": {
           "type": "string",
-          "enum": [
-            "machine_code",
-            "wasm",
-            "bytecode",
-            "source",
-            "logical"
-          ]
+          "enum": ["machine_code", "wasm", "bytecode", "source", "logical"]
         },
         "architecture": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "code_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "artifact": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "artifact_id": {
               "type": "string",
@@ -3316,51 +2784,33 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "artifact_id",
-            "sha256"
-          ],
+          "required": ["artifact_id", "sha256"],
           "additionalProperties": false,
           "allOf": [
             {
               "if": {
-                "required": [
-                  "offset"
-                ]
+                "required": ["offset"]
               },
               "then": {
-                "required": [
-                  "length"
-                ]
+                "required": ["length"]
               }
             },
             {
               "if": {
-                "required": [
-                  "length"
-                ]
+                "required": ["length"]
               },
               "then": {
-                "required": [
-                  "offset"
-                ]
+                "required": ["offset"]
               }
             }
           ]
         },
         "range": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "space": {
               "type": "string",
-              "enum": [
-                "runtime_address",
-                "artifact_offset",
-                "function_offset"
-              ]
+              "enum": ["runtime_address", "artifact_offset", "function_offset"]
             },
             "start": {
               "type": "string",
@@ -3373,26 +2823,16 @@
               "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
             },
             "function_index": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "space",
-            "start",
-            "end_exclusive"
-          ],
+          "required": ["space", "start", "end_exclusive"],
           "additionalProperties": false
         },
         "validity": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "clock": {
               "type": "string",
@@ -3403,18 +2843,12 @@
               "minLength": 1
             },
             "start_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
             "end_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
@@ -3441,50 +2875,32 @@
           "additionalProperties": false
         },
         "label": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "source": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "path": {
               "type": "string",
               "minLength": 1
             },
             "line": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 1,
               "maximum": 9007199254740991
             },
             "column": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "path"
-          ],
+          "required": ["path"],
           "additionalProperties": false
         }
       },
-      "required": [
-        "schema_version",
-        "instance_kind",
-        "representation"
-      ],
+      "required": ["schema_version", "instance_kind", "representation"],
       "additionalProperties": false
     },
     "CodeMapping": {
@@ -3498,11 +2914,7 @@
           "properties": {
             "space": {
               "type": "string",
-              "enum": [
-                "runtime_address",
-                "artifact_offset",
-                "function_offset"
-              ]
+              "enum": ["runtime_address", "artifact_offset", "function_offset"]
             },
             "start": {
               "type": "string",
@@ -3515,19 +2927,12 @@
               "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
             },
             "function_index": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "space",
-            "start",
-            "end_exclusive"
-          ],
+          "required": ["space", "start", "end_exclusive"],
           "additionalProperties": false
         },
         "to_range": {
@@ -3535,11 +2940,7 @@
           "properties": {
             "space": {
               "type": "string",
-              "enum": [
-                "runtime_address",
-                "artifact_offset",
-                "function_offset"
-              ]
+              "enum": ["runtime_address", "artifact_offset", "function_offset"]
             },
             "start": {
               "type": "string",
@@ -3552,33 +2953,20 @@
               "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
             },
             "function_index": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "space",
-            "start",
-            "end_exclusive"
-          ],
+          "required": ["space", "start", "end_exclusive"],
           "additionalProperties": false
         },
         "cardinality": {
           "type": "string",
-          "enum": [
-            "exclusive",
-            "shared"
-          ]
+          "enum": ["exclusive", "shared"]
         },
         "validity": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "clock": {
               "type": "string",
@@ -3589,18 +2977,12 @@
               "minLength": 1
             },
             "start_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
             "end_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
@@ -3654,34 +3036,23 @@
                     "maximum": 9007199254740991
                   }
                 },
-                "required": [
-                  "artifact_id",
-                  "sha256"
-                ],
+                "required": ["artifact_id", "sha256"],
                 "additionalProperties": false,
                 "allOf": [
                   {
                     "if": {
-                      "required": [
-                        "offset"
-                      ]
+                      "required": ["offset"]
                     },
                     "then": {
-                      "required": [
-                        "length"
-                      ]
+                      "required": ["length"]
                     }
                   },
                   {
                     "if": {
-                      "required": [
-                        "length"
-                      ]
+                      "required": ["length"]
                     },
                     "then": {
-                      "required": [
-                        "offset"
-                      ]
+                      "required": ["offset"]
                     }
                   }
                 ]
@@ -3694,17 +3065,10 @@
             },
             "verification": {
               "type": "string",
-              "enum": [
-                "declared",
-                "identity_checked",
-                "semantic_checked"
-              ]
+              "enum": ["declared", "identity_checked", "semantic_checked"]
             },
             "validator": {
-              "type": [
-                "string",
-                "null"
-              ],
+              "type": ["string", "null"],
               "minLength": 1
             },
             "semantic_evidence": {
@@ -3716,11 +3080,7 @@
               "maxItems": 10000
             }
           },
-          "required": [
-            "artifact_refs",
-            "method",
-            "verification"
-          ],
+          "required": ["artifact_refs", "method", "verification"],
           "additionalProperties": false
         }
       },
@@ -3752,37 +3112,23 @@
               "maximum": 100000
             }
           },
-          "required": [
-            "observation_id",
-            "frame_index"
-          ],
+          "required": ["observation_id", "frame_index"],
           "additionalProperties": false
         },
         "state": {
           "type": "string",
-          "enum": [
-            "unmapped",
-            "unknown"
-          ]
+          "enum": ["unmapped", "unknown"]
         },
         "reason_code": {
           "type": "string",
           "minLength": 1
         }
       },
-      "required": [
-        "schema_version",
-        "anchor",
-        "state",
-        "reason_code"
-      ],
+      "required": ["schema_version", "anchor", "state", "reason_code"],
       "additionalProperties": false
     },
     "CodeInspectionAnchor": {
-      "type": [
-        "object",
-        "null"
-      ],
+      "type": ["object", "null"],
       "properties": {
         "observation_id": {
           "type": "string",
@@ -3806,13 +3152,8 @@
           "type": "boolean"
         },
         "frame": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "required": [
-            "function"
-          ],
+          "type": ["object", "null"],
+          "required": ["function"],
           "properties": {
             "function": {
               "type": "string"
@@ -3855,28 +3196,17 @@
           "additionalProperties": false
         },
         "code_instance_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "code_offset": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
         },
         "association_status": {
           "type": "string",
-          "enum": [
-            "inline",
-            "derived",
-            "ambiguous",
-            "unavailable"
-          ]
+          "enum": ["inline", "derived", "ambiguous", "unavailable"]
         },
         "association_ids": {
           "type": "array",
@@ -3887,10 +3217,7 @@
           "maxItems": 500
         },
         "code_address_basis": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         }
       },
@@ -3918,17 +3245,11 @@
           "maximum": 9007199254740991
         },
         "weight": {
-          "type": [
-            "number",
-            "null"
-          ],
+          "type": ["number", "null"],
           "minimum": 0
         }
       },
-      "required": [
-        "sample_count",
-        "weight"
-      ],
+      "required": ["sample_count", "weight"],
       "additionalProperties": false
     },
     "CodeCoverage": {
@@ -3963,10 +3284,7 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "complete",
-            "unavailable"
-          ]
+          "enum": ["complete", "unavailable"]
         }
       },
       "required": [
@@ -4004,12 +3322,7 @@
           }
         }
       },
-      "required": [
-        "id",
-        "basis",
-        "instance",
-        "evidence"
-      ],
+      "required": ["id", "basis", "instance", "evidence"],
       "additionalProperties": false
     },
     "CodeInspectionMapping": {
@@ -4042,14 +3355,7 @@
           }
         }
       },
-      "required": [
-        "id",
-        "from",
-        "to",
-        "basis",
-        "mapping",
-        "evidence"
-      ],
+      "required": ["id", "from", "to", "basis", "mapping", "evidence"],
       "additionalProperties": false
     },
     "CodeInspectionUnavailable": {
@@ -4063,10 +3369,7 @@
           "$ref": "#/$defs/CodeUnavailable"
         }
       },
-      "required": [
-        "id",
-        "unavailable"
-      ],
+      "required": ["id", "unavailable"],
       "additionalProperties": false
     },
     "CodeArtifactStatus": {
@@ -4093,10 +3396,7 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "metadata_matches",
-            "mismatch"
-          ]
+          "enum": ["metadata_matches", "mismatch"]
         }
       },
       "required": [
@@ -4167,10 +3467,7 @@
           }
         },
         "clock_domain": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": ["string", "null"]
         },
         "clock_domains": {
           "type": "array",
@@ -4203,10 +3500,7 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "messages",
-            "truncated"
-          ],
+          "required": ["messages", "truncated"],
           "additionalProperties": false
         }
       },
@@ -4236,33 +3530,21 @@
         },
         "status": {
           "type": "string",
-          "enum": [
-            "available",
-            "blocked"
-          ]
+          "enum": ["available", "blocked"]
         },
         "reason": {
           "type": "string",
           "minLength": 1
         },
         "operation": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "params": {
           "type": "object"
         }
       },
-      "required": [
-        "id",
-        "status",
-        "reason",
-        "operation",
-        "params"
-      ],
+      "required": ["id", "status", "reason", "operation", "params"],
       "additionalProperties": false
     },
     "CodePlan": {
@@ -4277,11 +3559,7 @@
         },
         "goal": {
           "type": "string",
-          "enum": [
-            "source",
-            "code_origin",
-            "semantic_origin"
-          ]
+          "enum": ["source", "code_origin", "semantic_origin"]
         },
         "steps": {
           "type": "array",
@@ -4294,13 +3572,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "result_identity",
-        "anchor",
-        "goal",
-        "steps",
-        "truncated"
-      ],
+      "required": ["result_identity", "anchor", "goal", "steps", "truncated"],
       "additionalProperties": false
     },
     "CodeFrameMapping": {
@@ -4315,25 +3587,16 @@
           "maximum": 100000
         },
         "code_offset": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1,
           "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
         },
         "code_address_basis": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "minLength": 1
         },
         "validity": {
-          "type": [
-            "object",
-            "null"
-          ],
+          "type": ["object", "null"],
           "properties": {
             "clock": {
               "type": "string",
@@ -4344,18 +3607,12 @@
               "minLength": 1
             },
             "start_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
             "end_us": {
-              "type": [
-                "integer",
-                "null"
-              ],
+              "type": ["integer", "null"],
               "minimum": 0,
               "maximum": 9007199254740991
             },
@@ -4409,34 +3666,23 @@
                     "maximum": 9007199254740991
                   }
                 },
-                "required": [
-                  "artifact_id",
-                  "sha256"
-                ],
+                "required": ["artifact_id", "sha256"],
                 "additionalProperties": false,
                 "allOf": [
                   {
                     "if": {
-                      "required": [
-                        "offset"
-                      ]
+                      "required": ["offset"]
                     },
                     "then": {
-                      "required": [
-                        "length"
-                      ]
+                      "required": ["length"]
                     }
                   },
                   {
                     "if": {
-                      "required": [
-                        "length"
-                      ]
+                      "required": ["length"]
                     },
                     "then": {
-                      "required": [
-                        "offset"
-                      ]
+                      "required": ["offset"]
                     }
                   }
                 ]
@@ -4449,17 +3695,10 @@
             },
             "verification": {
               "type": "string",
-              "enum": [
-                "declared",
-                "identity_checked",
-                "semantic_checked"
-              ]
+              "enum": ["declared", "identity_checked", "semantic_checked"]
             },
             "validator": {
-              "type": [
-                "string",
-                "null"
-              ],
+              "type": ["string", "null"],
               "minLength": 1
             },
             "semantic_evidence": {
@@ -4471,19 +3710,11 @@
               "maxItems": 10000
             }
           },
-          "required": [
-            "artifact_refs",
-            "method",
-            "verification"
-          ],
+          "required": ["artifact_refs", "method", "verification"],
           "additionalProperties": false
         }
       },
-      "required": [
-        "schema_version",
-        "frame_index",
-        "proof"
-      ],
+      "required": ["schema_version", "frame_index", "proof"],
       "additionalProperties": false
     },
     "CodeInspectionFrameMapping": {
@@ -4516,14 +3747,7 @@
           "$ref": "#/$defs/CodeFrameMapping"
         }
       },
-      "required": [
-        "id",
-        "from",
-        "to",
-        "basis",
-        "frame_mapping",
-        "evidence"
-      ],
+      "required": ["id", "from", "to", "basis", "frame_mapping", "evidence"],
       "additionalProperties": false
     }
   }
