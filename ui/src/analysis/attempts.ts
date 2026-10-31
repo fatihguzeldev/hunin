@@ -3,7 +3,7 @@ import { badge, button, el, empty, errorView } from '../dom';
 import { date } from '../format';
 import type { ViewContext } from '../investigation/view';
 import { analysisAttemptMetadata } from './metadata';
-import { recordingUrl } from '../projects/context';
+import { analyzerOutput } from './output-view';
 
 export function analyzerAttempts(
   items: AnalysisResult[],
@@ -91,14 +91,7 @@ export function analyzerAttempts(
         result.selected === true &&
           (result.result_set_id || result.id) &&
           ['accepted', 'replayed'].includes(result.status)
-          ? el(
-              'a',
-              {
-                href: recordingUrl(location.href, context.run.id, 'evidence')
-                  .href,
-              },
-              'Inspect accepted evidence',
-            )
+          ? analyzerOutput(context, result.raw)
           : null,
         ...result.diagnostics.map((message) => el('p', {}, message)),
         el(
