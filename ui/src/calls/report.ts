@@ -3,12 +3,8 @@ import { countLabel, countStatus } from '../call-counts';
 import { badge, button, el, empty, loading } from '../dom';
 type CountReport = OperationOutputs['calls.query'];
 
-function recordingLink(id: string, text: string): HTMLElement {
-  return el(
-    'a',
-    { href: `?run=${encodeURIComponent(id)}&view=calls`, class: 'mono' },
-    `${text}: ${id}`,
-  );
+function recordingLink(id: string, text: string, href: string): HTMLElement {
+  return el('a', { href, class: 'mono' }, `${text}: ${id}`);
 }
 export function countReport(
   data: CountReport,
@@ -16,6 +12,7 @@ export function countReport(
     cancel: () => Promise<void>;
     refresh: () => void;
     more: (cursor: string) => void;
+    recordingHref: (id: string) => string;
   },
 ): HTMLElement {
   const content = el(
@@ -33,10 +30,19 @@ export function countReport(
       recordingLink(
         data.run_id,
         data.parent_run_id ? 'Counting recording' : 'Recording',
+        actions.recordingHref(data.run_id),
       ),
     ),
     data.parent_run_id
-      ? el('div', {}, recordingLink(data.parent_run_id, 'Original recording'))
+      ? el(
+          'div',
+          {},
+          recordingLink(
+            data.parent_run_id,
+            'Original recording',
+            actions.recordingHref(data.parent_run_id),
+          ),
+        )
       : null,
     el(
       'p',

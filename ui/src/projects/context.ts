@@ -17,6 +17,15 @@ export function projectUrl(href: string, projectId?: string): URL {
   return url;
 }
 
+/** Recording navigation keeps the document's selected project and server. */
+export function recordingUrl(href: string, runId: string, view: string): URL {
+  const url = new URL(href);
+  url.searchParams.set('run', runId);
+  url.searchParams.set('view', view);
+  url.hash = '';
+  return url;
+}
+
 type PrivateStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 export function projectStorageScope(project: Project): string {

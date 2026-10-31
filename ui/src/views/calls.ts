@@ -9,12 +9,14 @@ import { appendCountPage, CountActivity, CountAttempt } from '../call-counts';
 import { button, el, errorView, loading } from '../dom';
 import { linkedRequest } from '../requests';
 import type { ViewContext } from '../investigation/view';
+import { recordingUrl } from '../projects/context';
 
 type CountReport = OperationOutputs['calls.query'];
 type CountParams = OperationInputs['calls.measure'];
 
 /** Count observations belong to a separate recording, never to sampled stack weights. */
 export async function calls(context: ViewContext): Promise<HTMLElement> {
+  const documentHref = location.href;
   const state = context.investigation.calls;
   let sourceRunId = context.run.id;
   const form = countForm(context, {
@@ -121,6 +123,7 @@ export async function calls(context: ViewContext): Promise<HTMLElement> {
   function renderReport(data: CountReport): void {
     reportBody.replaceChildren(
       countReport(data, {
+        recordingHref: (id) => recordingUrl(documentHref, id, 'calls').href,
         cancel: () => cancelRun(data.run_id),
         refresh: () => {
           void load(data.run_id);

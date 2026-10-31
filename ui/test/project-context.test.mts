@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   projectFromUrl,
   projectUrl,
+  recordingUrl,
   projectStorage,
   projectStorageScope,
   resolveProjectSelection,
@@ -10,6 +11,46 @@ import {
 import type { ProjectCatalog } from '../src/operations.generated.js';
 import { Investigations } from '../src/investigation/state.js';
 import { AnalysisWatch } from '../src/analysis/watch.js';
+
+test('original/count recording links retain each tab project across deep links and reloads', () => {
+  for (const project of ['one', 'two / encoded']) {
+    const document = new URL('http://localhost:7878/?retained=1#source');
+    document.searchParams.set('project', project);
+    document.searchParams.set('run', 'count-child');
+    const parent = recordingUrl(document.href, 'sample-parent', 'calls');
+    const child = recordingUrl(parent.href, 'count-child', 'calls');
+    assert.equal(parent.origin, document.origin);
+    assert.equal(parent.searchParams.get('project'), project);
+    assert.equal(parent.searchParams.get('run'), 'sample-parent');
+    assert.equal(parent.searchParams.get('view'), 'calls');
+    assert.equal(parent.searchParams.get('retained'), '1');
+    assert.equal(parent.hash, '');
+    assert.equal(child.searchParams.get('project'), project);
+    assert.equal(child.searchParams.get('run'), 'count-child');
+    assert.equal(
+      resolveProjectSelection(
+        {
+          projects: [
+            {
+              id: project,
+              name: project,
+              store_path: '/store',
+              workspace_roots: [],
+              legacy: false,
+            },
+          ],
+          selected_project_id: null,
+          direct_store: false,
+          storage_scope: null,
+        },
+        parent.href,
+      ).kind,
+      'project',
+    );
+  }
+  const direct = recordingUrl('http://localhost/?run=parent', 'child', 'calls');
+  assert.equal(direct.searchParams.has('project'), false);
+});
 
 test('project navigation retains the server origin and clears recording-specific URLs', () => {
   const url = projectUrl(
