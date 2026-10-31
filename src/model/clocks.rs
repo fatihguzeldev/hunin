@@ -9,6 +9,16 @@ pub(crate) struct Clock<'a> {
     pub mapping: &'a str,
 }
 
+/// Relative timestamps can be compared only inside an explicitly named origin.
+/// An opaque legacy clock label alone never opts into relative placement.
+pub(crate) fn runtime_relative_domain(attributes: &Value) -> Option<&str> {
+    let domain = attributes["clock"].as_str()?;
+    (attributes["clock_alignment"] == "runtime_relative"
+        && !domain.trim().is_empty()
+        && !matches!(domain, "unix_epoch" | "unknown"))
+    .then_some(domain)
+}
+
 fn epoch_mapping(mapping: &str) -> bool {
     matches!(
         mapping,
@@ -62,6 +72,10 @@ pub(crate) fn validate(attributes: &Value) -> Result<()> {
         ensure!(
             !epoch_mapping(mapping) || attributes["clock"] == "unix_epoch",
             "observation clock_alignment {mapping} requires clock unix_epoch"
+        );
+        ensure!(
+            mapping != "runtime_relative" || runtime_relative_domain(attributes).is_some(),
+            "runtime-relative clock needs an explicit non-epoch domain"
         );
     }
     Ok(())

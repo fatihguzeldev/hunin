@@ -87,6 +87,20 @@
           },
           "code_id": {
             "type": "string"
+          },
+          "code_instance_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "code_offset": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+          },
+          "code_address_basis": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Declared basis of the byte coordinate, for example runtime_pc, validated_arm64_callsite_from_return_address, or collector_adjusted_lookup_address. This does not establish instruction boundaries or execution cost."
           }
         },
         "additionalProperties": false
@@ -179,7 +193,272 @@
         }
       },
       "then": {
-        "required": ["name"]
+        "required": ["name"],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "code.instance"
+                }
+              },
+              "required": ["name"]
+            },
+            "then": {
+              "properties": {
+                "attributes": {
+                  "type": "object",
+                  "properties": {
+                    "code_instance": {
+                      "type": "object",
+                      "properties": {
+                        "schema_version": {
+                          "const": 1
+                        },
+                        "instance_kind": {
+                          "type": "string",
+                          "enum": ["runtime", "static"]
+                        },
+                        "runtime_instance_id": {
+                          "type": ["string", "null"],
+                          "minLength": 1
+                        },
+                        "representation": {
+                          "type": "string",
+                          "enum": [
+                            "machine_code",
+                            "wasm",
+                            "bytecode",
+                            "source",
+                            "logical"
+                          ]
+                        },
+                        "architecture": {
+                          "type": ["string", "null"],
+                          "minLength": 1
+                        },
+                        "code_id": {
+                          "type": ["string", "null"],
+                          "minLength": 1
+                        },
+                        "artifact": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "artifact_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "length": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["artifact_id", "sha256"],
+                          "additionalProperties": false,
+                          "allOf": [
+                            {
+                              "if": {
+                                "required": ["offset"]
+                              },
+                              "then": {
+                                "required": ["length"]
+                              }
+                            },
+                            {
+                              "if": {
+                                "required": ["length"]
+                              },
+                              "then": {
+                                "required": ["offset"]
+                              }
+                            }
+                          ]
+                        },
+                        "range": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "space": {
+                              "type": "string",
+                              "enum": [
+                                "runtime_address",
+                                "artifact_offset",
+                                "function_offset"
+                              ]
+                            },
+                            "start": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "end_exclusive": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "function_index": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["space", "start", "end_exclusive"],
+                          "additionalProperties": false
+                        },
+                        "validity": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "clock": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "alignment": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "start_us": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "end_us": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "start_censored": {
+                              "type": "boolean"
+                            },
+                            "end_censored": {
+                              "type": "boolean"
+                            },
+                            "boundary_basis": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "clock",
+                            "alignment",
+                            "start_us",
+                            "end_us",
+                            "start_censored",
+                            "end_censored",
+                            "boundary_basis"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "label": {
+                          "type": ["string", "null"],
+                          "minLength": 1
+                        },
+                        "source": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "line": {
+                              "type": ["integer", "null"],
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "column": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["path"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "schema_version",
+                        "instance_kind",
+                        "representation"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["code_instance"]
+                }
+              },
+              "required": ["attributes"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "name": {
+                  "const": "code.mapping_unavailable"
+                }
+              },
+              "required": ["name"]
+            },
+            "then": {
+              "properties": {
+                "attributes": {
+                  "type": "object",
+                  "properties": {
+                    "code_mapping_unavailable": {
+                      "type": "object",
+                      "properties": {
+                        "schema_version": {
+                          "const": 1
+                        },
+                        "anchor": {
+                          "type": "object",
+                          "properties": {
+                            "observation_id": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "frame_index": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 100000
+                            }
+                          },
+                          "required": ["observation_id", "frame_index"],
+                          "additionalProperties": false
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": ["unmapped", "unknown"]
+                        },
+                        "reason_code": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "schema_version",
+                        "anchor",
+                        "state",
+                        "reason_code"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["code_mapping_unavailable"]
+                }
+              },
+              "required": ["attributes"]
+            }
+          }
+        ]
       }
     },
     {
@@ -203,7 +482,236 @@
         }
       },
       "then": {
-        "required": ["from", "to", "relation", "evidence"]
+        "required": ["from", "to", "relation", "evidence"],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "relation": {
+                  "const": "code_maps_to"
+                }
+              },
+              "required": ["relation"]
+            },
+            "then": {
+              "properties": {
+                "attributes": {
+                  "type": "object",
+                  "properties": {
+                    "code_mapping": {
+                      "type": "object",
+                      "properties": {
+                        "schema_version": {
+                          "const": 1
+                        },
+                        "from_range": {
+                          "type": "object",
+                          "properties": {
+                            "space": {
+                              "type": "string",
+                              "enum": [
+                                "runtime_address",
+                                "artifact_offset",
+                                "function_offset"
+                              ]
+                            },
+                            "start": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "end_exclusive": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "function_index": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["space", "start", "end_exclusive"],
+                          "additionalProperties": false
+                        },
+                        "to_range": {
+                          "type": "object",
+                          "properties": {
+                            "space": {
+                              "type": "string",
+                              "enum": [
+                                "runtime_address",
+                                "artifact_offset",
+                                "function_offset"
+                              ]
+                            },
+                            "start": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "end_exclusive": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^0x(0|[1-9a-f][0-9a-f]{0,15})$"
+                            },
+                            "function_index": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["space", "start", "end_exclusive"],
+                          "additionalProperties": false
+                        },
+                        "cardinality": {
+                          "type": "string",
+                          "enum": ["exclusive", "shared"]
+                        },
+                        "validity": {
+                          "type": ["object", "null"],
+                          "properties": {
+                            "clock": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "alignment": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "start_us": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "end_us": {
+                              "type": ["integer", "null"],
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "start_censored": {
+                              "type": "boolean"
+                            },
+                            "end_censored": {
+                              "type": "boolean"
+                            },
+                            "boundary_basis": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "clock",
+                            "alignment",
+                            "start_us",
+                            "end_us",
+                            "start_censored",
+                            "end_censored",
+                            "boundary_basis"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "proof": {
+                          "type": "object",
+                          "properties": {
+                            "artifact_refs": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "artifact_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "offset": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "length": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": ["artifact_id", "sha256"],
+                                "additionalProperties": false,
+                                "allOf": [
+                                  {
+                                    "if": {
+                                      "required": ["offset"]
+                                    },
+                                    "then": {
+                                      "required": ["length"]
+                                    }
+                                  },
+                                  {
+                                    "if": {
+                                      "required": ["length"]
+                                    },
+                                    "then": {
+                                      "required": ["offset"]
+                                    }
+                                  }
+                                ]
+                              },
+                              "maxItems": 256
+                            },
+                            "method": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "verification": {
+                              "type": "string",
+                              "enum": [
+                                "declared",
+                                "identity_checked",
+                                "semantic_checked"
+                              ]
+                            },
+                            "validator": {
+                              "type": ["string", "null"],
+                              "minLength": 1
+                            },
+                            "semantic_evidence": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "maxItems": 10000
+                            }
+                          },
+                          "required": [
+                            "artifact_refs",
+                            "method",
+                            "verification"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "schema_version",
+                        "from_range",
+                        "to_range",
+                        "cardinality",
+                        "proof"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["code_mapping"]
+                }
+              },
+              "required": ["attributes"]
+            }
+          }
+        ]
       }
     },
     {

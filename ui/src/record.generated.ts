@@ -20,6 +20,9 @@ type RecordBase = {
   "module"?: string;
   "address"?: string;
   "code_id"?: string;
+  "code_instance_id"?: string;
+  "code_offset"?: string;
+  "code_address_basis"?: string;
 }>;
   "weight"?: number;
   "weight_unit"?: "samples" | "microseconds" | "bytes" | "count";
