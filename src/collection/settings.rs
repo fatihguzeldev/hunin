@@ -25,6 +25,10 @@ impl CapturePlan {
             "command": self.command.iter().map(|value| normalize(value)).collect::<Vec<_>>(),
             "environment": self.env.iter().map(|(key, value)| (key.clone(), normalize(value))).collect::<BTreeMap<_, _>>(),
         });
+        if request.capture_mode == super::CaptureMode::CodeOrigin {
+            settings["capture_mode"] = json!(request.capture_mode);
+            settings["code_options"] = json!(request.code_options.clone().unwrap_or_default());
+        }
         if let Some(identity) = &self.collector_identity {
             settings["collector_identity"] = if super::native::handles_runtime(&request.runtime) {
                 super::native::tool::settings_identity(identity)
@@ -48,6 +52,8 @@ mod tests {
             artifact_dir: "/capture/recording".into(),
             run_id: "recording".into(),
             runtime: "native".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: BTreeMap::new(),
         };
         let mut plan: CapturePlan = serde_json::from_value(json!({
@@ -85,6 +91,8 @@ mod tests {
             artifact_dir: "/capture/recording-one".into(),
             run_id: "recording-one".into(),
             runtime: "deno".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: BTreeMap::new(),
         };
         let plan: CapturePlan = serde_json::from_value(json!({
@@ -112,6 +120,8 @@ mod tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let request = |id: &str, env| CaptureRequest {
+            capture_mode: Default::default(),
+            code_options: None,
             command: vec![
                 executable.to_string_lossy().into_owned(),
                 "-e".into(),

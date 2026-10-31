@@ -84,6 +84,8 @@ raise SystemExit(7)
             artifact_dir: work.join(format!("capture-{label}")),
             run_id: format!("graal-{label}"),
             runtime: "graalpy".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: BTreeMap::new(),
         };
         let plan = prepare(&request).unwrap();

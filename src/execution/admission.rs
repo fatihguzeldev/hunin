@@ -43,6 +43,16 @@ impl Engine {
         origin: Option<CountOrigin>,
     ) -> Result<Run> {
         self.check_admission()?;
+        request
+            .capture_mode
+            .unwrap_or_default()
+            .validate_options(request.code_options.as_ref())?;
+        anyhow::ensure!(
+            request.call_counting.is_none()
+                || request.capture_mode.unwrap_or_default()
+                    == collection::CaptureMode::AutomaticCpu,
+            "code-origin collection and call counting require separate executions"
+        );
         if let Some(counting) = &request.call_counting {
             counting.validate()?;
         }
@@ -141,6 +151,9 @@ impl Engine {
             Sha256::digest(serde_json::to_vec(&recipe)?)
         ));
         run.source["owner"] = serde_json::to_value(&self.owner)?;
+        if request.capture_mode.unwrap_or_default() == collection::CaptureMode::CodeOrigin {
+            run.source["capture_policy"] = json!({"mode":"code-origin", "code_options":request.code_options.clone().unwrap_or_default()});
+        }
         if let Some(counting) = &request.call_counting {
             run.source["call_counting"] = json!({
                 "options":counting,

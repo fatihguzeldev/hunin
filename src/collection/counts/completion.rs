@@ -206,6 +206,8 @@ mod tests {
             artifact_dir: root.path().into(),
             run_id: "control".into(),
             runtime: "c".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: Default::default(),
         };
         let profile = root.path().join("calls.calls.jsonl");

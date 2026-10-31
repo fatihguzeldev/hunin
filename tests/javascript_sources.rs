@@ -76,6 +76,8 @@ fn capture(
         artifact_dir: root.join("capture"),
         run_id: "script-control".into(),
         runtime: runtime.into(),
+        capture_mode: Default::default(),
+        code_options: None,
         env: BTreeMap::new(),
     })
     .unwrap();

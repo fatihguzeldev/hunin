@@ -71,6 +71,8 @@ pub(super) fn plan(store: &Store, params: &Value) -> Result<(Run, CountRequest, 
         artifact_dir: store.root().join("captures").join(&run.id),
         run_id: run.id.clone(),
         runtime: run.runtime.clone(),
+        capture_mode: Default::default(),
+        code_options: None,
         env: environment(&run)?,
     };
     let mut plan = crate::collection::counts::plan(&capture, &options)?;

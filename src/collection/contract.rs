@@ -3,6 +3,75 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureMode {
+    #[default]
+    AutomaticCpu,
+    CodeOrigin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CodeOptions {
+    pub compiler_export: bool,
+    pub function_filter: Option<String>,
+    pub sampling_interval_us: u32,
+    pub max_artifact_bytes: u64,
+}
+
+impl Default for CodeOptions {
+    fn default() -> Self {
+        Self {
+            compiler_export: false,
+            function_filter: None,
+            sampling_interval_us: 1000,
+            max_artifact_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
+impl CodeOptions {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            (100..=1_000_000).contains(&self.sampling_interval_us),
+            "code sampling interval must be 100..1000000 microseconds"
+        );
+        anyhow::ensure!(
+            (1..=536_870_912).contains(&self.max_artifact_bytes),
+            "code artifact budget must be 1..536870912 bytes"
+        );
+        if let Some(filter) = &self.function_filter {
+            anyhow::ensure!(
+                !filter.is_empty() && filter.len() <= 256 && !filter.contains(['\0', '\n', '\r']),
+                "code function filter must be 1..256 bytes without NUL or newlines"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl CaptureMode {
+    pub fn validate_options(self, options: Option<&CodeOptions>) -> Result<()> {
+        anyhow::ensure!(
+            self == Self::CodeOrigin || options.is_none(),
+            "code_options require capture_mode code-origin"
+        );
+        if let Some(options) = options {
+            options.validate()?;
+        }
+        Ok(())
+    }
+    pub fn validate_runtime(self, runtime: &str, options: Option<&CodeOptions>) -> Result<()> {
+        self.validate_options(options)?;
+        anyhow::ensure!(
+            self != Self::CodeOrigin || runtime == "node",
+            "code-origin requires Node; the selected runtime is {runtime}"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureRequest {
     pub command: Vec<String>,
@@ -10,6 +79,10 @@ pub struct CaptureRequest {
     pub artifact_dir: PathBuf,
     pub run_id: String,
     pub runtime: String,
+    #[serde(default)]
+    pub capture_mode: CaptureMode,
+    #[serde(default)]
+    pub code_options: Option<CodeOptions>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }

@@ -25,6 +25,8 @@ pub struct StartRequest {
     pub command: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub runtime: Option<String>,
+    pub capture_mode: Option<crate::collection::CaptureMode>,
+    pub code_options: Option<crate::collection::CodeOptions>,
     pub timeout_seconds: Option<f64>,
     pub expected_exit_code: Option<i32>,
     #[serde(default)]

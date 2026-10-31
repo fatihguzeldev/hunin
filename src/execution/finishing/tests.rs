@@ -23,6 +23,8 @@ fn incomplete_raw_retention_preserves_target_correctness_and_rejects_all_normali
         artifact_dir: directory.clone(),
         run_id: run.id.clone(),
         runtime: "node".into(),
+        capture_mode: Default::default(),
+        code_options: None,
         env: BTreeMap::new(),
     };
     let plan = serde_json::from_value(
@@ -114,6 +116,8 @@ fn expired_finishing_preserves_observed_exit_and_unknown_exact_output_without_pu
         artifact_dir: directory.clone(),
         run_id: run.id.clone(),
         runtime: "node".into(),
+        capture_mode: Default::default(),
+        code_options: None,
         env: BTreeMap::new(),
     };
     let plan = serde_json::from_value(
@@ -177,6 +181,8 @@ fn stdout_io_failure_settles_finishing_and_preserves_cancellation_and_known_exit
             artifact_dir: directory.clone(),
             run_id: run.id.clone(),
             runtime: "none".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: BTreeMap::new(),
         };
         let plan = serde_json::from_value(

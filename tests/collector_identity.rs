@@ -51,6 +51,8 @@ async fn measurement_contract_changes_disqualify_otherwise_equivalent_comparison
             artifact_dir: data.path().join("capture"),
             run_id: "capture".into(),
             runtime: runtime.into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: Default::default(),
         };
         let mut plan: CapturePlan = serde_json::from_value(json!({

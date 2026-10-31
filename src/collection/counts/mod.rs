@@ -90,6 +90,8 @@ mod tests {
             artifact_dir: root.join("capture"),
             run_id: "count-control".into(),
             runtime: runtime.into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: Default::default(),
         }
     }

@@ -15,8 +15,8 @@ use anyhow::{Result, bail};
 pub(crate) use artifacts::artifacts_from_paths;
 pub use artifacts::capture_artifacts;
 pub use contract::{
-    CaptureArtifact, CaptureCompletion, CaptureOutput, CapturePlan, CaptureProducer,
-    CaptureRequest, CompletionState, RawCaptureBundle, RawProfile,
+    CaptureArtifact, CaptureCompletion, CaptureMode, CaptureOutput, CapturePlan, CaptureProducer,
+    CaptureRequest, CodeOptions, CompletionState, RawCaptureBundle, RawProfile,
 };
 pub use selection::{
     CaptureAdapter, CaptureModeRegistration, LaunchExecutableKind, RuntimeRegistration,
@@ -31,6 +31,9 @@ pub fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
     let selected = select_runtime(&request.runtime)?;
     let mut canonical = request.clone();
     canonical.runtime = selected.id.into();
+    canonical
+        .capture_mode
+        .validate_runtime(&canonical.runtime, canonical.code_options.as_ref())?;
     fs::create_dir_all(&canonical.artifact_dir)?;
     match selected.adapter {
         CaptureAdapter::JavaScript => javascript::prepare(&canonical),

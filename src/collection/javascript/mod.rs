@@ -138,7 +138,14 @@ pub(super) fn prepare(request: &CaptureRequest) -> Result<CapturePlan> {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    decode_plan(&output.stdout)
+    let plan = decode_plan(&output.stdout)?;
+    if request.capture_mode == super::CaptureMode::CodeOrigin {
+        ensure!(
+            matches!(&plan.output, super::CaptureOutput::Profiles { format } if format == "v8-code"),
+            "selected collector does not implement the requested code-origin contract; update matching collector assets"
+        );
+    }
+    Ok(plan)
 }
 
 fn decode_plan(bytes: &[u8]) -> Result<CapturePlan> {

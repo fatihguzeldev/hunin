@@ -162,6 +162,8 @@ mod tests {
             artifact_dir: directory.into(),
             run_id: "recording".into(),
             runtime: "node".into(),
+            capture_mode: Default::default(),
+            code_options: None,
             env: BTreeMap::new(),
         }
     }

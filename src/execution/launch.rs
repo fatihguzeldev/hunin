@@ -25,6 +25,10 @@ impl Engine {
         request: StartRequest,
         cancel: watch::Receiver<bool>,
     ) -> Result<Option<Prepared>> {
+        request
+            .capture_mode
+            .unwrap_or_default()
+            .validate_runtime(&run.runtime, request.code_options.as_ref())?;
         let directory = self.store.root().join("captures").join(&run.id);
         fs::create_dir_all(directory.join("sdk"))?;
         crate::source::retain(&self.store, &mut run)?;
@@ -41,6 +45,8 @@ impl Engine {
             artifact_dir: directory.clone(),
             run_id: run.id.clone(),
             runtime: run.runtime.clone(),
+            capture_mode: request.capture_mode.unwrap_or_default(),
+            code_options: request.code_options,
             env: request.env,
         };
         let collector_started = Instant::now();
