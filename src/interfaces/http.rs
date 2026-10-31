@@ -17,7 +17,7 @@ use tower_http::services::ServeDir;
 #[derive(Clone)]
 struct HttpState {
     sessions: ProjectSessions,
-    host: String,
+    address: SocketAddr,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +50,7 @@ pub async fn serve_projects(
     let shutdown = sessions.clone();
     let state = HttpState {
         sessions: sessions.clone(),
-        host: local.to_string(),
+        address: local,
     };
     let router = Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
@@ -123,10 +123,18 @@ async fn projects(State(state): State<HttpState>, headers: HeaderMap) -> Respons
 }
 
 fn local_origin(state: &HttpState, headers: &HeaderMap) -> bool {
-    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
-    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
-    host == Some(state.host.as_str())
-        && !origin.is_some_and(|s| s != format!("http://{}", state.host))
+    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    if host != state.address.to_string() && host != format!("localhost:{}", state.address.port()) {
+        return false;
+    }
+    match headers.get(header::ORIGIN) {
+        None => true,
+        Some(origin) => origin
+            .to_str()
+            .is_ok_and(|origin| origin == format!("http://{host}")),
+    }
 }
 
 fn forbidden_origin() -> Response {
@@ -169,6 +177,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn localhost_can_load_projects_and_call_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = crate::projects::ProjectRegistry::open(root.path()).unwrap();
+        let project = registry.create("project", None).unwrap();
+        let state = HttpState {
+            sessions: ProjectSessions::registry(registry, None),
+            address: "127.0.0.1:17879".parse().unwrap(),
+        };
+        let response = projects(State(state.clone()), local_headers("localhost:17879")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = call(
+            State(state.clone()),
+            local_headers("localhost:17879"),
+            Json(Request {
+                project_id: Some(project.id),
+                operation: "runs.list".into(),
+                params: json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        state.sessions.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_origin_requires_the_bound_port_and_same_request_origin() {
+        for address in ["127.0.0.1:17879", "[::1]:17879"] {
+            let root = tempfile::tempdir().unwrap();
+            let state = HttpState {
+                sessions: ProjectSessions::direct(Operations::new(
+                    Store::open(root.path()).unwrap(),
+                )),
+                address: address.parse().unwrap(),
+            };
+            for host in [address, "localhost:17879"] {
+                let mut request = local_headers(host);
+                assert!(local_origin(&state, &request), "{address}: {host}");
+                request.remove(header::ORIGIN);
+                assert!(local_origin(&state, &request));
+                for origin in [
+                    "http://attacker.example:17879",
+                    "http://localhost:17880",
+                    "https://localhost:17879",
+                    "http://localhost:17879.attacker.example",
+                    "http://localhost:17879/path",
+                    "null",
+                ] {
+                    request.insert(header::ORIGIN, origin.parse().unwrap());
+                    assert!(!local_origin(&state, &request), "{host}: {origin}");
+                }
+                let other_host = if host == address {
+                    "localhost:17879"
+                } else {
+                    address
+                };
+                request.insert(
+                    header::ORIGIN,
+                    format!("http://{other_host}").parse().unwrap(),
+                );
+                assert!(!local_origin(&state, &request));
+                request.insert(
+                    header::ORIGIN,
+                    axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
+                );
+                assert!(!local_origin(&state, &request));
+            }
+            for host in [
+                "attacker.example:17879",
+                "localhost.attacker.example:17879",
+                "localhost:17880",
+                "127.0.0.1:17880",
+                "[::1]:17880",
+                "0.0.0.0:17879",
+            ] {
+                assert!(!local_origin(&state, &local_headers(host)), "{host}");
+            }
+            assert!(!local_origin(&state, &HeaderMap::new()));
+            state.sessions.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn project_catalog_checks_origin_and_registry_operations_require_a_stable_id() {
         let root = tempfile::tempdir().unwrap();
         let registry = crate::projects::ProjectRegistry::open(root.path()).unwrap();
@@ -176,7 +266,7 @@ mod tests {
         let host = "127.0.0.1:17879";
         let state = HttpState {
             sessions: ProjectSessions::registry(registry, Some(project.id.clone())),
-            host: host.into(),
+            address: host.parse().unwrap(),
         };
         let response = projects(State(state.clone()), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -266,7 +356,7 @@ mod tests {
             let response = call(
                 State(HttpState {
                     sessions: ProjectSessions::direct(operations.clone()),
-                    host: host.into(),
+                    address: host.parse().unwrap(),
                 }),
                 headers,
                 Json(Request {
