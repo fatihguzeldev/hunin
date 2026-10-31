@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { codeFlags } from './plan.mjs';
 
 test('code-origin uses explicit native logger flags without changing Wasm tier', () => {
@@ -9,7 +10,9 @@ test('code-origin uses explicit native logger flags without changing Wasm tier',
   assert.ok(flags.includes('--prof'));
   assert.ok(flags.includes('--ll-prof'));
   assert.ok(flags.includes('--prof-sampling-interval=250'));
-  assert.ok(flags.includes('--logfile=/capture with spaces/code-v8.log'));
+  assert.ok(
+    flags.includes(`--logfile=${join('/capture with spaces', 'code-v8.log')}`),
+  );
   assert.ok(!flags.some((flag) => /liftoff|tier-up|cpu-prof/.test(flag)));
 });
 
