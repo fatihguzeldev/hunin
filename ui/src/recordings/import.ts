@@ -1,6 +1,7 @@
 import { operation } from '../api';
 import { button, el, field, lockFields } from '../dom';
 import { importFormat } from './formats';
+import { rejectedBeforeAdmission } from './submission';
 
 export function importRecordingDialog(actions: {
   imported: (id: string, foreground: boolean) => void;
@@ -34,7 +35,7 @@ export function importRecordingDialog(actions: {
     el(
       'div',
       { class: 'dialog-head' },
-      el('h2', { id: 'import-title' }, 'Import retained profile'),
+      el('h2', { id: 'import-title' }, 'Import profile'),
       close,
     ),
     el(
@@ -46,7 +47,7 @@ export function importRecordingDialog(actions: {
       el(
         'p',
         { class: 'metric-note' },
-        'The local service reads this path and retains the original profile and supported sidecars. Imported observations retain their collection limits; import does not establish workload correctness.',
+        'Reads a local file and saves the original profile and available sidecars. Import does not check target correctness.',
       ),
       feedback,
     ),
@@ -68,23 +69,38 @@ export function importRecordingDialog(actions: {
     if (submit.disabled || !form.reportValidity()) return;
     const unlock = lockFields(form);
     submit.disabled = true;
+    submit.textContent = 'Importing…';
+    form.setAttribute('aria-busy', 'true');
     cancel.textContent = 'Close dialog';
+    feedback.setAttribute('role', 'status');
     feedback.textContent =
-      'Importing profile… Closing this dialog does not cancel the submitted import.';
+      'Importing profile. You can close this dialog; import will continue.';
+    let submitted = false;
     try {
+      const selectedFormat = format.value();
+      submitted = true;
       const result = await operation('recordings.import', {
         path: path.value,
-        format: format.value(),
+        format: selectedFormat,
         name: name.value || undefined,
       });
       const foreground = dialog.open;
       if (dialog.open) dialog.close();
       actions.imported(result.run.id, foreground);
     } catch (error) {
-      feedback.textContent = `Import did not return a recording confirmation. ${error instanceof Error ? error.message : String(error)} Check Recordings for any retained input before retrying.`;
-      actions.unconfirmed();
+      const message = error instanceof Error ? error.message : String(error);
+      const unconfirmed =
+        submitted && !rejectedBeforeAdmission(error, 'recordings.import');
+      feedback.setAttribute('role', 'alert');
+      feedback.textContent = unconfirmed
+        ? `Import is unconfirmed. ${message} Check Recordings before retrying.`
+        : message;
+      if (unconfirmed) actions.unconfirmed();
     } finally {
+      form.removeAttribute('aria-busy');
       submit.disabled = false;
+      submit.textContent = 'Import profile';
+      cancel.textContent = 'Cancel';
       unlock();
     }
   }

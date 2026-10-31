@@ -228,12 +228,16 @@ export class Workspace {
 
   private openRecording(): void {
     const navigation = this.navigationEpoch;
-    recordDialog((id, foreground) =>
-      this.recordingAccepted(
-        id,
-        foreground && navigation === this.navigationEpoch,
-      ),
-    );
+    recordDialog({
+      recorded: (id, foreground) =>
+        this.recordingAccepted(
+          id,
+          foreground && navigation === this.navigationEpoch,
+        ),
+      unconfirmed: () => {
+        void this.reload(undefined, true);
+      },
+    });
   }
 
   private recordingAccepted(id: string, foreground: boolean): void {
