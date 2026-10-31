@@ -214,6 +214,7 @@ function outputCondition(
     'maximum',
     'description',
     'minLength',
+    'pattern',
     'minItems',
     'maxItems',
     'uniqueItems',
@@ -277,6 +278,12 @@ function outputCondition(
       checks.push(`typeof ${value} === "string"`);
       if (schema.minLength !== undefined)
         checks.push(`[...${value}].length >= ${schema.minLength}`);
+      if (schema.pattern !== undefined) {
+        new RegExp(schema.pattern);
+        checks.push(
+          `new RegExp(${JSON.stringify(schema.pattern)}).test(${value})`,
+        );
+      }
       break;
     case 'boolean':
       checks.push(`typeof ${value} === ${JSON.stringify(schema.type)}`);

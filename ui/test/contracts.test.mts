@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { transpileModule, ModuleKind } from 'typescript';
 import {
   generate,
   generateOperations,
@@ -84,10 +85,13 @@ test('operation output generation refuses unsupported validation rules', () => {
         {
           name: 'future',
           inputSchema: {},
-          outputSchema: { type: 'string', pattern: '^accepted$' },
+          outputSchema: {
+            type: 'string',
+            format: 'uri',
+          } as unknown as OperationDefinition['outputSchema'],
         },
       ]),
-    /Unsupported operation output schema keyword: pattern/,
+    /Unsupported operation output schema keyword: format/,
   );
   assert.throws(
     () => generateOperations([{ name: 'missing', inputSchema: {} }]),
@@ -124,4 +128,29 @@ test('generated freshness tolerates Windows checkout line endings but rejects st
     generatedMatches(generated.replaceAll('\n', '\r'), generated),
     false,
   );
+});
+
+test('generated transport guards enforce canonical hexadecimal ranges', () => {
+  const generated = generateOperations([
+    {
+      name: 'hex.check',
+      inputSchema: {},
+      outputSchema: { type: 'string', pattern: '^0x(?:0|[1-9a-f][0-9a-f]*)$' },
+    },
+  ]);
+  const compiled = transpileModule(generated, {
+    compilerOptions: { module: ModuleKind.CommonJS },
+  }).outputText;
+  const exports: {
+    validateOperationOutput?: (name: string, value: unknown) => void;
+  } = {};
+  new Function('exports', compiled)(exports);
+  const validate = exports.validateOperationOutput!;
+  for (const value of ['0x0', '0x1', '0xabcdef'])
+    assert.doesNotThrow(() => validate('hex.check', value));
+  for (const value of ['0x00', '0X1', '0xABC', 'before0x1', '', null, 1])
+    assert.throws(
+      () => validate('hex.check', value),
+      /invalid hex.check result/,
+    );
 });
