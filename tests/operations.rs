@@ -19,6 +19,39 @@ fn run(id: &str, cwd: &str, passed: bool) -> Run {
 }
 
 #[tokio::test]
+async fn binary_artifact_excerpts_preserve_exact_bytes_and_byte_offsets() {
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::open(data.path()).unwrap();
+    store.save_run(&run("recording", "/project", true)).unwrap();
+    let bytes = (0u8..=255).collect::<Vec<_>>();
+    let artifact = store
+        .add_artifact_bytes("recording", "machine-code.bin", "control", &bytes)
+        .unwrap();
+    let operations = Operations::new(store);
+    let mut offset = 0;
+    let mut restored = vec![];
+    loop {
+        let page=operations.call("artifacts.read",json!({"run_id":"recording","artifact_id":artifact.id,"offset":offset,"limit":73,"encoding":"hex"})).await.unwrap();
+        assert_eq!(page["encoding"], "hex");
+        let content = page["content"].as_str().unwrap();
+        assert!(content.len() <= 146);
+        assert_eq!(content.len() % 2, 0);
+        restored.extend(
+            (0..content.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&content[index..index + 2], 16).unwrap()),
+        );
+        assert_eq!(page["size"], 256);
+        let Some(next) = page["next_offset"].as_u64() else {
+            break;
+        };
+        assert_eq!(next, restored.len() as u64);
+        offset = next;
+    }
+    assert_eq!(restored, bytes);
+}
+
+#[tokio::test]
 async fn evidence_and_context_pages_filter_before_decoding_unrelated_observations() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();

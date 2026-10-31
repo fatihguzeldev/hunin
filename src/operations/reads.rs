@@ -105,7 +105,19 @@ pub(super) fn query(
             let mut bytes = Vec::new();
             file.take(limit.min(5000) as u64).read_to_end(&mut bytes)?;
             let end = start + bytes.len() as u64;
-            json!({"content":String::from_utf8_lossy(&bytes),"encoding":"utf8_lossy","next_offset":(end<size).then_some(end),"size":size})
+            let encoding = params["encoding"].as_str().unwrap_or("utf8_lossy");
+            let content = if encoding == "hex" {
+                use std::fmt::Write;
+                let mut content = String::with_capacity(bytes.len() * 2);
+                for byte in &bytes {
+                    write!(content, "{byte:02x}")?;
+                }
+                content
+            } else {
+                String::from_utf8_lossy(&bytes).into_owned()
+            };
+            interest.check()?;
+            json!({"content":content,"encoding":encoding,"next_offset":(end<size).then_some(end),"size":size})
         }
         "source.read" => crate::source::read(store, params)?,
         "scenarios.list" => metadata_page(
