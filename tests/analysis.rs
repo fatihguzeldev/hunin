@@ -75,6 +75,145 @@ print(json.dumps({'schema_version':1,'kind':'relation','id':str(uuid.uuid4()),'r
 "#;
 
 #[tokio::test]
+async fn source_aware_mapper_reads_retained_bytes_and_publishes_inspectable_versioned_code_links() {
+    let fixture = Fixture::new();
+    let artifact = fixture
+        .store
+        .add_artifact_bytes(
+            "recording",
+            "work.py",
+            "source-fixture",
+            b"def hot_work():\n    return 7\n",
+        )
+        .unwrap();
+    fixture.store.accept("recording","unbound-source-sample",&[json!({"schema_version":1,"kind":"sample","id":"unbound-sample","run_id":"recording","producer_id":"profile","pid":123,"tid":"thread","timestamp_us":12,"basis":"sampled","weight":5,"weight_unit":"samples","stack":[{"function":"hot_work","file":"work.py","line":1,"code_id":format!("sha256:{}",artifact.sha256)}],"attributes":{"clock":"unix_epoch","clock_alignment":"direct_epoch"}})]).unwrap();
+    let mapper = r#"import ast,hashlib,json,sys
+value=json.load(sys.stdin)
+artifact=next(a for a in value['artifacts'] if a['format']=='source-fixture')
+content=open(artifact['path'],'rb').read()
+assert hashlib.sha256(content).hexdigest()==artifact['sha256']
+function=next(n for n in ast.parse(content).body if isinstance(n,ast.FunctionDef))
+sample=next(r for r in value['records'] if r['kind']=='sample')
+assert sample['stack'][0]['code_id']=='sha256:'+artifact['sha256']
+prefix=value['analyzer']['id']
+source_id=prefix+':source'; logical_id=prefix+':logical'
+proof={'artifact_id':artifact['id'],'sha256':artifact['sha256']}
+source_range={'space':'artifact_offset','start':'0x0','end_exclusive':hex(len(content))}
+logical_range={'space':'function_offset','start':'0x0','end_exclusive':'0x1','function_index':0}
+base={'schema_version':1,'kind':'event','run_id':value['run']['id'],'producer_id':'source-aware-mapper','pid':0,'tid':'','timestamp_us':value['run']['started_at_us'],'basis':'derived','evidence':[value['records'][0]['id']]}
+for identity,instance in [(source_id,{'schema_version':1,'instance_kind':'static','representation':'source','artifact':proof,'range':source_range,'source':{'path':artifact['name'],'line':function.lineno},'label':artifact['name']}),(logical_id,{'schema_version':1,'instance_kind':'static','representation':'logical','range':logical_range,'label':function.name})]:
+ row=dict(base,id=identity,name='code.instance',attributes={'code_instance':instance});print(json.dumps(row))
+row=dict(base,id=prefix+':mapping',kind='relation',relation='code_maps_to')
+row.update({'from':source_id,'to':logical_id,'attributes':{'code_mapping':{'schema_version':1,'from_range':source_range,'to_range':logical_range,'cardinality':'exclusive','proof':{'artifact_refs':[proof],'method':'python-ast-function-declaration-v1','verification':'identity_checked'}}}})
+print(json.dumps(row))
+row=dict(base,id=prefix+':frame-binding',kind='relation',relation='code_frame_maps_to',evidence=[sample['id']])
+row.update({'from':sample['id'],'to':source_id,'attributes':{'code_frame_mapping':{'schema_version':1,'frame_index':0,'code_offset':'0x0','code_address_basis':'captured_script_digest','proof':{'artifact_refs':[proof],'method':'captured-script-digest-to-retained-source-v1','verification':'identity_checked'}}}})
+print(json.dumps(row))
+"#;
+    fs::write(fixture.package.join("analyze.py"), mapper).unwrap();
+    let analysis=fixture.engine.register(&json!({"name":"Source-aware mapper","version":"1","command":[python(),"analyze.py"],"cwd":fixture.package,"requirements":{"runtime":"fixture","source_fingerprint":"build-v1","artifact_digests":[artifact.sha256]},"output_contract":{"name":"code-mapping","version":1}})).unwrap()["analysis"].clone();
+    let started = fixture.start(&analysis, 5.0).await;
+    let accepted = fixture.wait(&started).await;
+    assert_eq!(accepted["status"], "accepted", "{accepted}");
+    assert_eq!(
+        accepted["output_contract"],
+        json!({"name":"code-mapping","version":1})
+    );
+    let source_id = format!("{}:source", analysis["id"].as_str().unwrap());
+    let inspected = hunin::operations::Operations::new(fixture.store.clone())
+        .call(
+            "code.inspect",
+            json!({"run_id":"recording","observation_id":"unbound-sample"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inspected["anchor"]["code_instance_id"], source_id);
+    assert_eq!(inspected["anchor"]["association_status"], "derived");
+    assert_eq!(
+        inspected["coverage"]["total"],
+        json!({"sample_count":1,"weight":5.0}),
+        "analyzer-emitted weights must not inflate retained raw measurements"
+    );
+    assert_eq!(inspected["units"], json!(["samples"]));
+    assert!(
+        inspected["anchor"]["frame"]
+            .get("code_instance_id")
+            .is_none(),
+        "raw observations must not be rewritten by a mapper"
+    );
+    assert_eq!(inspected["frame_mappings"].as_array().unwrap().len(), 1);
+    assert_eq!(inspected["mappings"].as_array().unwrap().len(), 1);
+    assert!(
+        inspected["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["instance"]["label"] == "hot_work")
+    );
+    assert_eq!(
+        inspected["input_artifacts"][0]["status"],
+        "metadata_matches"
+    );
+    assert_eq!(inspected["input_artifacts"][0]["name"], "work.py");
+    assert_eq!(inspected["input_artifacts"][0]["format"], "source-fixture");
+    let selected_before = fixture
+        .store
+        .records_snapshot("recording")
+        .unwrap()
+        .result_identity;
+    // The managed authority rejects the entire output, including otherwise valid
+    // mapping facts, before derived weights can enter the measured sample stream.
+    let invalid_mapper = format!(
+        "{mapper}{}",
+        r#"derived_sample_id=prefix+':derived-sample'
+row=dict(base,id=derived_sample_id,kind='sample',weight=1000,weight_unit='samples',stack=sample['stack'],attributes=sample['attributes'])
+print(json.dumps(row))
+row=dict(row,id=prefix+':derived-count',weight_unit='count',weight=900)
+print(json.dumps(row))
+row=dict(base,id=prefix+':derived-frame-binding',kind='relation',relation='code_frame_maps_to',evidence=[sample['id']])
+row.update({'from':derived_sample_id,'to':source_id,'attributes':{'code_frame_mapping':{'schema_version':1,'frame_index':0,'code_offset':'0x0','proof':{'artifact_refs':[proof],'method':'derived-frame-demonstration','verification':'identity_checked'}}}})
+print(json.dumps(row))
+"#
+    );
+    fs::write(fixture.package.join("analyze.py"), invalid_mapper).unwrap();
+    let invalid = fixture.engine.register(&json!({"name":"Invalid derived sample producer","version":"1","command":[python(),"analyze.py"],"cwd":fixture.package,"requirements":{"runtime":"fixture","source_fingerprint":"build-v1","artifact_digests":[artifact.sha256]},"output_contract":{"name":"code-mapping","version":1}})).unwrap()["analysis"].clone();
+    let started = fixture.start(&invalid, 5.0).await;
+    let rejected = fixture.wait(&started).await;
+    assert_eq!(rejected["status"], "failed", "{rejected}");
+    assert!(
+        rejected["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message
+                .as_str()
+                .unwrap()
+                .contains("CPU samples must retain sampled basis"))
+    );
+    assert_eq!(
+        fixture
+            .store
+            .records_snapshot("recording")
+            .unwrap()
+            .result_identity,
+        selected_before
+    );
+    let after = hunin::operations::Operations::new(fixture.store.clone())
+        .call(
+            "code.inspect",
+            json!({"run_id":"recording","observation_id":"unbound-sample"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        after["coverage"]["total"],
+        json!({"sample_count":1,"weight":5.0})
+    );
+    assert_eq!(after["result_identity"], inspected["result_identity"]);
+    assert_eq!(after["instances"], inspected["instances"]);
+}
+
+#[tokio::test]
 async fn managed_package_recomputes_relations_and_replays_without_double_counting() {
     let fixture = Fixture::new();
     let analysis = fixture.register(RELATION, json!({}));
