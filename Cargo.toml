@@ -30,6 +30,7 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 object = { version = "0.40", default-features = false, features = ["read", "std"] }
 sourcemap = { version = "9.3.2", default-features = false }
+wasmparser = { version = "=0.259.0", default-features = false, features = ["std", "features", "simd"] }
 
 [dev-dependencies]
 tempfile = "3"
