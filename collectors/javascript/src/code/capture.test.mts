@@ -9,6 +9,54 @@ import { createHash } from 'node:crypto';
 import { plan } from '../host/plan.mjs';
 import type { CodeOptions } from './plan.mjs';
 
+function fixtureOutput(
+  stdout: string,
+  stderr = '',
+): { runs: number; checksums: number[] } {
+  const diagnostic = () =>
+    `stdout (last 64 KiB):\n${stdout.slice(-65_536)}\nstderr (last 8 KiB):\n${stderr.slice(-8192)}`;
+  const marker = '{"fixture":"independent-wasm-emitter-v1",';
+  const start = stdout.indexOf(marker);
+  assert.ok(start >= 0, `Target result absent. ${diagnostic()}`);
+  assert.equal(
+    stdout.indexOf(marker, start + marker.length),
+    -1,
+    `Target result duplicated. ${diagnostic()}`,
+  );
+  // This fixture emits a flat object. Parse its exact bytes; tracing may
+  // surround it, but damaged/interleaved JSON must still fail.
+  const end = stdout.indexOf('}', start);
+  assert.ok(end >= 0, `Target result truncated. ${diagnostic()}`);
+  try {
+    return JSON.parse(stdout.slice(start, end + 1));
+  } catch {
+    assert.fail(`Target result is invalid JSON. ${diagnostic()}`);
+  }
+}
+
+test('fixture output can be surrounded by tracing on the same line', () => {
+  const target =
+    '{"fixture":"independent-wasm-emitter-v1","runs":3,"checksums":[-128642144]}';
+  assert.deepEqual(
+    fixtureOutput(`V8 tracing prefix ${target} trace suffix\n`),
+    {
+      fixture: 'independent-wasm-emitter-v1',
+      runs: 3,
+      checksums: [-128642144],
+    },
+  );
+});
+
+test('fixture output rejects truncated and duplicate target results', () => {
+  const target =
+    '{"fixture":"independent-wasm-emitter-v1","runs":3,"checksums":[-128642144]}';
+  assert.throws(() => fixtureOutput(`trace ${target.slice(0, -1)}`));
+  assert.throws(() => fixtureOutput(`${target}\ntrace ${target}`));
+  assert.throws(() =>
+    fixtureOutput(target.slice(0, 50) + 'V8 trace' + target.slice(50)),
+  );
+});
+
 function capture(command: string[], codeOptions?: CodeOptions) {
   const directory = mkdtempSync(join(tmpdir(), 'hunin-code-capture-'));
   const planned = plan({
@@ -111,11 +159,9 @@ test('indexed compiler capture retains requested scope, startup flags and exact 
     );
     assert.ok(names.includes('generated_helper'));
     assert.ok(!names.includes('generated_kernel'));
-    const output = result.stdout
-      .split('\n')
-      .find((line) => line.startsWith('{'));
-    assert.ok(output);
-    assert.deepEqual(JSON.parse(output).checksums, [-128642144]);
+    const output = fixtureOutput(result.stdout, result.stderr);
+    assert.deepEqual(output.checksums, [-128642144]);
+    assert.ok(Number.isSafeInteger(output.runs) && output.runs > 0);
     assert.deepEqual(manifest.compiler_scope, {
       requested_wasm_function_index: 1,
       requested_scope: 'function_index_across_modules',
