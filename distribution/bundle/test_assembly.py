@@ -291,6 +291,11 @@ class PackageTests(unittest.TestCase):
                 installed = activation.install(extracted, root / "installed")
             self.assertEqual(installed.read_bytes(), b"test-binary")
             self.assertTrue((installed.parent / "ui/index.html").exists())
+            for name in UI_PUBLIC_FONTS:
+                self.assertEqual(
+                    (installed.parent / "ui/fonts" / name).read_bytes(),
+                    (root / "ui/dist/fonts" / name).read_bytes(),
+                )
             if os.name != "nt":
                 self.assertTrue(
                     os.access(
