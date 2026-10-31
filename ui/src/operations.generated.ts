@@ -753,10 +753,21 @@ export type OperationInputs = {
   "name": string;
   "command": Array<string>;
   "cwd"?: string;
-  "requirements": Record<string, unknown>;
+  "requirements": {
+  "runtime": string;
+  "source_fingerprint"?: string;
+  "source_independent"?: boolean;
+  "artifact_digests"?: Array<string>;
+  "executable_sha256"?: string;
+  "runtime_version"?: string;
+};
   "version"?: string;
   "files"?: Array<string>;
-  "dependencies"?: Record<string, unknown>;
+  "dependencies"?: {
+  "python_requirements"?: string;
+  "node_lockfile"?: string;
+  "setup_commands"?: Array<Array<string>>;
+};
 };
   "analyses.run": {
   "run_id": string;

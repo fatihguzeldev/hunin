@@ -18,6 +18,38 @@ fn validate_result(name: &str, result: &Value) {
 }
 
 #[test]
+fn analyzer_discovery_describes_valid_requirements_and_derived_output() {
+    let operation = catalog()
+        .iter()
+        .find(|entry| entry["name"] == "analyses.register")
+        .unwrap();
+    let validator = jsonschema::validator_for(&operation["inputSchema"]).unwrap();
+    let request = |requirements: Value| json!({"name":"discoverable","command":["python3","analyze.py"],"requirements":requirements});
+    assert!(!validator.is_valid(&request(json!({}))));
+    assert!(!validator.is_valid(&request(json!({"runtime":"node"}))));
+    assert!(!validator.is_valid(&request(
+        json!({"runtime":"node","source_fingerprint":"unknown"})
+    )));
+    assert!(validator.is_valid(&request(
+        json!({"runtime":"node","source_fingerprint":"source-v1"})
+    )));
+    assert!(validator.is_valid(&request(json!({"runtime":"*","source_independent":true}))));
+    let contract = &operation["_meta"]["hunin/analyzer-io"];
+    assert_eq!(contract["input"]["encoding"], "json");
+    assert_eq!(contract["output"]["encoding"], "jsonl");
+    let output = jsonschema::validator_for(&contract["output"]["record_schema"]).unwrap();
+    let mut record = json!({"schema_version":1,"kind":"metric","id":"derived","run_id":"input-run","producer_id":"analyzer","pid":1,"tid":"","timestamp_us":1,"basis":"derived","name":"sample.total","value":1,"unit":"samples","scope":"run","evidence":["input-record"]});
+    output.validate(&record).unwrap();
+    record.as_object_mut().unwrap().remove("evidence");
+    assert!(!output.is_valid(&record));
+    record["evidence"] = json!([]);
+    assert!(!output.is_valid(&record));
+    record["evidence"] = json!(["input-record"]);
+    record["basis"] = json!("sampled");
+    assert!(!output.is_valid(&record));
+}
+
+#[test]
 fn advertised_query_budgets_match_the_public_enforcement_defaults() {
     let aggregate = QueryLimits::default();
     let metadata = ReadLimits::default();

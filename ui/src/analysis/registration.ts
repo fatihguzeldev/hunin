@@ -17,7 +17,7 @@ export function registerAnalysis(
   });
   const command = el('textarea', { class: 'mono', required: true, rows: 3 });
   command.value = '["python3", "analyze.py"]';
-  const runtime = el('input', { value: recordingRuntime });
+  const runtime = el('input', { value: recordingRuntime, required: true });
   const fingerprint = el('input', {
     class: 'mono',
     value: source.fingerprint,
@@ -106,7 +106,7 @@ export function registerAnalysis(
         cwd: cwd.value,
         command: args,
         requirements: {
-          runtime: runtime.value || undefined,
+          runtime: runtime.value,
           ...(scope.value === 'generic'
             ? { source_independent: true }
             : {

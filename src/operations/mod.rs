@@ -52,9 +52,22 @@ pub fn catalog() -> &'static Vec<Value> {
         let definitions = responses["$defs"]
             .as_object()
             .expect("response definitions");
+        let mut analyzer_record: Value = serde_json::from_str(include_str!("../../protocol/record.schema.json")).expect("embedded observation schema");
+        analyzer_record["$id"] = json!("https://hunin.dev/protocol/analyzer-output-record-v1.schema.json");
+        analyzer_record["properties"]["basis"] = json!({"const":"derived"});
+        analyzer_record["properties"]["evidence"]["minItems"] = json!(1);
+        analyzer_record["required"].as_array_mut().unwrap().push(json!("evidence"));
         for operation in &mut operations {
             if let Some(schema) = operation.get_mut("outputSchema") {
                 *schema = contracts::bundle(schema, definitions).expect("embedded output schema");
+            }
+            if matches!(operation["name"].as_str(), Some("analyses.register" | "analyses.run")) {
+                operation["_meta"]["hunin/analyzer-io"] = json!({
+                    "version":1,
+                    "input":{"transport":"stdin","encoding":"json","fields":{"run":"Selected recording manifest; output run_id must equal run.id.","records":"Selected input observations; only these record IDs may appear in derived evidence.","artifacts":"Retained artifact identities and managed paths.","input_result_sets":"Exact selected normalization/analysis result identities.","analyzer":"Package id, version and package_digest."}},
+                    "output":{"transport":"stdout","encoding":"jsonl","record_schema":analyzer_record,"evidence":"Every output record must use basis:derived and a nonempty evidence list. Every reference must be an input.records[].id from this run. Unknown references reject the whole output atomically.","diagnostics":"Write logs to stderr; stdout contains only UTF-8 observation JSON lines."},
+                    "execution":{"cwd":"managed copy of the registered package","trust":"Trusted local command execution, not a sandbox."}
+                });
             }
         }
         operations

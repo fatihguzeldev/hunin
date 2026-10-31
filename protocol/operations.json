@@ -1511,7 +1511,7 @@
   },
   {
     "name": "analyses.register",
-    "description": "Store an analyzer package and declared applicability",
+    "description": "Store an analyzer package with explicit runtime/source applicability; discover stdin/stdout and derived evidence in hunin/analyzer-io metadata.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1531,7 +1531,65 @@
           "minLength": 1
         },
         "requirements": {
-          "type": "object"
+          "type": "object",
+          "description": "Declared applicability checked before execution. Require runtime and either a known source_fingerprint or source_independent:true. Runtime * explicitly accepts any runtime.",
+          "properties": {
+            "runtime": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Recording runtime identity, or * for explicitly runtime-independent analysis."
+            },
+            "source_fingerprint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Measured run.source.fingerprint; unknown is not a reusable identity."
+            },
+            "source_independent": {
+              "type": "boolean",
+              "description": "Explicitly declare that this analyzer does not depend on a measured source version."
+            },
+            "artifact_digests": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-fA-F0-9]{64}$"
+              }
+            },
+            "executable_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "const": "unknown"
+              }
+            },
+            "runtime_version": {
+              "type": "string",
+              "minLength": 1,
+              "not": {
+                "const": "unknown"
+              }
+            }
+          },
+          "required": ["runtime"],
+          "if": {
+            "properties": {
+              "source_independent": {
+                "const": true
+              }
+            },
+            "required": ["source_independent"]
+          },
+          "else": {
+            "required": ["source_fingerprint"],
+            "properties": {
+              "source_fingerprint": {
+                "not": {
+                  "const": "unknown"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
         },
         "version": {
           "type": "string",
@@ -1545,7 +1603,31 @@
           }
         },
         "dependencies": {
-          "type": "object"
+          "type": "object",
+          "description": "Dependency files must be retained within the analyzer package. Installation and setup run as trusted local commands in its managed workspace.",
+          "properties": {
+            "python_requirements": {
+              "type": "string",
+              "minLength": 1
+            },
+            "node_lockfile": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Relative package-lock.json version2+ with adjacent packaged package.json; installed with npm ci."
+            },
+            "setup_commands": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": ["name", "command", "requirements"],

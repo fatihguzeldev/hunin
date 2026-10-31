@@ -126,7 +126,8 @@
       "items": {
         "type": "string"
       },
-      "uniqueItems": true
+      "uniqueItems": true,
+      "description": "Managed analyzer output requires a nonempty list of selected input observation IDs from the same recording. Presence and membership are validated atomically before derived publication; see the analyzer I/O contract in analyses.register metadata."
     },
     "basis": {
       "enum": ["observed", "sampled", "explicit", "derived"]
