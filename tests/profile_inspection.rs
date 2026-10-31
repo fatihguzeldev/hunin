@@ -287,3 +287,27 @@ async fn integer_bin_edges_match_assigned_samples_when_duration_is_not_divisible
     assert_eq!(data["sample_count"], 6);
     assert_eq!(data["total_weight"], 63.0);
 }
+
+#[tokio::test]
+async fn explicit_runtime_relative_domains_are_never_blended_with_epoch_or_other_origins() {
+    let (_root, store) = fixture();
+    let rows=[("relative-a","v8:process1:profile-a",100,13),("relative-b","v8:process1:profile-b",100,17)].into_iter().map(|(id,domain,time,weight)|json!({"schema_version":1,"kind":"sample","id":id,"run_id":"recording","producer_id":"relative-profiler","pid":1,"tid":"main","timestamp_us":time,"basis":"sampled","weight":weight,"weight_unit":"samples","stack":[{"function":"relative"}],"attributes":{"clock":domain,"clock_alignment":"runtime_relative"}})).collect::<Vec<_>>();
+    store.accept("recording", "relative-oracle", &rows).unwrap();
+    let operations = Operations::new(store);
+    let relative=inspect(&operations,json!({"run_id":"recording","clock_domain":"v8:process1:profile-a","weight_unit":"samples"})).await;
+    assert_eq!(relative["total_weight"], 13.0);
+    assert_eq!(relative["sample_count"], 1);
+    assert_eq!(relative["clock_domain"], "v8:process1:profile-a");
+    assert_eq!(relative["bounds"], json!({"start_us":100,"end_us":101}));
+    assert_eq!(
+        relative["clock_domains"],
+        json!(["v8:process1:profile-a", "v8:process1:profile-b"])
+    );
+    let epoch = inspect(
+        &operations,
+        json!({"run_id":"recording","weight_unit":"samples"}),
+    )
+    .await;
+    assert_eq!(epoch["total_weight"], 10.0);
+    assert!(epoch["clock_domain"].is_null());
+}

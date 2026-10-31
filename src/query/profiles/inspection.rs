@@ -199,6 +199,13 @@ pub(in crate::query) fn inspect(
     params: &Value,
     work: &mut WorkBudget,
 ) -> Result<Value> {
+    let clock_domain = params["clock_domain"].as_str();
+    let placed = |record: &Value| match clock_domain {
+        Some(domain) => {
+            crate::model::clocks::runtime_relative_domain(&record["attributes"]) == Some(domain)
+        }
+        None => crate::model::clocks::inspect(&record["attributes"]).aligned,
+    };
     let mut records = Vec::new();
     let mut units = BTreeSet::new();
     let mut aligned_units = BTreeSet::new();
@@ -212,9 +219,7 @@ pub(in crate::query) fn inspect(
         if units.insert(unit.clone()) {
             work.entry()?;
         }
-        if crate::model::clocks::inspect(&record["attributes"]).aligned
-            && unsigned_integer(&record["timestamp_us"]).is_some()
-        {
+        if placed(&record) && unsigned_integer(&record["timestamp_us"]).is_some() {
             aligned_units.insert(unit);
         }
         records.push(record);
@@ -240,12 +245,18 @@ pub(in crate::query) fn inspect(
         });
     let mut unaligned = 0;
     let mut samples = Vec::new();
+    let clock_domains = records
+        .iter()
+        .filter(|record| record["weight_unit"] == unit)
+        .filter_map(|record| crate::model::clocks::runtime_relative_domain(&record["attributes"]))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     for record in records {
         work.check()?;
         if record["weight_unit"] != unit {
             continue;
         }
-        if !crate::model::clocks::inspect(&record["attributes"]).aligned {
+        if !placed(&record) {
             unaligned += 1;
             continue;
         }
@@ -347,7 +358,7 @@ pub(in crate::query) fn inspect(
     {
         diagnostics.push("Some samples have no captured frames.".into());
     }
-    let result = json!({"weight_unit":unit,"units":units,"bounds":bounds_value(bounds),"window":bounds_value(window),"sample_count":count,"total_sample_count":samples.len(),"total_weight":bounds.map(|_|total_weight),"capture_weight":bounds.map(|_|capture_weight),"unaligned_count":unaligned,"overview":overview,"activity":activity,"functions_truncated":functions.len()<page.total_functions,"total_functions":page.total_functions,"functions":functions,"roots":roots,"tree_truncated":tree_truncated,"selected":selected.finish(selected_id,&unit),"diagnostics":diagnostics});
+    let result = json!({"clock_domain":clock_domain,"clock_domains":clock_domains,"weight_unit":unit,"units":units,"bounds":bounds_value(bounds),"window":bounds_value(window),"sample_count":count,"total_sample_count":samples.len(),"total_weight":bounds.map(|_|total_weight),"capture_weight":bounds.map(|_|capture_weight),"unaligned_count":unaligned,"overview":overview,"activity":activity,"functions_truncated":functions.len()<page.total_functions,"total_functions":page.total_functions,"functions":functions,"roots":roots,"tree_truncated":tree_truncated,"selected":selected.finish(selected_id,&unit),"diagnostics":diagnostics});
     work.check()?;
     Ok(result)
 }
