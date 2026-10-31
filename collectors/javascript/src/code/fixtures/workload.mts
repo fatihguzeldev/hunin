@@ -1,9 +1,12 @@
 import { moduleBytes, expected } from './emitter.mjs';
-const kernels = (process.argv[3] === 'single' ? [3] : [3, 7]).map((multiplier) => ({
-  multiplier,
-  run: new WebAssembly.Instance(new WebAssembly.Module(moduleBytes(multiplier)))
-    .exports.run as (n: number) => number,
-}));
+const kernels = (process.argv[3] === 'single' ? [3] : [3, 7]).map(
+  (multiplier) => ({
+    multiplier,
+    run: new WebAssembly.Instance(
+      new WebAssembly.Module(moduleBytes(multiplier)),
+    ).exports.run as (n: number) => number,
+  }),
+);
 const iterations = 200_000;
 const until = performance.now() + Number(process.argv[2] ?? 1500);
 let runs = 0;
