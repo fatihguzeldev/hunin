@@ -11,6 +11,7 @@ mod pprof;
 mod python_cpu;
 mod result;
 mod v8;
+mod v8code;
 mod vmprof;
 
 pub(crate) use formats::import_formats;

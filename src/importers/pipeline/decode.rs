@@ -4,7 +4,7 @@ use crate::importers::{
     formats::ProfileFormat,
     go_trace, graal, inputs, jsonl,
     output::{self, OutputBudget},
-    pprof, python_cpu, v8, vmprof,
+    pprof, python_cpu, v8, v8code, vmprof,
 };
 use anyhow::Result;
 use sha2::{Digest, Sha256};
@@ -57,9 +57,25 @@ pub(super) fn decode_snapshot(
     let decoder_provenance = vmprof
         .as_ref()
         .map(|decoded| decoded.provenance.clone())
-        .or_else(|| go_trace.as_ref().map(|decoded| decoded.provenance.clone()));
+        .or_else(|| go_trace.as_ref().map(|decoded| decoded.provenance.clone()))
+        .or_else(|| {
+            (kind == ProfileFormat::V8Code).then(|| serde_json::json!({
+                "identity":{
+                    "kind":"builtin",
+                    "format":"v8-code",
+                    "contract":"v8-code-decoder-v2",
+                    "hunin_version":env!("CARGO_PKG_VERSION"),
+                    "wasmparser":"0.259.0"
+                },
+                "scope":"Versioned built-in format interpretation; runtime and compiler versions are retained in the input manifest. This descriptor does not attest a compiler build."
+            }))
+        });
     if let Some(provenance) = &decoder_provenance {
-        digest.update(b"external-decoder-identity-v1\0");
+        if kind == ProfileFormat::V8Code {
+            digest.update(b"builtin-decoder-identity-v1\0");
+        } else {
+            digest.update(b"external-decoder-identity-v1\0");
+        }
         digest.update(serde_json::to_vec(&provenance["identity"])?);
     }
     let key = format!("{:x}", digest.finalize());
@@ -82,6 +98,13 @@ pub(super) fn decode_snapshot(
             run_id,
             &key,
             scripts.as_ref().unwrap(),
+            &mut records,
+        )?,
+        ProfileFormat::V8Code => v8code::decode_into(
+            decoder_path,
+            &serde_json::from_slice(&raw)?,
+            run_id,
+            &key,
             &mut records,
         )?,
         ProfileFormat::Graal => graal::decode_into(

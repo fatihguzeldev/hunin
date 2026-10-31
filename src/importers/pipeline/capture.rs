@@ -1,5 +1,5 @@
 //! Snapshot raw bytes and ordered format sidecars before interpretation.
-use crate::importers::{firefox, formats::ProfileFormat, inputs, v8};
+use crate::importers::{firefox, formats::ProfileFormat, inputs, v8, v8code};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -17,10 +17,7 @@ pub(super) fn capture_inputs(
     digest.update(format.as_bytes());
     digest.update([0]);
     snapshot.capture_raw(path, &mut digest)?;
-    if kind == ProfileFormat::Firefox {
-        digest.update(b"native-code-evidence-v1\0");
-    }
-    if kind == ProfileFormat::V8 {
+    if matches!(kind, ProfileFormat::V8 | ProfileFormat::V8Code) {
         digest.update(
             path.file_name()
                 .unwrap_or_default()
@@ -28,12 +25,24 @@ pub(super) fn capture_inputs(
                 .as_bytes(),
         );
     }
+    match kind {
+        ProfileFormat::Firefox => digest.update(b"native-code-evidence-v1\0"),
+        ProfileFormat::V8Code => digest.update(b"v8-code-decoder-v2\0"),
+        _ => {}
+    }
     let scripts = if kind == ProfileFormat::V8 {
         v8::script_paths(path)
     } else {
         vec![]
     };
-    for sidecar in sidecars(path, kind) {
+    // An explicit inventory is interpreted from the immutable manifest snapshot.
+    // Every listed file is required, including missing or non-regular inputs.
+    let sidecars = if kind == ProfileFormat::V8Code {
+        v8code::sidecar_paths(path, &serde_json::from_slice(&snapshot.decoded()?)?)?
+    } else {
+        sidecars(path, kind)
+    };
+    for sidecar in sidecars {
         digest.update([0]);
         digest.update(
             sidecar
@@ -75,7 +84,7 @@ fn sidecars(path: &Path, format: ProfileFormat) -> Vec<PathBuf> {
                 .unwrap_or_else(|| Path::new("."))
                 .join("go-tool.json"),
         ],
-        ProfileFormat::Pprof | ProfileFormat::Jsonl => Vec::new(),
+        ProfileFormat::Pprof | ProfileFormat::Jsonl | ProfileFormat::V8Code => Vec::new(),
     };
     let mut result = candidates
         .into_iter()

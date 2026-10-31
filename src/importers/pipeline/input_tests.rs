@@ -99,3 +99,37 @@ fn explicit_normalization_deadline_refuses_work_before_snapshot_creation() {
     assert!(error.to_string().contains("deadline"));
     assert!(path.is_file());
 }
+
+#[test]
+fn v8_code_inventory_is_required_and_decoded_from_retained_manifest_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("code.v8code.json");
+    let manifest=serde_json::to_vec(&json!({"schema_version":1,"logs":[{"path":"ticks.log","ll_path":"ticks.ll"}],"wasm":[],"compiler_exports":[]})).unwrap();
+    fs::write(&path, &manifest).unwrap();
+    fs::write(root.path().join("ticks.log"), b"original ticks").unwrap();
+    let missing = capture_inputs(&path, "v8-code", inputs::Limits::default(), None)
+        .err()
+        .unwrap();
+    assert!(format!("{missing:#}").contains("ticks.ll"));
+    fs::write(root.path().join("ticks.ll"), b"original code bytes").unwrap();
+    let (snapshot, _) = capture_inputs(&path, "v8-code", inputs::Limits::default(), None).unwrap();
+    fs::write(&path, b"changed manifest").unwrap();
+    fs::write(root.path().join("ticks.log"), b"changed ticks").unwrap();
+    assert_eq!(snapshot.decoded().unwrap(), manifest);
+    assert_eq!(
+        fs::read(snapshot.path().parent().unwrap().join("ticks.log")).unwrap(),
+        b"original ticks"
+    );
+    snapshot.verify().unwrap();
+}
+
+#[test]
+fn v8_code_inventory_cannot_escape_the_manifest_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("code.v8code.json");
+    fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"logs":[{"path":"../foreign.log"}],"wasm":[],"compiler_exports":[]})).unwrap()).unwrap();
+    let error = capture_inputs(&path, "v8-code", inputs::Limits::default(), None)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("safe filename"));
+}
