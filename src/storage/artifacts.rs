@@ -224,10 +224,7 @@ impl Store {
         } else if !same_artifact_contents(&pending.path, &dest, checkpoint)? {
             bail!("artifact identity mismatch");
         }
-        let reference_id = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&(&pending.sha256, &name, format))?)
-        );
+        let reference_id = Artifact::reference_id(&pending.sha256, name, format);
         let artifact = Artifact {
             id: reference_id,
             name: name.to_owned(),
@@ -298,17 +295,21 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .context("artifact not found")?;
-        let artifact: Artifact = serde_json::from_str(&metadata)?;
-        anyhow::ensure!(
-            super::maintenance::is_artifact_digest(&artifact.sha256),
-            "retained artifact digest is not a canonical SHA-256"
-        );
-        anyhow::ensure!(
-            artifact.sha256 == indexed_sha && artifact.id == id,
-            "artifact metadata disagrees with its indexed identity"
-        );
-        Ok(artifact)
+        decode_metadata(&metadata, &indexed_sha, id)
     }
+}
+
+pub(super) fn decode_metadata(metadata: &str, indexed_sha: &str, id: &str) -> Result<Artifact> {
+    let artifact: Artifact = serde_json::from_str(metadata)?;
+    anyhow::ensure!(
+        super::maintenance::is_artifact_digest(&artifact.sha256),
+        "retained artifact digest is not a canonical SHA-256"
+    );
+    anyhow::ensure!(
+        artifact.sha256 == indexed_sha && artifact.id == id,
+        "artifact metadata disagrees with its indexed identity"
+    );
+    Ok(artifact)
 }
 
 struct PendingArtifact {

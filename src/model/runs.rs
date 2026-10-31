@@ -84,3 +84,13 @@ pub struct Artifact {
     pub sha256: String,
     pub format: String,
 }
+
+impl Artifact {
+    /// Run-owned reference identity; content identity remains the separate SHA-256.
+    pub fn reference_id(sha256: &str, name: &str, format: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let identity = serde_json::to_vec(&(sha256, name, format))
+            .expect("serializing an artifact identity tuple of strings cannot fail");
+        format!("{:x}", Sha256::digest(identity))
+    }
+}
