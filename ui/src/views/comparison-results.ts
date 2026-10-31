@@ -118,7 +118,7 @@ function metrics(data: Comparison, context: ViewContext): HTMLElement {
                   el('th', { class: 'numeric' }, 'Before'),
                   el('th', { class: 'numeric' }, 'After'),
                   el('th', { class: 'numeric' }, 'Delta'),
-                  el('th', { class: 'numeric' }, 'Change'),
+                  el('th', { class: 'numeric' }, 'Observed change'),
                 ),
               ),
               el(
@@ -142,7 +142,10 @@ function metrics(data: Comparison, context: ViewContext): HTMLElement {
                       row.measurement_quality
                         ? badge(
                             row.measurement_quality.replaceAll('_', ' '),
-                            row.comparable === false ? 'warn' : '',
+                            (row.measurement_comparable ?? row.comparable) ===
+                              false
+                              ? 'warn'
+                              : '',
                           )
                         : null,
                       row.diagnostic

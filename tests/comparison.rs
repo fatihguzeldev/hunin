@@ -26,6 +26,66 @@ fn recording(id: &str) -> Run {
     }
 }
 
+#[tokio::test]
+async fn metric_availability_is_distinct_from_measurement_and_workload_checks() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    store.save_run(&recording("before")).unwrap();
+    let mut after = recording("after");
+    after.command.push("different workload".into());
+    store.save_run(&after).unwrap();
+    let result = Operations::new(store)
+        .call(
+            "comparisons.create",
+            json!({"before":"before","after":"after"}),
+        )
+        .await
+        .unwrap();
+    let row = metric(&result, "recording.elapsed");
+    assert_eq!(result["comparable"], false);
+    assert_eq!(row["values_available"], true);
+    assert_eq!(row["measurement_comparable"], true);
+    assert_eq!(row["workload_comparable"], false);
+    assert_eq!(row["comparable"], row["measurement_comparable"]);
+}
+
+#[tokio::test]
+async fn declared_input_path_changes_do_not_claim_content_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    for (id, path) in [("before", "old/input.bin"), ("after", "moved/input.bin")] {
+        let mut run = recording(id);
+        run.source["workload_inputs"] =
+            json!({"fingerprint":id,"files":[{"path":path,"sha256":"a".repeat(64),"bytes":4}]});
+        store.save_run(&run).unwrap();
+    }
+    let operations = Operations::new(store.clone());
+    let params = json!({"before":"before","after":"after"});
+    let path_change = operations
+        .call("comparisons.create", params.clone())
+        .await
+        .unwrap();
+    assert_eq!(path_change["comparable"], false);
+    assert!(
+        path_change["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_str().unwrap().contains("paths differ"))
+    );
+    let mut after = store.run("after").unwrap();
+    after.source["workload_inputs"]["files"][0]["sha256"] = json!("b".repeat(64));
+    store.save_run(&after).unwrap();
+    let content_change = operations.call("comparisons.create", params).await.unwrap();
+    assert!(
+        content_change["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_str().unwrap().contains("content digests differ"))
+    );
+}
+
 fn sample(run: &str, function: &str, unit: &str, weight: f64) -> Value {
     json!({"schema_version":1,"kind":"sample","id":format!("{run}-{function}-{unit}"),"run_id":run,"producer_id":"control","pid":1,"tid":"main","timestamp_us":10,"basis":"sampled","stack":[{"function":function}],"weight":weight,"weight_unit":unit})
 }
@@ -225,6 +285,9 @@ async fn two_unknown_supervised_scopes_do_not_establish_measurement_equivalence(
     assert_eq!(elapsed["comparable"], false);
     assert_eq!(elapsed["delta"], Value::Null);
     assert_eq!(elapsed["measurement_quality"], "unknown_scope");
+    assert_eq!(elapsed["values_available"], true);
+    assert_eq!(elapsed["measurement_comparable"], false);
+    assert_eq!(elapsed["workload_comparable"], false);
 }
 
 #[tokio::test]

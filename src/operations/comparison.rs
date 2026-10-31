@@ -15,6 +15,35 @@ fn elapsed(run: &Run) -> Option<f64> {
         .checked_sub(run.started_at_us)
         .map(|duration| duration as f64 / 1000.0)
 }
+
+fn input_difference(before: &Value, after: &Value) -> &'static str {
+    fn identities(input: &Value) -> Option<(Vec<String>, Vec<String>)> {
+        let mut paths = Vec::new();
+        let mut digests = Vec::new();
+        for file in input["files"].as_array()? {
+            let digest = file["sha256"].as_str()?;
+            if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            paths.push(file["path"].as_str()?.to_owned());
+            digests.push(digest.to_ascii_lowercase());
+        }
+        paths.sort();
+        digests.sort();
+        Some((paths, digests))
+    }
+    if let (Some((paths_a, digests_a)), Some((paths_b, digests_b))) =
+        (identities(before), identities(after))
+    {
+        if digests_a != digests_b {
+            return "Declared workload input content digests differ";
+        }
+        if paths_a != paths_b {
+            return "Declared workload input paths differ; recorded content digests match";
+        }
+    }
+    "Declared workload input identities differ (paths or content digests)"
+}
 struct ResourceValue {
     value: f64,
     observations: usize,
@@ -180,7 +209,10 @@ pub fn compare(
             &before.source["workload_inputs"]["fingerprint"],
             &after.source["workload_inputs"]["fingerprint"],
             "Declared workload input identity is unavailable",
-            "Declared workload input contents differ",
+            input_difference(
+                &before.source["workload_inputs"],
+                &after.source["workload_inputs"],
+            ),
         ),
         (
             &before.source["correctness_recipe_fingerprint"],
@@ -387,6 +419,11 @@ pub fn compare(
         json!({"function":r["function"],"file":r["file"],"module":r["module"],"before":before,"after":after,"delta":before.zip(after).map(|(before,after)|after-before),"unit":unit,"basis":"profiler sample weight grouped by function/file/module across measured code versions; not elapsed time or a speedup ratio","before_available":before.is_some(),"after_available":after.is_some(),"presence":presence})
     }).collect::<Vec<_>>();
     let hotspot_selection = json!({"weight_unit":unit,"limit_per_recording":HOTSPOT_LIMIT,"before_available":before_available,"after_available":after_available,"before_total_functions":before_page.total_functions,"after_total_functions":after_page.total_functions,"before_truncated":before_truncated,"after_truncated":after_truncated});
+    for row in &mut metrics {
+        row["values_available"] = json!(row["before"].is_number() && row["after"].is_number());
+        row["measurement_comparable"] = row["comparable"].clone();
+        row["workload_comparable"] = json!(reasons.is_empty());
+    }
     work.check()?;
     Ok(
         json!({"before":before,"after":after,"comparable":reasons.is_empty(),"reasons":reasons,"metrics":metrics,"correctness":{"before":before.correctness,"after":after.correctness},"hotspots":hotspots,"hotspot_selection":hotspot_selection,"sample_weight_units":{"before":before_units,"after":after_units},"limitations":["Single profiled runs are descriptive comparisons; repeated low-intervention measurements are required to establish a speed improvement.","Source/build changes are permitted as the optimization under comparison; commands, environment, declared inputs, collector settings and correctness recipe must match.","Only explicitly declared input files are fingerprinted; dynamic and network inputs are not verified.","Exit-code-only recipes establish successful termination, not semantic output correctness; use an explicit expected stdout value or digest when output is part of the contract.","Process resource peaks retain process scope; no per-request ownership is inferred.","Hotspots group observed function/file/module names across measured code versions; this grouping does not establish semantic equivalence. A missing row outside a truncated rank window is unknown, not an unobserved function."]}),

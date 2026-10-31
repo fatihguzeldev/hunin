@@ -1445,6 +1445,17 @@
         "checkpoint_seconds": 10,
         "scope": "One selected-observation snapshot; comparisons share one cumulative budget across two independent snapshots.",
         "enforcement": "Counts serialized input and explicit work units, not allocator usage or a hard elapsed deadline. Checkpoints cannot preempt one filesystem/SQLite/JSON operation or bounded sort."
+      },
+      "hunin/comparison-semantics": {
+        "version": 1,
+        "global_comparable": "Recorded workload, runtime, collector, inputs, correctness and scope checks; reasons explain rejected comparisons.",
+        "metric_fields": {
+          "values_available": "Both measured numeric values exist.",
+          "measurement_comparable": "Metric scope and observation quality permit a descriptive delta.",
+          "workload_comparable": "Same workload acceptance as the global comparable field.",
+          "comparable": "Legacy alias of measurement_comparable; does not mean the workload matches."
+        },
+        "claim_limit": "A single profiled pair is descriptive, even when the workload checks pass."
       }
     }
   },

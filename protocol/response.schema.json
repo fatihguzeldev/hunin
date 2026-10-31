@@ -7,14 +7,28 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "name": { "type": "string", "minLength": 1 },
-        "store_path": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "store_path": {
+          "type": "string",
+          "minLength": 1
+        },
         "workspace_roots": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "legacy": { "type": "boolean" }
+        "legacy": {
+          "type": "boolean"
+        }
       },
       "required": ["id", "name", "store_path", "workspace_roots", "legacy"]
     },
@@ -22,9 +36,18 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "projects": { "type": "array", "items": { "$ref": "#/$defs/Project" } },
-        "selected_project_id": { "type": ["string", "null"] },
-        "direct_store": { "type": "boolean" },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Project"
+          }
+        },
+        "selected_project_id": {
+          "type": ["string", "null"]
+        },
+        "direct_store": {
+          "type": "boolean"
+        },
         "storage_scope": {
           "type": ["string", "null"],
           "description": "Stable browser-state namespace for explicit direct-store mode; null in registry mode."
@@ -1298,7 +1321,8 @@
           "type": "string"
         },
         "comparable": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Legacy alias for measurement_comparable, not workload equivalence. New clients should use the three explicitly named fields."
         },
         "before_observations": {
           "type": "integer",
@@ -1318,6 +1342,18 @@
         },
         "diagnostic": {
           "type": "string"
+        },
+        "values_available": {
+          "type": "boolean",
+          "description": "Both before and after contain numeric measurements. This does not establish measurement scope compatibility or equivalent workloads."
+        },
+        "measurement_comparable": {
+          "type": "boolean",
+          "description": "The pair satisfies this metric's measurement scope and quality checks. Independent of workload equivalence."
+        },
+        "workload_comparable": {
+          "type": "boolean",
+          "description": "Same value as Comparison.comparable: shared workload/settings/correctness checks passed. A single profiled pair still does not establish a speed improvement."
         }
       },
       "required": [
@@ -1397,7 +1433,8 @@
           "$ref": "#/$defs/Run"
         },
         "comparable": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "The recorded workload/settings/correctness comparison checks passed; independent metric availability/quality and repeated-measurement claim limits still apply."
         },
         "reasons": {
           "type": "array",
