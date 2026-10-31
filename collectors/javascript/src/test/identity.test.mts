@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { plan } from '../host/plan.mjs';
@@ -34,10 +34,10 @@ for (const [runtime, executable, expected] of [
     );
     try {
       const relocated = join(directory, 'relocated-planner');
-      mkdirSync(join(relocated, 'host'), { recursive: true });
-      // Planning only executes these two modules. Target-agent delivery is
+      // Copy the planner entrypoint and its runtime dependencies. Target-agent delivery is
       // covered separately by the actual installed capture controls.
-      for (const path of ['plan.mjs', 'host/plan.mjs']) {
+      for (const path of ['plan.mjs', 'host/plan.mjs', 'code/plan.mjs']) {
+        mkdirSync(dirname(join(relocated, path)), { recursive: true });
         cpSync(
           fileURLToPath(new URL(`../${path}`, import.meta.url)),
           join(relocated, path),
