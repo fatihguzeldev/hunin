@@ -3,6 +3,7 @@ import { badge, button, el, empty, errorView } from '../dom';
 import { date } from '../format';
 import type { ViewContext } from '../investigation/view';
 import { analysisAttemptMetadata } from './metadata';
+import { recordingUrl } from '../projects/context';
 
 export function analyzerAttempts(
   items: AnalysisResult[],
@@ -13,18 +14,13 @@ export function analyzerAttempts(
   const published = el(
     'section',
     { class: 'panel' },
-    el(
-      'div',
-      { class: 'panel-head' },
-      el('h2', {}, 'Attempts and accepted results'),
-      el('small', {}, 'Accepted observations join Timeline and Evidence'),
-    ),
+    el('div', { class: 'panel-head' }, el('h2', {}, 'Results')),
   );
   if (!items.length)
     published.append(
       empty(
         'No analyzer results',
-        'Completed attempts and accepted result identities will be retained with the recording.',
+        'Run a registered analyzer on this recording to see its results here.',
       ),
     );
   for (const item of items) {
@@ -37,7 +33,13 @@ export function analyzerAttempts(
         el(
           'div',
           { class: 'toolbar' },
-          el('h3', { class: 'mono' }, result.id ?? 'Unknown attempt'),
+          el(
+            'h3',
+            { title: result.id },
+            result.created_at
+              ? date(result.created_at)
+              : 'Attempt time unknown',
+          ),
           badge(
             result.status,
             ['accepted', 'replayed'].includes(result.status)
@@ -66,7 +68,7 @@ export function analyzerAttempts(
                   })
                     .then(() =>
                       context.refresh(
-                        'Analyzer cancellation request completed. The retained attempt status is authoritative.',
+                        'Cancellation requested. Check the attempt status below.',
                       ),
                     )
                     .catch((error) =>
@@ -84,33 +86,27 @@ export function analyzerAttempts(
         el(
           'p',
           {},
-          `${result.analysis_id ?? 'Unknown analyzer'} · ${result.version ?? 'unknown version'} · ${result.created_at ? date(result.created_at) : 'creation time unknown'}`,
+          `Analyzer ${result.analysis_id?.slice(0, 12) ?? 'unknown'} · version ${result.version ?? 'unknown'}`,
         ),
-        result.result_set_id && ['accepted', 'replayed'].includes(result.status)
+        result.selected === true &&
+          (result.result_set_id || result.id) &&
+          ['accepted', 'replayed'].includes(result.status)
           ? el(
-              'p',
-              { class: 'mono source-label' },
-              `Accepted result set ${result.result_set_id}`,
+              'a',
+              {
+                href: recordingUrl(location.href, context.run.id, 'evidence')
+                  .href,
+              },
+              'Inspect accepted evidence',
             )
           : null,
-        el(
-          'p',
-          { class: 'mono source-label' },
-          `Input fingerprint ${result.input_fingerprint ?? 'unknown'}`,
-        ),
         ...result.diagnostics.map((message) => el('p', {}, message)),
-        !result.created_at || !result.analysis_id || !result.input_fingerprint
-          ? el(
-              'details',
-              {},
-              el(
-                'summary',
-                {},
-                'Retained attempt metadata · unavailable fields',
-              ),
-              el('pre', {}, JSON.stringify(result.raw, null, 2)),
-            )
-          : null,
+        el(
+          'details',
+          {},
+          el('summary', {}, 'Attempt details'),
+          el('pre', {}, JSON.stringify(result.raw, null, 2)),
+        ),
       ),
     );
   }

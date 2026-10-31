@@ -58,17 +58,7 @@ export async function analyses(context: ViewContext): Promise<HTMLElement> {
   const body = el(
     'div',
     { class: 'stack' },
-    el(
-      'div',
-      { class: 'view-title' },
-      el('h2', {}, 'Durable analyzers'),
-      el('p', {}, 'Managed packages · fresh inputs · atomic publication'),
-    ),
-    el(
-      'p',
-      { class: 'notice' },
-      'Applicability checks constrain reuse. A passing declaration does not prove the semantic correctness of an analyzer’s conclusions.',
-    ),
+    el('div', { class: 'view-title' }, el('h2', {}, 'Analyzers')),
     el(
       'div',
       { class: 'toolbar' },

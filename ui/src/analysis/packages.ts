@@ -18,7 +18,7 @@ export function analyzerPackages(
     list.append(
       empty(
         'No registered analyzers',
-        'Register an analyzer package to derive additional relationships from declared recording inputs.',
+        'Register a local analyzer to produce derived observations from this recording.',
       ),
     );
   for (const item of items) {
@@ -50,7 +50,7 @@ export function analyzerPackages(
                 'p',
                 { class: 'notice' },
                 result.status === 'running'
-                  ? `Attempt ${result.result_set_id} started. Follow its status below; output is published only after acceptance.`
+                  ? 'Analyzer started. Follow its progress in Results below.'
                   : `${result.status} · ${result.result_set_id}`,
                 ...result.diagnostics.map((value) =>
                   el('span', { class: 'source-label' }, value),

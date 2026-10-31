@@ -1,7 +1,8 @@
 import { operation } from '../api';
-import { button, el, field } from '../dom';
+import { button, el, field, lockFields } from '../dom';
 import { parseCommand } from '../command';
 import type { runSource } from '../recordings/presentation';
+import { analyzerRequirements } from './requirements';
 
 export function registerAnalysis(
   recordingRuntime: string,
@@ -21,15 +22,16 @@ export function registerAnalysis(
   const fingerprint = el('input', {
     class: 'mono',
     value: source.fingerprint,
+    required: true,
   });
   const scope = el('select');
   scope.append(
-    el('option', { value: 'source' }, 'This measured source build'),
-    el('option', { value: 'generic' }, 'Source-independent analyzer'),
+    el('option', { value: 'recording' }, 'This recording’s source'),
+    el('option', { value: 'independent' }, 'Source-independent'),
   );
   scope.addEventListener('change', () => {
-    fingerprint.disabled = scope.value === 'generic';
-    runtime.value = scope.value === 'generic' ? '*' : recordingRuntime;
+    fingerprint.disabled = scope.value === 'independent';
+    runtime.value = scope.value === 'independent' ? '*' : recordingRuntime;
   });
   const dependencies = el('textarea', {
     class: 'mono',
@@ -37,9 +39,9 @@ export function registerAnalysis(
     spellcheck: false,
   });
   dependencies.value = '{}';
-  const message = el('p', { role: 'alert', class: 'metric-note' });
+  const message = el('p', { role: 'status', class: 'metric-note' });
   const submit = button(
-    'Register package',
+    'Register analyzer',
     () => {
       void save();
     },
@@ -61,18 +63,43 @@ export function registerAnalysis(
       field('Package directory', cwd),
       field('Command · JSON argument array', command),
       field('Applicability', scope),
-      field('Required runtime · * for any runtime', runtime),
-      field('Required source fingerprint', fingerprint),
+      field('Runtime · * accepts any', runtime),
+      field('Source fingerprint', fingerprint),
       el(
         'p',
         { class: 'metric-note' },
-        'Source-specific registration also pins the available executable digest and runtime version. This does not establish a verified build-to-source mapping.',
+        'Source-specific analyzers also match known executable and runtime identities. This does not verify the source-to-build mapping.',
       ),
-      field('Dependencies · JSON declaration', dependencies),
       el(
-        'p',
-        { class: 'metric-note' },
-        'Declare python_requirements, node_lockfile, or setup_commands when needed. Lockfile paths are relative to the package. Hunin prepares dependencies in a managed attempt workspace. The command executes with your local user permissions.',
+        'details',
+        { class: 'panel' },
+        el('summary', { class: 'panel-body' }, 'Dependencies'),
+        el(
+          'div',
+          { class: 'panel-body stack' },
+          field('Dependency declaration · JSON', dependencies),
+          el(
+            'p',
+            { class: 'metric-note' },
+            'Optional python_requirements, node_lockfile or setup_commands. File paths are relative to the package directory.',
+          ),
+        ),
+      ),
+      el(
+        'details',
+        { class: 'panel' },
+        el('summary', { class: 'panel-body' }, 'Analyzer input and output'),
+        el(
+          'div',
+          { class: 'panel-body stack' },
+          el(
+            'p',
+            {},
+            'Reads JSON from stdin and writes observation JSON lines to stdout. Each derived observation must reference input record IDs in evidence.',
+          ),
+          el('p', {}, 'The command runs locally with your user permissions.'),
+          el('code', {}, 'hunin catalog analyses.register'),
+        ),
       ),
       message,
     ),
@@ -94,35 +121,42 @@ export function registerAnalysis(
   name.focus();
   async function save(): Promise<void> {
     if (submit.disabled || !form.reportValidity()) return;
+    let unlock: (() => void) | undefined;
     try {
       const args = parseCommand(command.value);
       const declared: unknown = JSON.parse(dependencies.value);
       if (!declared || typeof declared !== 'object' || Array.isArray(declared))
         throw new Error('Dependencies must be a JSON object.');
+      const requirements = analyzerRequirements(
+        scope.value === 'independent' ? 'independent' : 'recording',
+        runtime.value,
+        { ...source, fingerprint: fingerprint.value },
+      );
       submit.disabled = true;
+      submit.textContent = 'Registering…';
+      form.setAttribute('aria-busy', 'true');
+      unlock = lockFields(form);
+      message.setAttribute('role', 'status');
+      message.textContent = 'Registering analyzer…';
       await operation('analyses.register', {
         name: name.value,
         version: version.value,
         cwd: cwd.value,
         command: args,
-        requirements: {
-          runtime: runtime.value,
-          ...(scope.value === 'generic'
-            ? { source_independent: true }
-            : {
-                source_fingerprint: fingerprint.value || undefined,
-                executable_sha256: source.executable_sha256 || undefined,
-                runtime_version: source.runtime_version || undefined,
-              }),
-        },
+        requirements,
         dependencies: declared as Record<string, unknown>,
       });
       dialog.close();
       await registered();
     } catch (error) {
+      message.setAttribute('role', 'alert');
       message.textContent =
         error instanceof Error ? error.message : String(error);
+    } finally {
+      form.removeAttribute('aria-busy');
+      unlock?.();
       submit.disabled = false;
+      submit.textContent = 'Register analyzer';
     }
   }
 }
