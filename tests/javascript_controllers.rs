@@ -29,7 +29,7 @@ fn record_without_global_node(
     command
         .args(["--data-dir"])
         .arg(data.path())
-        .args(["run", "--runtime", runtime, "--cwd"])
+        .args(["run", "--full", "--runtime", runtime, "--cwd"])
         .arg(cwd)
         .args(["--expected-stdout", expected, "--timeout", "10", "--"])
         .arg(executable)
