@@ -50,6 +50,29 @@ async fn metric_availability_is_distinct_from_measurement_and_workload_checks() 
 }
 
 #[tokio::test]
+async fn overflowing_process_totals_are_not_comparable_numeric_measurements() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path()).unwrap();
+    for id in ["before", "after"] {
+        store.save_run(&recording(id)).unwrap();
+        let rows = (1..=2).flat_map(|pid| (1..=2).map(move |timestamp| json!({"schema_version":1,"kind":"metric","id":format!("{id}-{pid}-{timestamp}"),"run_id":id,"producer_id":"control","pid":pid,"tid":"","timestamp_us":timestamp,"basis":"observed","name":"process.cpu_time","value":1e308,"unit":"milliseconds","scope":"process","attributes":{"process_lifetime_id":format!("process-{pid}"),"temporality":"cumulative"}}))).collect::<Vec<_>>();
+        store.accept(id, "control", &rows).unwrap();
+    }
+    let result = Operations::new(store)
+        .call(
+            "comparisons.create",
+            json!({"before":"before","after":"after"}),
+        )
+        .await
+        .unwrap();
+    let row = metric(&result, "process.cpu_time.observed_total");
+    assert_eq!(row["values_available"], false);
+    assert_eq!(row["measurement_comparable"], false);
+    assert_eq!(row["comparable"], false);
+    assert_eq!(row["delta"], Value::Null);
+}
+
+#[tokio::test]
 async fn declared_input_path_changes_do_not_claim_content_changes() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path()).unwrap();

@@ -420,8 +420,15 @@ pub fn compare(
     }).collect::<Vec<_>>();
     let hotspot_selection = json!({"weight_unit":unit,"limit_per_recording":HOTSPOT_LIMIT,"before_available":before_available,"after_available":after_available,"before_total_functions":before_page.total_functions,"after_total_functions":after_page.total_functions,"before_truncated":before_truncated,"after_truncated":after_truncated});
     for row in &mut metrics {
-        row["values_available"] = json!(row["before"].is_number() && row["after"].is_number());
-        row["measurement_comparable"] = row["comparable"].clone();
+        let available = row["before"].is_number() && row["after"].is_number();
+        let comparable = available && row["comparable"] == true;
+        row["values_available"] = json!(available);
+        row["comparable"] = json!(comparable);
+        row["measurement_comparable"] = json!(comparable);
+        if !available {
+            row["delta"] = Value::Null;
+            row["percent_change"] = Value::Null;
+        }
         row["workload_comparable"] = json!(reasons.is_empty());
     }
     work.check()?;
