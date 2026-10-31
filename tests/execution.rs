@@ -83,6 +83,21 @@ async fn validates_exact_stdout_and_records_declared_environment_and_inputs() {
         run.source["workload_inputs"]["files"][0]["path"],
         "input.txt"
     );
+    let declared = &run.source["workload_inputs"]["files"][0];
+    assert_eq!(declared["snapshot_status"], "retained");
+    let store = Store::open(data.path()).unwrap();
+    let retained = store
+        .artifacts(&run.id)
+        .unwrap()
+        .into_iter()
+        .find(|artifact| Some(artifact.id.as_str()) == declared["artifact_id"].as_str())
+        .unwrap();
+    assert_eq!(retained.format, "workload-input");
+    assert_eq!(retained.sha256, declared["sha256"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read(store.artifact_path(&run.id, &retained.id).unwrap()).unwrap(),
+        b"data"
+    );
     let mut hashed = base.clone();
     hashed.as_object_mut().unwrap().remove("expected_stdout");
     hashed["expected_stdout_sha256"] = json!(format!("{:x}", Sha256::digest(b"value:data\n")));

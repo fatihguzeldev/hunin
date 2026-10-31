@@ -31,6 +31,7 @@ impl Engine {
             .validate_runtime(&run.runtime, request.code_options.as_ref())?;
         let directory = self.store.root().join("captures").join(&run.id);
         fs::create_dir_all(directory.join("sdk"))?;
+        super::identity::retain_workload_inputs(&self.store, &mut run)?;
         crate::source::retain(&self.store, &mut run)?;
         let mut command = run.command.clone();
         if let Some(path) = run.source["launch_executable"]

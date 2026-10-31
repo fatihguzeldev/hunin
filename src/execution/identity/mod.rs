@@ -4,7 +4,7 @@ mod inputs;
 mod source;
 
 pub(super) use environment::environment;
-pub(super) use inputs::workload_inputs;
+pub(super) use inputs::{retain_workload_inputs, workload_inputs};
 pub(super) use source::source;
 
 use sha2::{Digest, Sha256};
