@@ -1,0 +1,4 @@
+[package]
+name = "hunin-core"
+version.workspace = true
+edition.workspace = true
