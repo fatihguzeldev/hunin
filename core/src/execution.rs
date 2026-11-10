@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -23,15 +23,24 @@ pub enum ExecutionPhase {
     Cancelled,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionBoundary {
+    CompletionAcknowledgment,
+    ProcessExit,
+}
+
+#[derive(Clone, Debug)]
 pub struct ExecutionOutcome {
     pub exit_code: Option<i32>,
     pub success: bool,
     pub cancelled: bool,
     pub elapsed: Duration,
     pub measured_elapsed: Option<Duration>,
+    pub measurement_end: Option<ExecutionBoundary>,
     pub stdout: Vec<u8>,
     pub stdout_truncated: bool,
+    pub stderr: Vec<u8>,
+    pub stderr_truncated: bool,
     pub cleanup_pending: bool,
 }
 
@@ -60,13 +69,54 @@ impl From<io::Error> for ExecutionError {
     }
 }
 
+pub trait ExecutionChild: Send {
+    fn id(&self) -> u32;
+    fn take_stdin(&mut self) -> Option<ChildStdin>;
+    fn take_stdout(&mut self) -> Option<ChildStdout>;
+    fn take_stderr(&mut self) -> Option<ChildStderr>;
+    fn poll(&mut self) -> io::Result<Option<ExitStatus>>;
+    fn terminate(&mut self) -> io::Result<()>;
+    fn reap(&mut self) -> io::Result<ExitStatus>;
+}
+
+struct DirectChild(Child);
+
+impl ExecutionChild for DirectChild {
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+    fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.0.stdin.take()
+    }
+    fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.0.stdout.take()
+    }
+    fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.0.stderr.take()
+    }
+    fn poll(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.0.try_wait()
+    }
+    fn terminate(&mut self) -> io::Result<()> {
+        self.0.kill()
+    }
+    fn reap(&mut self) -> io::Result<ExitStatus> {
+        self.0.wait()
+    }
+}
+
 pub struct PreparedProcess {
-    child: Option<Child>,
+    child: Option<Box<dyn ExecutionChild>>,
     input: Option<ChildStdin>,
     ready: Receiver<Result<(), String>>,
     output: Receiver<(Vec<u8>, bool)>,
-    completion: Receiver<Result<(), String>>,
-    work_complete: bool,
+    errors: Receiver<(Vec<u8>, bool)>,
+    captured_errors: Option<(Vec<u8>, bool)>,
+    terminal_outcome: Option<ExecutionOutcome>,
+    output_done: bool,
+    errors_done: bool,
+    completion: Receiver<Result<Instant, String>>,
+    completed_at: Option<Instant>,
     phase: ExecutionPhase,
     started: Instant,
     released: Option<Instant>,
@@ -84,23 +134,63 @@ impl PreparedProcess {
             ));
         }
         let started = Instant::now();
-        let mut child = Command::new(&spec.program)
+        let child = Command::new(&spec.program)
             .args(&spec.args)
             .current_dir(&spec.directory)
             .envs(&spec.environment)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()?;
-        let input = child.stdin.take();
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or(ExecutionError::Invalid("missing stdout pipe"))?;
+        let mut process = Self::from_child(Box::new(DirectChild(child)), spec.stdout_limit)?;
+        process.started = started;
+        Ok(process)
+    }
+
+    pub fn from_child(
+        mut child: Box<dyn ExecutionChild>,
+        limit: usize,
+    ) -> Result<Self, ExecutionError> {
+        let input = child.take_stdin();
+        let stdout = child.take_stdout();
+        if limit > 16 * 1024 * 1024 || input.is_none() || stdout.is_none() {
+            let _ = child.terminate();
+            std::thread::spawn(move || {
+                let _ = child.reap();
+            });
+            return Err(ExecutionError::Invalid(
+                "prepared child needs bounded stdin/stdout pipes",
+            ));
+        }
+        let mut stdout = stdout.expect("checked stdout");
+        let (errors_tx, errors) = mpsc::sync_channel(1);
+        if let Some(mut stderr) = child.take_stderr() {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 8192];
+                let mut truncated = false;
+                loop {
+                    match stderr.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let remaining = limit.saturating_sub(bytes.len());
+                            bytes.extend_from_slice(&buffer[..n.min(remaining)]);
+                            truncated |= n > remaining;
+                        }
+                        Err(_) => {
+                            truncated = true;
+                            break;
+                        }
+                    }
+                }
+                let _ = errors_tx.send((bytes, truncated));
+            });
+        } else {
+            let _ = errors_tx.send((Vec::new(), false));
+        }
         let (ready_tx, ready) = mpsc::sync_channel(1);
         let (output_tx, output) = mpsc::sync_channel(1);
         let (completion_tx, completion) = mpsc::sync_channel(1);
-        let limit = spec.stdout_limit;
         std::thread::spawn(move || {
             let mut first = Vec::with_capacity(32);
             let mut byte = [0];
@@ -143,7 +233,7 @@ impl PreparedProcess {
                                     line.pop();
                                 }
                                 if !long_line && !completed && line == b"HUNIN_WORK_COMPLETE" {
-                                    let _ = completion_tx.send(Ok(()));
+                                    let _ = completion_tx.send(Ok(Instant::now()));
                                     completed = true;
                                 }
                                 line.clear();
@@ -176,10 +266,15 @@ impl PreparedProcess {
             input,
             ready,
             output,
+            errors,
+            captured_errors: None,
+            terminal_outcome: None,
+            output_done: false,
+            errors_done: false,
             completion,
-            work_complete: false,
+            completed_at: None,
             phase: ExecutionPhase::AwaitingReadiness,
-            started,
+            started: Instant::now(),
             released: None,
         })
     }
@@ -202,7 +297,15 @@ impl PreparedProcess {
                 self.phase = ExecutionPhase::Ready;
                 Ok(())
             }
-            Ok(Err(e)) => Err(ExecutionError::Readiness(e)),
+            Ok(Err(e)) => {
+                self.captured_errors = self.errors.recv_timeout(Duration::from_millis(100)).ok();
+                let diagnostic = self
+                    .captured_errors
+                    .as_ref()
+                    .map(|(bytes, _)| String::from_utf8_lossy(bytes).into_owned())
+                    .unwrap_or_default();
+                Err(ExecutionError::Readiness(format!("{e}; {diagnostic}")))
+            }
             Err(_) => Err(ExecutionError::Deadline(
                 "source readiness deadline exceeded",
             )),
@@ -215,22 +318,28 @@ impl PreparedProcess {
                 "work requires acknowledged source readiness",
             ));
         }
+        let released = Instant::now();
         self.input
             .as_mut()
             .ok_or(ExecutionError::Invalid("closed input"))?
             .write_all(b"HUNIN_GO\n")?;
-        self.released = Some(Instant::now());
+        self.released = Some(released);
         self.phase = ExecutionPhase::Running;
         Ok(())
     }
 
     pub fn work_complete(&mut self) -> Result<bool, ExecutionError> {
-        if self.work_complete {
+        if self.completed_at.is_some() {
             return Ok(true);
         }
         match self.completion.try_recv() {
-            Ok(Ok(())) => {
-                self.work_complete = true;
+            Ok(Ok(completed_at)) => {
+                if self.released.is_none_or(|released| completed_at < released) {
+                    return Err(ExecutionError::Readiness(
+                        "work completion preceded work release".into(),
+                    ));
+                }
+                self.completed_at = Some(completed_at);
                 Ok(true)
             }
             Ok(Err(error)) => Err(ExecutionError::Readiness(error)),
@@ -241,8 +350,14 @@ impl PreparedProcess {
         }
     }
 
+    pub fn acknowledged_elapsed(&self) -> Option<Duration> {
+        self.completed_at
+            .zip(self.released)
+            .map(|(end, start)| end.saturating_duration_since(start))
+    }
+
     pub fn finish(&mut self) -> Result<(), ExecutionError> {
-        if self.phase != ExecutionPhase::Running || !self.work_complete {
+        if self.phase != ExecutionPhase::Running || self.completed_at.is_none() {
             return Err(ExecutionError::Invalid(
                 "final exit requires work completion acknowledgment",
             ));
@@ -259,7 +374,7 @@ impl PreparedProcess {
             .checked_add(deadline)
             .ok_or(ExecutionError::Invalid("invalid deadline"))?;
         loop {
-            if let Some(status) = self.child.as_mut().expect("owned child").try_wait()? {
+            if let Some(status) = self.child.as_mut().expect("owned child").poll()? {
                 return Ok(Some(status));
             }
             if Instant::now() >= until {
@@ -273,26 +388,52 @@ impl PreparedProcess {
 
     fn outcome(&mut self, status: Option<ExitStatus>, cancelled: bool) -> ExecutionOutcome {
         let elapsed = self.started.elapsed();
-        let measured_elapsed = self.released.map(|t| t.elapsed());
+        let _ = self.work_complete();
+        let measured_elapsed = self.released.map(|released| {
+            self.completed_at
+                .unwrap_or_else(Instant::now)
+                .saturating_duration_since(released)
+        });
+        let measurement_end = self.released.map(|_| {
+            if self.completed_at.is_some() {
+                ExecutionBoundary::CompletionAcknowledgment
+            } else {
+                ExecutionBoundary::ProcessExit
+            }
+        });
         // A descendant may retain stdout; never wait indefinitely for that borrowed descriptor.
         let output = self.output.recv_timeout(Duration::from_millis(100));
         let output_pending = matches!(output, Err(mpsc::RecvTimeoutError::Timeout));
+        self.output_done = !output_pending;
         let (stdout, stdout_truncated) = output.unwrap_or((Vec::new(), true));
+        let errors = self
+            .captured_errors
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| self.errors.recv_timeout(Duration::from_millis(100)));
+        let errors_pending = matches!(errors, Err(mpsc::RecvTimeoutError::Timeout));
+        self.errors_done = !errors_pending;
+        let (stderr, stderr_truncated) = errors.unwrap_or((Vec::new(), true));
         self.phase = if cancelled {
             ExecutionPhase::Cancelled
         } else {
             ExecutionPhase::Exited
         };
-        ExecutionOutcome {
+        let outcome = ExecutionOutcome {
             exit_code: status.and_then(|s| s.code()),
             success: status.is_some_and(|s| s.success()),
             cancelled,
             elapsed,
             measured_elapsed,
+            measurement_end,
             stdout,
             stdout_truncated,
-            cleanup_pending: status.is_none() || output_pending,
-        }
+            stderr,
+            stderr_truncated,
+            cleanup_pending: status.is_none() || output_pending || errors_pending,
+        };
+        self.terminal_outcome = Some(outcome.clone());
+        outcome
     }
 
     pub fn wait(&mut self, deadline: Duration) -> Result<ExecutionOutcome, ExecutionError> {
@@ -310,6 +451,9 @@ impl PreparedProcess {
         grace: Duration,
         forced: Duration,
     ) -> Result<ExecutionOutcome, ExecutionError> {
+        if let Some(outcome) = &self.terminal_outcome {
+            return Ok(outcome.clone());
+        }
         if matches!(
             self.phase,
             ExecutionPhase::Cancelled | ExecutionPhase::Exited
@@ -321,32 +465,85 @@ impl PreparedProcess {
         }
         let mut status = self.poll_exit(grace)?;
         if status.is_none() {
-            if let Err(error) = self.child.as_mut().expect("owned child").kill() {
-                if self
-                    .child
-                    .as_mut()
-                    .expect("owned child")
-                    .try_wait()?
-                    .is_none()
-                {
-                    return Err(error.into());
-                }
+            if let Err(error) = self.child.as_mut().expect("owned child").terminate()
+                && self.child.as_mut().expect("owned child").poll()?.is_none()
+            {
+                return Err(error.into());
             }
             status = self.poll_exit(forced)?;
         }
         Ok(self.outcome(status, true))
     }
+
+    pub fn confirm_cleanup(&mut self, deadline: Duration) -> Result<bool, ExecutionError> {
+        let Some(mut outcome) = self.terminal_outcome.clone() else {
+            return Err(ExecutionError::Invalid(
+                "cleanup confirmation requires a terminal control outcome",
+            ));
+        };
+        if !outcome.cleanup_pending {
+            return Ok(true);
+        }
+        let until = Instant::now()
+            .checked_add(deadline)
+            .ok_or(ExecutionError::Invalid("invalid cleanup deadline"))?;
+        let mut terminated = false;
+        loop {
+            let status = self.child.as_mut().expect("owned child").poll()?;
+            if status.is_none() && !terminated {
+                self.child.as_mut().expect("owned child").terminate()?;
+                terminated = true;
+            }
+            if !self.output_done {
+                match self.output.try_recv() {
+                    Ok((bytes, truncated)) => {
+                        outcome.stdout = bytes;
+                        outcome.stdout_truncated = truncated;
+                        self.output_done = true;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => self.output_done = true,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if !self.errors_done {
+                match self.errors.try_recv() {
+                    Ok((bytes, truncated)) => {
+                        outcome.stderr = bytes;
+                        outcome.stderr_truncated = truncated;
+                        self.errors_done = true;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => self.errors_done = true,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if let Some(status) = status {
+                outcome.exit_code = status.code();
+                outcome.success = status.success();
+            }
+            outcome.cleanup_pending = status.is_none() || !self.output_done || !self.errors_done;
+            self.terminal_outcome = Some(outcome.clone());
+            if !outcome.cleanup_pending {
+                return Ok(true);
+            }
+            if Instant::now() >= until {
+                return Ok(false);
+            }
+            std::thread::sleep(
+                Duration::from_millis(2).min(until.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
 }
 
 impl Drop for PreparedProcess {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-            }
+        if let Some(mut child) = self.child.take()
+            && child.poll().ok().flatten().is_none()
+        {
+            let _ = child.terminate();
+            std::thread::spawn(move || {
+                let _ = child.reap();
+            });
         }
     }
 }
@@ -429,8 +626,63 @@ mod tests {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(p.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        assert!(p.child.as_mut().unwrap().poll().unwrap().is_none());
+        let frozen = p.acknowledged_elapsed().unwrap();
+        std::thread::sleep(Duration::from_millis(120));
         p.finish().unwrap();
-        assert!(p.wait(Duration::from_secs(2)).unwrap().success);
+        let outcome = p.wait(Duration::from_secs(2)).unwrap();
+        assert!(outcome.success);
+        assert_eq!(outcome.measured_elapsed, Some(frozen));
+        assert_eq!(
+            outcome.measurement_end,
+            Some(ExecutionBoundary::CompletionAcknowledgment)
+        );
+        assert!(outcome.elapsed.saturating_sub(frozen) >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn prerequisite_diagnostics_survive_readiness_failure_and_stderr_is_bounded() {
+        let mut p = fixture("printf 'missing profiler permission' >&2; exit 9", 64);
+        assert!(
+            p.await_ready(Duration::from_secs(2))
+                .unwrap_err()
+                .to_string()
+                .contains("missing profiler permission")
+        );
+        let mut p = fixture(
+            "printf 'HUNIN_READY\\n'; read gate; printf '123456789' >&2",
+            4,
+        );
+        p.await_ready(Duration::from_secs(2)).unwrap();
+        p.release().unwrap();
+        let outcome = p.wait(Duration::from_secs(2)).unwrap();
+        assert_eq!(outcome.stderr, b"1234");
+        assert!(outcome.stderr_truncated);
+        assert!(!outcome.cleanup_pending);
+    }
+
+    #[test]
+    fn late_descriptor_cleanup_is_bounded_and_can_be_confirmed_without_redispatch() {
+        let mut p = fixture("printf 'HUNIN_READY\\n'; read gate; sleep 0.6 & exit 0", 64);
+        assert!(p.confirm_cleanup(Duration::ZERO).is_err());
+        p.await_ready(Duration::from_secs(2)).unwrap();
+        p.release().unwrap();
+        let outcome = p.wait(Duration::from_secs(1)).unwrap();
+        assert!(outcome.success);
+        assert!(outcome.cleanup_pending);
+        let start = Instant::now();
+        assert!(!p.confirm_cleanup(Duration::from_millis(10)).unwrap());
+        assert!(start.elapsed() < Duration::from_millis(250));
+        assert!(
+            p.cancel(Duration::ZERO, Duration::ZERO)
+                .unwrap()
+                .cleanup_pending
+        );
+        assert!(p.confirm_cleanup(Duration::from_secs(2)).unwrap());
+        assert!(
+            !p.cancel(Duration::ZERO, Duration::ZERO)
+                .unwrap()
+                .cleanup_pending
+        );
     }
 }
