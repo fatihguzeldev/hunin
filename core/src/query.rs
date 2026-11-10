@@ -18,6 +18,8 @@ use crate::{
     records::{Record, RecordSchema, SourceHandle},
 };
 
+mod catalog;
+pub use catalog::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RecordRef {
