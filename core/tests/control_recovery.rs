@@ -87,6 +87,10 @@ fn interruption_at_every_effect_barrier_never_redispatches_an_accepted_request()
             .accept(&key, &r, Action::Launch, json!({"program":"fixture"}))
             .unwrap();
         assert_eq!(accepted.newly_accepted, point == "before_intent", "{point}");
+        assert_eq!(
+            c.lookup(&key).unwrap().arguments,
+            json!({"program":"fixture"})
+        );
         if matches!(point, "after_dispatch" | "after_effect") {
             assert!(c.dispatch(&key).is_err(), "{point}");
             assert_eq!(c.interrupted(&key).unwrap().state, "uncertain");

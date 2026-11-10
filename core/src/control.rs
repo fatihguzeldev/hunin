@@ -44,6 +44,7 @@ pub struct RequestOutcome {
     pub request: RequestId,
     pub run: Reference,
     pub action: String,
+    pub arguments: Value,
     pub generation: i64,
     pub state: String,
     pub result: Option<Value>,
@@ -269,8 +270,8 @@ impl Controller {
 }
 
 fn load(connection: &Connection, key: &RequestId) -> Result<Option<RequestOutcome>> {
-    let row: Option<(String,String,i64,String,Option<String>)> = connection.query_row("SELECT run_id,action,generation,state,result FROM control_requests WHERE caller=?1 AND id=?2",params![key.caller,key.id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional()?;
-    row.map(|(run, action, generation, state, result)| {
+    let row: Option<(String,String,String,i64,String,Option<String>)> = connection.query_row("SELECT run_id,action,arguments,generation,state,result FROM control_requests WHERE caller=?1 AND id=?2",params![key.caller,key.id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
+    row.map(|(run, action, arguments, generation, state, result)| {
         Ok(RequestOutcome {
             request: key.clone(),
             run: Reference {
@@ -278,6 +279,7 @@ fn load(connection: &Connection, key: &RequestId) -> Result<Option<RequestOutcom
                 id: run,
             },
             action,
+            arguments: serde_json::from_str(&arguments)?,
             generation,
             state,
             result: result.map(|body| serde_json::from_str(&body)).transpose()?,
