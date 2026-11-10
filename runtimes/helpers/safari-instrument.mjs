@@ -41,6 +41,9 @@ const transformed = babel.transformSync(source, {
   plugins: [({ types: t }) => ({ visitor: {
     Program: { enter(p) {
       if (p.scope.getBinding('globalThis')) throw p.buildCodeFrameError('a program-level globalThis binding needs a separate instrumentation path');
+      for (const name of ['Object','Function','Array','Map','Number','Boolean','Error','performance']) {
+        if (p.scope.getBinding(name)?.kind==='hoisted') throw p.buildCodeFrameError('a program-level hoisted observer intrinsic binding needs a separate instrumentation path: '+name);
+      }
       strictProgram=p.node.sourceType==='module'||p.node.directives.some(item=>item.value.value==='use strict');
       hook = p.scope.generateUidIdentifier('huninObservation'+transformId.slice(0,12));
     } },
@@ -79,6 +82,7 @@ const transformed = babel.transformSync(source, {
 
 const runtime = `;(() => {
  const g=globalThis;
+ const Object=g.Object,Function=g.Function,Array=g.Array,Map=g.Map,Number=g.Number,Boolean=g.Boolean,Error=g.Error;
  if(g.__HuninObservation){if(g.__HuninObservation.format!=='hunin.safari-instrument-v1')throw Error('observer namespace collision');return;}
  const now=g.performance.now.bind(g.performance),origin=g.performance.timeOrigin;
  const push=Function.prototype.call.bind(Array.prototype.push);
@@ -104,7 +108,7 @@ const runtime = `;(() => {
 })();\n`;
 const registration = {transform_id:transformId,source_name:input,original_sha256:originalHash,functions};
 const generated = (strictProgram ? '"use strict";\n' : '') + runtime + `var ${hook.name}=globalThis.__HuninObservation.register(${JSON.stringify(registration)});\n` + transformed.code + '\n';
-const metadata = {format:'hunin.safari-transform-v1',babel_version:'8.1.0',transform_id:transformId,source_name:input,original_sha256:originalHash,instrumented_sha256:digest(generated),functions,caveats:['observed body wall spans include suspension and observer overhead','no inferred async parent or operation-owned cpu','generator entry occurs on resume, not generator object creation','promise settlement after a returned thenable is not observed','source text reflection and exact stack locations change under instrumentation','parameter initialization and engine-level completion checks are outside the inserted body interval','strict synchronous tail-call source is conservatively rejected, including returns inside an existing finally scope','direct eval, with, and a program-level globalThis binding are rejected']};
+const metadata = {format:'hunin.safari-transform-v1',babel_version:'8.1.0',transform_id:transformId,source_name:input,original_sha256:originalHash,instrumented_sha256:digest(generated),functions,caveats:['observed body wall spans include suspension and observer overhead','no inferred async parent or operation-owned cpu','generator entry occurs on resume, not generator object creation','promise settlement after a returned thenable is not observed','source text reflection and exact stack locations change under instrumentation','parameter initialization and engine-level completion checks are outside the inserted body interval','strict synchronous tail-call source is conservatively rejected, including returns inside an existing finally scope','direct eval, with, a program-level globalThis binding, and hoisted observer-intrinsic declarations are rejected']};
 for (const [filename,value] of [[output,generated],[metadataPath,JSON.stringify(metadata)]]) {
  const descriptor=fs.openSync(filename,'wx',0o600);try{fs.writeFileSync(descriptor,value);fs.fsyncSync(descriptor);}finally{fs.closeSync(descriptor);}
 }

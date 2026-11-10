@@ -83,6 +83,11 @@ fn generic_function_instrumentation_preserves_checked_completion_and_declares_lo
         ("eval.js", "function unsafe(){return eval('1+1')}"),
         ("with.js", "with({x:1}){x}"),
         ("shadow.js", "const globalThis={};function f(){return 1}"),
+        ("hoisted.js", "function Map(){};globalThis.run=()=>1"),
+        (
+            "hoisted-boolean.js",
+            "function Boolean(){};globalThis.run=()=>1",
+        ),
     ] {
         let file = area.path().join(name);
         fs::write(&file, text).unwrap();
@@ -201,4 +206,43 @@ fn strict_tail_calls_are_rejected_before_publishing_instrumented_source() {
         )
         .unwrap();
     }
+}
+
+#[test]
+#[ignore = "requires HUNIN_BABEL_NODE and HUNIN_BABEL_ROOT"]
+fn program_lexical_intrinsic_names_do_not_enter_the_observer_scope() {
+    let node = PathBuf::from(std::env::var("HUNIN_BABEL_NODE").unwrap());
+    let babel = PathBuf::from(std::env::var("HUNIN_BABEL_ROOT").unwrap());
+    let area = tempfile::tempdir().unwrap();
+    let source = area.path().join("shadowed.js");
+    fs::write(&source,"'use strict';const Map=5,Object=7,Function=11,Array=13,Number=17,Error=19,Boolean=23;globalThis.run=()=>Map+Object+Function+Array+Number+Error+Boolean;").unwrap();
+    let output = area.path().join("observed.js");
+    let binding = area.path().join("binding.json");
+    safari::instrument(&node, &babel, &source, &output, &binding, area.path()).unwrap();
+    let runner = area.path().join("runner.cjs");
+    fs::write(&runner,r#"const vm=require('node:vm'),fs=require('node:fs'),{performance}=require('node:perf_hooks');const [original,observed,binding,out]=process.argv.slice(2);const before=vm.createContext({performance}),after=vm.createContext({performance});vm.runInContext(fs.readFileSync(original,'utf8'),before);vm.runInContext(fs.readFileSync(observed,'utf8'),after);after.__HuninObservation.start({bindings:[JSON.parse(fs.readFileSync(binding))]});const expected=before.run(),actual=after.run();if(expected!==95||actual!==expected)throw Error('changed lexical bindings');fs.writeFileSync(out,JSON.stringify(after.__HuninObservation.stop()));"#).unwrap();
+    let profile = area.path().join("profile.json");
+    let mut command = Command::new(&node);
+    command.args([&runner, &source, &output, &binding, &profile]);
+    hunin_platforms::tools::require_success(
+        hunin_platforms::tools::run(
+            &mut command,
+            area.path(),
+            Duration::from_secs(20),
+            64 * 1024,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let extracted =
+        safari::extract(&fs::read(profile).unwrap(), "page", Limits::default()).unwrap();
+    assert!(extracted.capture_complete);
+    assert_eq!(
+        extracted
+            .records
+            .iter()
+            .filter(|r| r.schema == "safari.call")
+            .count(),
+        2
+    );
 }
