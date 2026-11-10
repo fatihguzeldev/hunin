@@ -145,3 +145,31 @@ fn failed_tool_preserves_compiler_diagnostics_from_both_streams() {
     assert!(error.message.contains("stdout_diagnostic"));
     assert!(error.message.contains("stderr_diagnostic"));
 }
+
+#[test]
+fn prepared_owned_factory_uses_nonce_control_and_preserves_partial_stdout() {
+    use hunin_core::execution::PreparedLaunch;
+    use hunin_platforms::native::control::spawn_prepared;
+    use std::{collections::BTreeMap, time::Instant};
+    let launch = PreparedLaunch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf 'preload'; printf 'HUNIN_READY %s\\r\\n' \"$HUNIN_CONTROL_TOKEN\"; read gate; test \"$gate\" = HUNIN_GO || exit 17; printf 'HUNIN_WORK_COMPLETE\\npartial'; sleep 0.12; printf 'HUNIN_WORK_COMPLETE %s\\n' \"$HUNIN_CONTROL_TOKEN\"; read gate; test \"$gate\" = HUNIN_EXIT".into()],
+        directory: "/".into(),
+        environment: BTreeMap::from([("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into())]),
+        stdout_limit: 1024,
+    };
+    let mut process = spawn_prepared(&launch, OwnedScope::ProcessGroup).unwrap();
+    process.await_ready(Duration::from_secs(2)).unwrap();
+    process.release().unwrap();
+    let until = Instant::now() + Duration::from_secs(2);
+    while !process.work_complete().unwrap() {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(process.acknowledged_elapsed().unwrap() >= Duration::from_millis(90));
+    process.finish().unwrap();
+    let outcome = process.wait(Duration::from_secs(2)).unwrap();
+    assert!(outcome.success);
+    assert!(!outcome.cleanup_pending);
+    assert_eq!(outcome.stdout, b"preloadHUNIN_WORK_COMPLETE\npartial");
+}

@@ -14,6 +14,152 @@ pub struct PreparedLaunch {
     pub stdout_limit: usize,
 }
 
+pub struct ControlProtocol {
+    token: Option<String>,
+}
+
+impl ControlProtocol {
+    /// Built-in helpers opt in; an unmarked launch explicitly keeps the legacy line protocol.
+    pub fn prepare(environment: &mut BTreeMap<String, String>) -> Result<Self, ExecutionError> {
+        for key in environment.keys() {
+            if key.eq_ignore_ascii_case("HUNIN_CONTROL_TOKEN") {
+                return Err(ExecutionError::Invalid(
+                    "control token is owned by the launch factory",
+                ));
+            }
+            if key.eq_ignore_ascii_case("HUNIN_CONTROL_PROTOCOL") && key != "HUNIN_CONTROL_PROTOCOL"
+            {
+                return Err(ExecutionError::Invalid(
+                    "control protocol environment aliases are reserved",
+                ));
+            }
+        }
+        match environment
+            .get("HUNIN_CONTROL_PROTOCOL")
+            .map(String::as_str)
+        {
+            None => Ok(Self { token: None }),
+            Some("nonce-lines-v1") => {
+                let mut bytes = [0; 16];
+                getrandom::fill(&mut bytes)
+                    .map_err(|error| ExecutionError::Io(io::Error::other(error.to_string())))?;
+                let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+                environment.insert("HUNIN_CONTROL_TOKEN".into(), token.clone());
+                Ok(Self { token: Some(token) })
+            }
+            Some(_) => Err(ExecutionError::Invalid(
+                "unsupported prepared control protocol",
+            )),
+        }
+    }
+
+    fn marker(&self, name: &str) -> Vec<u8> {
+        match &self.token {
+            Some(token) => format!("{name} {token}").into_bytes(),
+            None => name.as_bytes().to_vec(),
+        }
+    }
+}
+
+fn retain_output(bytes: &mut Vec<u8>, truncated: &mut bool, input: &[u8], limit: usize) {
+    let remaining = limit.saturating_sub(bytes.len());
+    bytes.extend_from_slice(&input[..input.len().min(remaining)]);
+    *truncated |= input.len() > remaining;
+}
+
+fn nonce_stdout(
+    mut stdout: ChildStdout,
+    limit: usize,
+    protocol: ControlProtocol,
+    ready: mpsc::SyncSender<Result<(), String>>,
+    completion: mpsc::SyncSender<Result<Instant, String>>,
+    output: mpsc::SyncSender<(Vec<u8>, bool)>,
+) {
+    let terminated = |marker: Vec<u8>| {
+        let mut lf = marker.clone();
+        lf.push(b'\n');
+        let mut crlf = marker;
+        crlf.extend_from_slice(b"\r\n");
+        [lf, crlf]
+    };
+    let ready_markers = terminated(protocol.marker("HUNIN_READY"));
+    let completion_markers = terminated(protocol.marker("HUNIN_WORK_COMPLETE"));
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut pending = Vec::new();
+    let mut acknowledged = false;
+    let mut completed = false;
+    let mut buffer = [0; 8192];
+    let failure = loop {
+        match stdout.read(&mut buffer) {
+            Ok(0) => break "stdout closed".to_owned(),
+            Ok(count) => {
+                let mut offset = 0;
+                while offset < count {
+                    if completed {
+                        retain_output(&mut bytes, &mut truncated, &buffer[offset..count], limit);
+                        break;
+                    }
+                    let markers = if acknowledged {
+                        &completion_markers
+                    } else {
+                        &ready_markers
+                    };
+                    if pending.is_empty() {
+                        let ordinary = buffer[offset..count]
+                            .iter()
+                            .position(|byte| *byte == markers[0][0])
+                            .unwrap_or(count - offset);
+                        if ordinary != 0 {
+                            retain_output(
+                                &mut bytes,
+                                &mut truncated,
+                                &buffer[offset..offset + ordinary],
+                                limit,
+                            );
+                            offset += ordinary;
+                            continue;
+                        }
+                    }
+                    pending.push(buffer[offset]);
+                    offset += 1;
+                    // Only a marker prefix stays pending; ordinary output needs no newline.
+                    while !markers.iter().any(|marker| marker.starts_with(&pending)) {
+                        retain_output(&mut bytes, &mut truncated, &pending[..1], limit);
+                        pending.remove(0);
+                    }
+                    if markers.iter().any(|marker| marker == &pending) {
+                        pending.clear();
+                        if acknowledged {
+                            let _ = completion.send(Ok(Instant::now()));
+                            completed = true;
+                        } else {
+                            let _ = ready.send(Ok(()));
+                            acknowledged = true;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                truncated = true;
+                break error.to_string();
+            }
+        }
+    };
+    retain_output(&mut bytes, &mut truncated, &pending, limit);
+    if !acknowledged {
+        let diagnostic = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
+        let _ = ready.send(Err(format!(
+            "{failure} before readiness; startup stdout: {diagnostic}"
+        )));
+    } else if !completed {
+        let _ = completion.send(Err(format!(
+            "{failure} before work completion acknowledgment"
+        )));
+    }
+    let _ = output.send((bytes, truncated));
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionPhase {
     AwaitingReadiness,
@@ -134,22 +280,40 @@ impl PreparedProcess {
             ));
         }
         let started = Instant::now();
+        let mut environment = spec.environment.clone();
+        let protocol = ControlProtocol::prepare(&mut environment)?;
         let child = Command::new(&spec.program)
             .args(&spec.args)
             .current_dir(&spec.directory)
-            .envs(&spec.environment)
+            .env_remove("HUNIN_CONTROL_PROTOCOL")
+            .env_remove("HUNIN_CONTROL_TOKEN")
+            .envs(&environment)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        let mut process = Self::from_child(Box::new(DirectChild(child)), spec.stdout_limit)?;
+        let mut process = Self::from_child_with_protocol(
+            Box::new(DirectChild(child)),
+            spec.stdout_limit,
+            protocol,
+        )?;
         process.started = started;
         Ok(process)
     }
 
+    /// Adopts a child using the legacy first-line readiness and plain completion protocol.
     pub fn from_child(
+        child: Box<dyn ExecutionChild>,
+        limit: usize,
+    ) -> Result<Self, ExecutionError> {
+        Self::from_child_with_protocol(child, limit, ControlProtocol { token: None })
+    }
+
+    /// The protocol must be prepared before starting the child with its resulting environment.
+    pub fn from_child_with_protocol(
         mut child: Box<dyn ExecutionChild>,
         limit: usize,
+        protocol: ControlProtocol,
     ) -> Result<Self, ExecutionError> {
         let input = child.take_stdin();
         let stdout = child.take_stdout();
@@ -192,6 +356,10 @@ impl PreparedProcess {
         let (output_tx, output) = mpsc::sync_channel(1);
         let (completion_tx, completion) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
+            if protocol.token.is_some() {
+                nonce_stdout(stdout, limit, protocol, ready_tx, completion_tx, output_tx);
+                return;
+            }
             let mut first = Vec::with_capacity(32);
             let mut byte = [0];
             let readiness = loop {
@@ -244,9 +412,7 @@ impl PreparedProcess {
                                 long_line = true;
                             }
                         }
-                        let remaining = limit.saturating_sub(bytes.len());
-                        bytes.extend_from_slice(&buffer[..n.min(remaining)]);
-                        truncated |= n > remaining;
+                        retain_output(&mut bytes, &mut truncated, &buffer[..n], limit);
                     }
                     Err(_) => {
                         truncated = true;
@@ -684,5 +850,119 @@ mod tests {
                 .unwrap()
                 .cleanup_pending
         );
+    }
+
+    #[test]
+    fn nonce_control_keeps_startup_logs_and_ignores_plain_workload_completion() {
+        let mut p = PreparedProcess::spawn(&PreparedLaunch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "printf 'preload log\\nHUNIN_READY\\npartial preload'; printf 'HUNIN_READY %s\\n' \"$HUNIN_CONTROL_TOKEN\"; read gate; test \"$gate\" = HUNIN_GO || exit 17; printf 'progressHUNIN_WORK_COMPLETE\\nHUNIN_WORK_COMPLETE wrong-token\\npartial work'; sleep 0.16; printf 'HUNIN_WORK_COMPLETE %s\\r\\n' \"$HUNIN_CONTROL_TOKEN\"; read gate; test \"$gate\" = HUNIN_EXIT".into()],
+            directory: "/".into(),
+            environment: BTreeMap::from([("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into())]),
+            stdout_limit: 1024,
+        }).unwrap();
+        p.await_ready(Duration::from_secs(2)).unwrap();
+        p.release().unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while !p.work_complete().unwrap() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(p.acknowledged_elapsed().unwrap() >= Duration::from_millis(130));
+        p.finish().unwrap();
+        let outcome = p.wait(Duration::from_secs(2)).unwrap();
+        assert!(outcome.success);
+        assert_eq!(outcome.stdout,b"preload log\nHUNIN_READY\npartial preloadprogressHUNIN_WORK_COMPLETE\nHUNIN_WORK_COMPLETE wrong-token\npartial work");
+    }
+
+    #[test]
+    fn nonce_readiness_has_bounded_output_diagnostics_and_a_deadline() {
+        let make = |script: &str| {
+            PreparedProcess::spawn(&PreparedLaunch {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), script.into()],
+                directory: "/".into(),
+                environment: BTreeMap::from([(
+                    "HUNIN_CONTROL_PROTOCOL".into(),
+                    "nonce-lines-v1".into(),
+                )]),
+                stdout_limit: 16,
+            })
+            .unwrap()
+        };
+        let mut p = make(
+            "printf '%03000d' 0; printf 'HUNIN_READY %s\\r\\n' \"$HUNIN_CONTROL_TOKEN\"; read gate",
+        );
+        p.await_ready(Duration::from_secs(2)).unwrap();
+        p.release().unwrap();
+        let outcome = p.wait(Duration::from_secs(2)).unwrap();
+        assert_eq!(outcome.stdout, b"0000000000000000");
+        assert!(outcome.stdout_truncated);
+
+        let mut p = make("printf 'HUNIN_READY\\nHUNIN_WOR'; exit 9");
+        assert!(
+            p.await_ready(Duration::from_secs(2))
+                .unwrap_err()
+                .to_string()
+                .contains("startup stdout: HUNIN_READY")
+        );
+        let outcome = p.cancel(Duration::ZERO, Duration::from_secs(1)).unwrap();
+        assert_eq!(outcome.stdout, b"HUNIN_READY\nHUNI");
+        assert!(outcome.stdout_truncated);
+
+        let mut p = make("printf 'HUNIN_READY\\n'; read gate");
+        assert!(matches!(
+            p.await_ready(Duration::from_millis(20)),
+            Err(ExecutionError::Deadline(_))
+        ));
+        p.cancel(Duration::ZERO, Duration::from_secs(1)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+
+    #[test]
+    fn launch_factories_create_fresh_tokens_and_reject_reserved_environment_aliases() {
+        let prepare = || {
+            let mut environment =
+                BTreeMap::from([("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into())]);
+            ControlProtocol::prepare(&mut environment).unwrap();
+            environment.remove("HUNIN_CONTROL_TOKEN").unwrap()
+        };
+        let token = prepare();
+        assert_eq!(token.len(), 32);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(token, prepare());
+        for key in [
+            "HUNIN_CONTROL_TOKEN",
+            "hunin_control_token",
+            "Hunin_Control_Token",
+            "hunin_control_protocol",
+        ] {
+            assert!(
+                ControlProtocol::prepare(&mut BTreeMap::from([(
+                    key.into(),
+                    "caller value".into()
+                )]))
+                .is_err()
+            );
+        }
+        assert!(
+            ControlProtocol::prepare(&mut BTreeMap::from([(
+                "HUNIN_CONTROL_PROTOCOL".into(),
+                "unknown-version".into()
+            )]))
+            .is_err()
+        );
+        let mut legacy = BTreeMap::new();
+        assert!(
+            ControlProtocol::prepare(&mut legacy)
+                .unwrap()
+                .token
+                .is_none()
+        );
+        assert!(!legacy.contains_key("HUNIN_CONTROL_TOKEN"));
     }
 }

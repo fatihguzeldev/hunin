@@ -400,16 +400,25 @@ pub fn spawn_prepared(
             "prepared launch requires absolute paths and output bound at most 16 mib",
         ));
     }
+    let mut environment = spec.environment.clone();
+    let protocol = hunin_core::execution::ControlProtocol::prepare(&mut environment)
+        .map_err(|error| Error::new(ErrorKind::InvalidInput, error.to_string()))?;
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
         .current_dir(&spec.directory)
-        .envs(&spec.environment)
+        .env_remove("HUNIN_CONTROL_PROTOCOL")
+        .env_remove("HUNIN_CONTROL_TOKEN")
+        .envs(&environment)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = OwnedProcess::spawn(&mut command, scope)?;
-    hunin_core::execution::PreparedProcess::from_child(Box::new(child), spec.stdout_limit)
-        .map_err(|e| Error::new(ErrorKind::CollectorFailure, e.to_string()))
+    hunin_core::execution::PreparedProcess::from_child_with_protocol(
+        Box::new(child),
+        spec.stdout_limit,
+        protocol,
+    )
+    .map_err(|e| Error::new(ErrorKind::CollectorFailure, e.to_string()))
 }
 
 #[cfg(windows)]
