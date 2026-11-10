@@ -1,6 +1,10 @@
 //! source-specific runtime observation and extraction.
 
 pub mod v8;
+pub mod python;
+pub mod ruby;
+pub mod jfr;
+pub mod pprof;
 
 use hunin_core::records::{Clock, FieldSchema, FieldType, Record, RecordSchema};
 use serde_json::{Map, Value};

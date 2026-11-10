@@ -1,4 +1,4 @@
-use hunin_runtimes::{Limits,v8};
+use hunin_runtimes::{Limits, python, v8};
 use serde_json::json;
 
 #[test]
@@ -64,6 +64,45 @@ fn v8_rejects_missing_sample_nodes_and_cycles_and_mismatched_delta_counts() {
 }
 
 #[test]
+fn python_keeps_call_edges_and_recursion_separate_from_elapsed_cost() {
+    let input = json!({"runtime":"cpython","version":"3.14.6","functions":[
+      {"id":0,"name":"parent","file":"fixture.py","line":2,"calls":3,"recursive_calls":1,"total_seconds":0.4,"self_seconds":0.1,"callees":[{"callee":1,"calls":3,"recursive_calls":0,"total_seconds":0.3,"self_seconds":0.2}]},
+      {"id":1,"name":"resize","file":"fixture.py","line":9,"calls":3,"recursive_calls":0,"total_seconds":0.3,"self_seconds":0.2,"callees":[]}
+    ]});
+    let extraction =
+        python::extract(&serde_json::to_vec(&input).unwrap(), "p", Limits::default()).unwrap();
+    let function = extraction
+        .records
+        .iter()
+        .find(|r| r.id == "function:0")
+        .unwrap();
+    assert_eq!(function.payload["recursive_calls"], 1);
+    assert!(function.time.is_none());
+    let edge = extraction
+        .records
+        .iter()
+        .find(|r| r.schema == "python.cprofile-edge")
+        .unwrap();
+    assert_eq!(edge.payload["callee"], 1);
+    assert_eq!(edge.payload["calls"], 3);
+}
+
+#[test]
+fn extractor_enforces_input_and_record_budgets() {
+    let limits = Limits {
+        max_input_bytes: 2,
+        ..Limits::default()
+    };
+    assert!(v8::extract(b"{} ", "p", limits).is_err());
+    let input = json!({"runtime":"cpython","version":"3.14.6","functions":[]});
+    let limits = Limits {
+        max_records: 0,
+        ..Limits::default()
+    };
+    assert!(python::extract(&serde_json::to_vec(&input).unwrap(), "p", limits).is_err());
+}
+
+#[test]
 fn bun_fractional_profile_clock_stays_exact_in_payload_and_bounded_in_projection() {
     let input = json!({"startTime":1000.5,"endTime":1200.75,"nodes":[{"id":1,"callFrame":{"functionName":"resize","scriptId":"7","url":"fixture.js","lineNumber":0,"columnNumber":0}}],"samples":[1],"timeDeltas":[100]});
     let extraction = v8::extract(
@@ -119,11 +158,58 @@ fn repeated_long_frame_projections_count_toward_the_entire_record_byte_budget() 
 }
 
 #[test]
+fn preserved_orphan_callee_diagnostics_do_not_claim_dropped_capture_data() {
+    let input = json!({"runtime":"pypy","version":"3.12.15","functions":[{"id":0,"name":"load","file":"fixture.py","line":1,"calls":1,"recursive_calls":0,"total_seconds":0.1,"self_seconds":0.1,"callees":[{"callee":null,"callee_code":["builtin","<built-in function openssl_sha256>"],"callee_resolution":"missing_aggregate","calls":0,"recursive_calls":0,"total_seconds":0.0,"self_seconds":0.0}]}]});
+    let extraction = python::extract(
+        &serde_json::to_vec(&input).unwrap(),
+        "pypy",
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(extraction.capture_complete);
+    assert_eq!(
+        extraction.metadata["callee_resolution"]["unresolved_edges"],
+        1
+    );
+    assert_eq!(
+        extraction.metadata["callee_resolution"]["reported_calls_on_unresolved_edges"],
+        0
+    );
+    assert_eq!(extraction.warnings.len(), 1);
+    assert!(
+        extraction
+            .records
+            .iter()
+            .any(|r| r.schema == "python.cprofile-edge"
+                && r.payload["callee_code"][1] == "<built-in function openssl_sha256>")
+    );
+}
+
+#[test]
 fn missing_v8_stream_is_incomplete_but_unprojected_native_clock_fields_are_retained() {
     let input = json!({"startTime":0,"endTime":10,"nodes":[{"id":1,"callFrame":{"functionName":"f","scriptId":"1","url":"f.js","lineNumber":0,"columnNumber":0}}]});
     let extraction =
         v8::extract(&serde_json::to_vec(&input).unwrap(), "p", Limits::default()).unwrap();
     assert!(!extraction.capture_complete);
+}
+
+#[test]
+fn source_reported_ruby_and_jfr_buffer_loss_is_explicit() {
+    let ruby = json!({"runtime":"ruby","version":"4.0.9","events":[],"lost_events":3});
+    let extracted = hunin_runtimes::ruby::extract(
+        &serde_json::to_vec(&ruby).unwrap(),
+        "ruby",
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(!extracted.capture_complete);
+    assert_eq!(extracted.records[0].payload["lost_events"], 3);
+    let jfr = json!({"runtime":"hotspot","version":"25.0.5+8","samples":[],"period_ns":10000000,"lost_samples":2});
+    let extracted =
+        hunin_runtimes::jfr::extract(&serde_json::to_vec(&jfr).unwrap(), "jvm", Limits::default())
+            .unwrap();
+    assert!(!extracted.capture_complete);
+    assert_eq!(extracted.records[0].payload["lost_samples"], 2);
 }
 
 #[test]
