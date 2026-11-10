@@ -139,6 +139,7 @@ pub fn prepare(
                 ("TMP".into(), area.to_string_lossy().into_owned()),
                 ("TEMP".into(), area.to_string_lossy().into_owned()),
                 ("HUNIN_FINALIZE_GATE".into(), "1".into()),
+                ("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into()),
             ]),
             stdout_limit: 64 * 1024,
         },

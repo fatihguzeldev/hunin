@@ -1,5 +1,10 @@
 'use strict';
 
+const controlWrite = process.stdout.write.bind(process.stdout);
+const controlToken = process.env.HUNIN_CONTROL_TOKEN;
+const finalizeGate = process.env.HUNIN_FINALIZE_GATE === '1';
+const emitControl = marker => controlWrite(`${marker}${controlToken ? ` ${controlToken}` : ''}\n`);
+
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
@@ -406,7 +411,7 @@ async function main() {
   try {
     observation = kind === 'chromium' ? await chromium(browser, workload, area) : kind === 'firefox' ? await firefox(browser, driver, workload, area) : kind === 'safari' ? await safari(browser, driver, workload, area) : (() => { throw new Error('unsupported browser collector'); })();
     writeNew(path.join(area, 'browser-targets.json'), { pid: observation.pid, processes: observation.processes, targets: observation.targets, version: observation.version });
-    process.stdout.write('HUNIN_READY\n');
+    emitControl('HUNIN_READY');
     const command = await commands.next();
     let outcome = 'stopped_before_work', output = null, applicationError = null;
     const workStartNs = process.hrtime.bigint().toString();
@@ -426,8 +431,8 @@ async function main() {
     const profile = await observation.stop();
     writeNew(path.join(area, 'browser-profile.json'), profile);
     writeNew(path.join(area, 'browser-report.json'), { outcome, output, applicationError, runtime: observation.version, workStartNs, workEndNs, clock: 'driver hrtime; not implicitly any browser profile clock' });
-    if (process.env.HUNIN_FINALIZE_GATE === '1') {
-      process.stdout.write('HUNIN_WORK_COMPLETE\n');
+    if (finalizeGate) {
+      emitControl('HUNIN_WORK_COMPLETE');
       const finish = await commands.next();
       if (!finish.done && !['HUNIN_EXIT', 'HUNIN_STOP'].includes(finish.value)) throw new Error('invalid browser finalization command');
     }
