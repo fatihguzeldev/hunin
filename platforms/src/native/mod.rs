@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod control;
+pub mod coverage;
 pub mod macos;
 pub mod perf;
 mod recording;
 pub mod symbols;
+pub mod xctrace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
