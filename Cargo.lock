@@ -277,6 +277,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hunin-app"
+version = "0.1.0"
+dependencies = [
+ "hunin-core",
+ "hunin-platforms",
+ "hunin-runtimes",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "hunin-core"
 version = "0.1.0"
 dependencies = [
