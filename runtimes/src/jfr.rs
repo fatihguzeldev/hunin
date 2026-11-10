@@ -19,8 +19,18 @@ pub fn extract(bytes: &[u8], subject: &str, limits: Limits) -> Result<Extraction
     result.schemas = schemas();
     result.clocks = clocks();
     let mut mismatched = BTreeSet::new();
+    let mut truncated = 0u64;
     for (index, sample) in samples.iter().enumerate() {
         let mut payload = object(sample)?.clone();
+        if payload
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| Error("missing JFR stack truncation outcome".into()))?
+        {
+            truncated = truncated
+                .checked_add(1)
+                .ok_or_else(|| Error("JFR truncated sample count overflow".into()))?;
+        }
         let timestamp = payload
             .get("timestamp_ns")
             .and_then(Value::as_i64)
@@ -95,6 +105,21 @@ pub fn extract(bytes: &[u8], subject: &str, limits: Limits) -> Result<Extraction
         result.warnings.push(format!(
             "JFR extraction dropped {lost} samples at its budget"
         ));
+    }
+    if truncated > 0 {
+        result.capture_complete = false;
+        result.warnings.push(format!(
+            "JFR reported {truncated} truncated sample stacks; available frames remain retained"
+        ));
+    }
+    if header
+        .get("unsupported_event_types")
+        .and_then(|types| types.get("jdk.DataLoss"))
+        .and_then(Value::as_u64)
+        .is_some_and(|count| count > 0)
+    {
+        result.capture_complete = false;
+        result.warnings.push("JFR reported native data-loss events; their count is retained, lost-byte details are outside this selected event decoder".into());
     }
     header.remove("samples");
     result.push(record(

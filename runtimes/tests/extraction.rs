@@ -213,6 +213,31 @@ fn source_reported_ruby_and_jfr_buffer_loss_is_explicit() {
 }
 
 #[test]
+fn jfr_stack_truncation_and_native_loss_are_incomplete_without_erasing_available_samples() {
+    let profile = json!({"runtime":"hotspot","version":"25.0.5+8","samples":[{"timestamp_ns":1,"state":"STATE_RUNNABLE","truncated":true,"frames":[]}],"period_ns":10000000,"lost_samples":0,"unsupported_event_types":{"jdk.DataLoss":1}});
+    let extracted = hunin_runtimes::jfr::extract(
+        &serde_json::to_vec(&profile).unwrap(),
+        "jvm",
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(!extracted.capture_complete);
+    assert_eq!(
+        extracted
+            .records
+            .iter()
+            .filter(|r| r.schema == "jfr.sample")
+            .count(),
+        1
+    );
+    assert_eq!(
+        extracted.records.last().unwrap().payload["unsupported_event_types"]["jdk.DataLoss"],
+        1
+    );
+    assert_eq!(extracted.warnings.len(), 2);
+}
+
+#[test]
 fn an_individual_retained_record_cannot_exceed_the_core_record_boundary() {
     let input = json!({"startTime":0,"endTime":10,"nodes":[{"id":1,"callFrame":{"functionName":"f","scriptId":"1","url":"f.js","lineNumber":0,"columnNumber":0},"future":vec![0;600_000]}],"samples":[1],"timeDeltas":[1]});
     let error =
