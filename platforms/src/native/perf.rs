@@ -111,6 +111,36 @@ pub fn parse_maps(text: &str) -> Result<Vec<Image>> {
     Ok(result)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn bind_sample_images(
+    sample: &mut Sample,
+    target_pid: u32,
+    images: &[Image],
+    invalid_images: &std::collections::BTreeSet<usize>,
+) -> bool {
+    if sample.process_id != target_pid {
+        for frame in &mut sample.frames {
+            frame.image = None;
+            if frame.resolution != "perf_context_marker" {
+                frame.resolution =
+                    "sample process differs from target; no target image attribution".into();
+            }
+        }
+        return false;
+    }
+    for frame in &mut sample.frames {
+        if frame.resolution.starts_with("sample process differs") {
+            frame.resolution = "unresolved".into();
+        }
+        frame.image = images.iter().enumerate().position(|(i, image)| {
+            !invalid_images.contains(&i)
+                && image.load_address <= frame.address
+                && image.end_address.is_some_and(|end| frame.address <= end)
+        });
+    }
+    true
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
@@ -481,16 +511,16 @@ mod linux {
                                 ));
                             }
                             let mut sample = decode_sample(&data, self.maximum_frames)?;
-                            for frame in &mut sample.frames {
-                                frame.image = self.profile.images.iter().enumerate().position(
-                                    |(i, image)| {
-                                        !self.invalid_images.contains(&i)
-                                            && image.load_address <= frame.address
-                                            && image
-                                                .end_address
-                                                .is_some_and(|end| frame.address <= end)
-                                    },
-                                );
+                            if !bind_sample_images(
+                                &mut sample,
+                                self.target.pid,
+                                &self.profile.images,
+                                &self.invalid_images,
+                            ) {
+                                let issue = "sample process differs from target; foreign addresses remain unbound";
+                                if !self.profile.issues.iter().any(|s| s == issue) {
+                                    self.profile.issues.push(issue.into());
+                                }
                             }
                             self.profile.samples.push(sample);
                         }
@@ -681,4 +711,47 @@ pub fn decode_lifetime(kind: u32, payload: &[u8]) -> Result<serde_json::Value> {
     Ok(
         serde_json::json!({"provider":format!("linux.perf.record.{kind}"),"timestamp":timestamp,"properties":properties}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn foreign_process_samples_never_borrow_target_image_addresses() {
+        let mut payload = vec![0; 56];
+        payload[..8].copy_from_slice(&0x1234u64.to_ne_bytes());
+        payload[8..12].copy_from_slice(&7u32.to_ne_bytes());
+        payload[12..16].copy_from_slice(&9u32.to_ne_bytes());
+        payload[40..48].copy_from_slice(&1u64.to_ne_bytes());
+        payload[48..56].copy_from_slice(&0x1234u64.to_ne_bytes());
+        let mut sample = decode_sample(&payload, 8).unwrap();
+        let images = parse_maps("1000-2000 r-xp 00000000 08:01 1 /fixture\n").unwrap();
+        assert!(!bind_sample_images(
+            &mut sample,
+            8,
+            &images,
+            &BTreeSet::new()
+        ));
+        assert_eq!(sample.process_id, 7);
+        assert_eq!(sample.instruction_pointer, 0x1234);
+        assert_eq!(sample.frames[0].address, 0x1234);
+        assert_eq!(sample.frames[0].image, None);
+        assert!(sample.frames[0].resolution.contains("process"));
+        assert!(bind_sample_images(
+            &mut sample,
+            7,
+            &images,
+            &BTreeSet::new()
+        ));
+        assert_eq!(sample.frames[0].image, Some(0));
+        assert!(bind_sample_images(
+            &mut sample,
+            7,
+            &images,
+            &BTreeSet::from([0])
+        ));
+        assert_eq!(sample.frames[0].image, None);
+    }
 }
