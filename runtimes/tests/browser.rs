@@ -11,6 +11,95 @@ fn synthetic_gecko() -> Value {
 }
 
 #[test]
+fn chromium_mapping_cannot_borrow_debugger_bytes_from_another_profiler_session() {
+    use hunin_runtimes::source_maps::{Binding, BoundMap, digest};
+    let a = b"function resize() { return 1; }";
+    let b = b"function resize() { return 2; }";
+    let map_bytes=serde_json::to_vec(&json!({"version":3,"file":"generated.js","sources":["original.ts"],"sourcesContent":["function resize():number { return 1; }"],"names":[],"mappings":"AAAA"})).unwrap();
+    let map = BoundMap::parse(
+        a,
+        &map_bytes,
+        &Binding {
+            generated_sha256: digest(a),
+            map_sha256: digest(&map_bytes),
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    let profile = json!({"startTime":0,"endTime":10,"nodes":[{"id":1,"callFrame":{"functionName":"resize","scriptId":"7","url":"file:///generated.js","lineNumber":0,"columnNumber":0}}],"samples":[1],"timeDeltas":[1]});
+    let body = json!({"kind":"chromium","profiles":[{"targetId":"page","sessionId":"page-session","profile":profile},{"targetId":"worker","sessionId":"worker-session","profile":profile}],"scripts":[{"scriptId":"7","url":"file:///generated.js","sessionId":"page-session","source":std::str::from_utf8(a).unwrap(),"sha256":digest(a)},{"scriptId":"7","url":"file:///generated.js","sessionId":"worker-session","source":std::str::from_utf8(b).unwrap(),"sha256":digest(b)}]});
+    let extracted = browser::extract(&body, "b", Limits::default(), None).unwrap();
+    let projected = browser::maps::project_chromium(
+        &map,
+        &extracted,
+        &extracted.streams[0],
+        "file:///generated.js",
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(projected.records.len(), 1);
+    assert_eq!(
+        projected.records[0].subject,
+        extracted.streams[0]
+            .extraction
+            .records
+            .iter()
+            .find(|r| r.schema == "v8.node")
+            .unwrap()
+            .subject
+    );
+    assert!(
+        browser::maps::project_chromium(
+            &map,
+            &extracted,
+            &extracted.streams[1],
+            "file:///generated.js",
+            Limits::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn gecko_source_mapping_cannot_upgrade_an_unsupported_raw_window_identity() {
+    use hunin_runtimes::source_maps::{Binding, BoundMap, digest};
+    let generated = b"function resize(){return 1}";
+    let bytes = serde_json::to_vec(
+        &json!({"version":3,"sources":["original.ts"],"names":[],"mappings":"AAAA"}),
+    )
+    .unwrap();
+    let map = BoundMap::parse(
+        generated,
+        &bytes,
+        &Binding {
+            generated_sha256: digest(generated),
+            map_sha256: digest(&bytes),
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    for window in [
+        json!(11),
+        json!(0),
+        json!(u64::MAX),
+        json!(9_007_199_254_740_992u64),
+        json!(-1),
+        json!(11.0),
+    ] {
+        let body = json!({"kind":"firefox","scopeBindings":{"realms":{"realms":[]}},"scripts":[{"scriptId":"file:///generated.js","url":"file:///generated.js","context":"page","page_url":"file:///main.html","source":std::str::from_utf8(generated).unwrap(),"sha256":digest(generated)}],"profile":{"meta":{"version":36,"sampleUnits":{"time":"ms"}},"pages":[{"innerWindowID":window,"url":"file:///main.html"}],"threads":[{"pid":7,"tid":7,"name":"GeckoMain","stringTable":["resize (file:///generated.js:1:1)"],"frameTable":{"schema":{"location":0,"innerWindowID":1},"data":[[0,window]]},"stackTable":{"schema":{"prefix":0,"frame":1},"data":[[null,0]]},"samples":{"schema":{"stack":0,"time":1},"data":[[0,1]]}}],"processes":[]}});
+        let extracted = browser::extract(&body, "collection", Limits::default(), None).unwrap();
+        let mapped = browser::maps::project_gecko(
+            &map,
+            &extracted,
+            "file:///generated.js",
+            "selected-page",
+            Limits::default(),
+        );
+        assert_eq!(mapped.is_ok(), window == json!(11), "{window}");
+    }
+}
+
+#[test]
 fn process_local_tables_clocks_and_unknown_metadata_remain_structured() {
     let mut input = synthetic_gecko();
     input["profile"]["customOptional"] = json!({"counter":u64::MAX});
@@ -135,12 +224,16 @@ fn browser_typescript_projection_requires_debugger_bytes_and_survives_source_rem
     let mut projections = Vec::new();
     if raw["kind"] == "chromium" {
         for stream in &browser.streams {
+            if stream.extraction.metadata["session_id"] != script["sessionId"] {
+                continue;
+            }
             projections.push(
-                map.project_v8(
-                    script["scriptId"].as_str().unwrap(),
-                    script["sha256"].as_str().unwrap(),
-                    &stream.extraction.records,
-                    "prepared-page",
+                browser::maps::project_chromium(
+                    &map,
+                    &browser,
+                    stream,
+                    script["url"].as_str().unwrap(),
+                    Limits::default(),
                 )
                 .unwrap(),
             );
@@ -181,6 +274,53 @@ fn browser_typescript_projection_requires_debugger_bytes_and_survives_source_rem
             )
             .unwrap(),
         );
+        let mut shared_creator = raw.clone();
+        fn add_same_url_worker(profile: &mut Value) -> Option<usize> {
+            if let Some(threads) = profile["threads"].as_array_mut()
+                && let Some(mut worker) = threads
+                    .iter()
+                    .find(|t| {
+                        t["name"] == "GeckoMain"
+                            && t["stringTable"].as_array().is_some_and(|s| {
+                                s.iter().any(|v| {
+                                    v.as_str().is_some_and(|s| s.contains("resizePreview"))
+                                })
+                            })
+                    })
+                    .cloned()
+            {
+                worker["name"] = json!("DOM Worker");
+                worker["tid"] = json!(999_999_999);
+                let index = threads.len();
+                threads.push(worker);
+                return Some(index);
+            }
+            profile["processes"]
+                .as_array_mut()
+                .and_then(|v| v.iter_mut().find_map(add_same_url_worker))
+        }
+        let worker_index = add_same_url_worker(&mut shared_creator["profile"]).unwrap();
+        let shared_creator =
+            browser::extract(&shared_creator, "browser", Limits::default(), None).unwrap();
+        let projected = browser::maps::project_gecko(
+            &map,
+            &shared_creator,
+            script["url"].as_str().unwrap(),
+            "prepared-page",
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            projected.records.len(),
+            projections.last().unwrap().records.len(),
+            "creator window and source URL do not prove the worker executed selected-page bytes"
+        );
+        assert!(projected.records.iter().all(|r| {
+            !r.payload["generated_record"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("thread-{worker_index}:"))
+        }));
         let mut ambiguous = raw.clone();
         fn duplicate_page(profile: &mut Value) -> bool {
             if let Some(pages) = profile["pages"].as_array_mut()

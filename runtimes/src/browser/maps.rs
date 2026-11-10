@@ -3,6 +3,81 @@ use crate::{Error, Extraction, Limits, Result, record, schema, source_maps::Boun
 use hunin_core::records::FieldType;
 use serde_json::json;
 
+/// binds debugger identities to the same profiler session; script ids alone are isolate-local.
+pub fn project_chromium(
+    map: &BoundMap,
+    browser: &BrowserExtraction,
+    stream: &super::BrowserStream,
+    script_url: &str,
+    limits: Limits,
+) -> Result<Extraction> {
+    let session = stream.extraction.metadata["session_id"]
+        .as_str()
+        .ok_or_else(|| Error("chromium mapping needs a profiler session binding".into()))?;
+    let scripts: Vec<_> = browser
+        .collection
+        .records
+        .iter()
+        .filter(|r| {
+            r.schema == "browser.script"
+                && r.payload["metadata"]["sessionId"] == session
+                && r.payload["metadata"]["url"] == script_url
+        })
+        .collect();
+    if scripts.len() != 1 || scripts[0].payload["sha256"] != map.binding().generated_sha256 {
+        return Err(Error(
+            "chromium executed script does not match this session's source-map build".into(),
+        ));
+    }
+    let id = scripts[0].payload["script_id"]
+        .as_str()
+        .ok_or_else(|| Error("chromium script id missing".into()))?;
+    let projected = map.project_v8(
+        id,
+        &map.binding().generated_sha256,
+        &stream.extraction.records,
+        "source-mapping",
+    )?;
+    let mut metadata = projected.metadata;
+    metadata["generated_source"] = json!(stream.key);
+    metadata["session_id"] = json!(session);
+    metadata["subject_scope"] =
+        json!("preserved from generated node; no page or operation ownership inferred");
+    let mut result = Extraction::new(limits, metadata);
+    result.schemas = projected.schemas;
+    for definition in &mut result.schemas {
+        definition.fields.insert(
+            "generated_source".into(),
+            hunin_core::records::FieldSchema {
+                kind: FieldType::String,
+                required: true,
+                unit: None,
+                meaning: "stream owning the source-local generated record".into(),
+            },
+        );
+    }
+    let subjects: std::collections::BTreeMap<_, _> = stream
+        .extraction
+        .records
+        .iter()
+        .filter(|r| r.schema == "v8.node")
+        .map(|r| (r.id.as_str(), r.subject.as_str()))
+        .collect();
+    for mut row in projected.records {
+        row.subject = subjects
+            .get(
+                row.payload["generated_record"]
+                    .as_str()
+                    .ok_or_else(|| Error("mapped node reference missing".into()))?,
+            )
+            .ok_or_else(|| Error("mapped node is outside profiler stream".into()))?
+            .to_string();
+        row.payload["generated_source"] = json!(stream.key);
+        result.push(row)?;
+    }
+    Ok(result)
+}
+
 pub fn project_safari(
     map: &BoundMap,
     stream: &super::BrowserStream,
@@ -152,9 +227,10 @@ pub fn project_gecko(
             {
                 let page_info = &row.payload["value"]["data"];
                 if page_info["url"] == page {
-                    let window = page_info["innerWindowID"]
-                        .as_u64()
-                        .ok_or_else(|| Error("profile window identity missing".into()))?;
+                    let window = super::gecko::window_identity(&page_info["innerWindowID"])
+                        .ok_or_else(|| {
+                            Error("profile window identity is missing or nonexact".into())
+                        })?;
                     windows.push((stream, window));
                 }
             }
@@ -166,6 +242,25 @@ pub fn project_gecko(
         ));
     }
     let (stream, window) = windows[0];
+    // Firefox160 registers GeckoMain as its native page main-thread name.
+    // A worker's creator window does not bind that worker's executed script bytes.
+    let main_threads: Vec<_> = stream
+        .extraction
+        .records
+        .iter()
+        .filter(|row| {
+            row.schema == "gecko.metadata"
+                && row.payload["field"] == "name"
+                && row.payload["value"]["data"] == "GeckoMain"
+        })
+        .filter_map(|row| row.payload["owner"].as_str())
+        .collect();
+    if main_threads.len() != 1 {
+        return Err(Error(
+            "gecko mapping requires one provider-defined page main thread".into(),
+        ));
+    }
+    let main_thread = main_threads[0];
     let mut window_columns = std::collections::BTreeMap::new();
     for layout in &stream.extraction.records {
         if layout.schema != "gecko.table-schema" || layout.payload["table"] != "frameTable" {
@@ -184,7 +279,7 @@ pub fn project_gecko(
     }
     let mut result = Extraction::new(
         limits,
-        json!({"interpretation":"gecko36-declaration-source-map-v1","generated_sha256":map.binding().generated_sha256,"map_sha256":map.binding().map_sha256,"process_stream":stream.key,"inner_window_id":window,"context":descriptor.payload["metadata"]["context"],"position_meaning":"function declaration in gecko36 location string, not sampled instruction"}),
+        json!({"interpretation":"gecko36-declaration-source-map-v2","generated_sha256":map.binding().generated_sha256,"map_sha256":map.binding().map_sha256,"process_stream":stream.key,"inner_window_id":window,"profile_thread":main_thread,"thread_binding":"provider-defined GeckoMain page thread; worker frames withheld even when creator window id matches","context":descriptor.payload["metadata"]["context"],"position_meaning":"function declaration in gecko36 location string, not sampled instruction"}),
     );
     result.schemas = vec![schema(
         "browser.sourcemap-location",
@@ -229,6 +324,9 @@ pub fn project_gecko(
         let thread = row.payload["thread"]
             .as_str()
             .ok_or_else(|| Error("gecko frame thread missing".into()))?;
+        if thread != main_thread {
+            continue;
+        }
         let column = *window_columns
             .get(thread)
             .ok_or_else(|| Error("gecko frame layout missing".into()))?;
