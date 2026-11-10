@@ -19,11 +19,15 @@ function writeNew(filename, value) {
 class Rpc {
   constructor(socket) {
     this.socket = socket; this.sequence = 0; this.pending = new Map(); this.scripts = [];
-    this.attached = null;
+    this.attached = null; this.contexts = [];
     socket.addEventListener('message', event => {
       if (typeof event.data !== 'string' || Buffer.byteLength(event.data) > 16 * 1024 * 1024) { socket.close(); return; }
       let message;
       try { message = JSON.parse(event.data); } catch { socket.close(); return; }
+      if (message.method === 'Runtime.executionContextCreated') {
+        if (this.contexts.length >= 4096) { socket.close(); return; }
+        this.contexts.push({ ...message.params.context, sessionId: message.sessionId });
+      }
       if (message.method === 'Debugger.scriptParsed') {
         if (this.scripts.length >= 4096) { socket.close(); return; }
         this.scripts.push({ ...message.params, sessionId: message.sessionId });
@@ -123,7 +127,7 @@ async function chromium(browser, workload, area) {
   const profileDirectory = path.join(area, 'chrome-profile'); fs.mkdirSync(profileDirectory);
   // this disposable, credential-free profile must never access the user's OS secret store.
   const secretStore = process.platform === 'darwin' ? ['--use-mock-keychain'] : process.platform === 'linux' ? ['--password-store=basic'] : [];
-  const child = launch(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`, ...secretStore, '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], area);
+  const child = launch(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`, ...secretStore, '--no-first-run', '--disable-popup-blocking', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], area);
   let rpc;
   try {
     const active = path.join(profileDirectory, 'DevToolsActivePort');
@@ -137,15 +141,17 @@ async function chromium(browser, workload, area) {
     const version = await rpc.call('Browser.getVersion');
     const { targetId } = await rpc.call('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await rpc.call('Target.attachToTarget', { targetId, flatten: true });
-    const sessions = [{ targetId, sessionId, type: 'page' }];
-    const arming = []; const sourceFailures = [];
+    const sessions = [{ targetId, sessionId, type: 'page', selected: true }];
+    const arming = []; const sourceFailures = []; const identityOnlyTargets = new Set();
     rpc.attached = (target, parentSessionId) => {
+      if (identityOnlyTargets.has(target.targetInfo.targetId)) return;
       const identity = { targetId: target.targetInfo.targetId, sessionId: target.sessionId, type: target.targetInfo.type, parentSessionId, targetInfo: target.targetInfo };
       if (sessions.length >= 128) { sourceFailures.push('worker source budget exceeded'); return; }
       sessions.push(identity);
       arming.push((async () => {
         try {
           await rpc.call('Runtime.enable', {}, identity.sessionId);
+          identity.isolateId = (await rpc.call('Runtime.getIsolateId', {}, identity.sessionId)).id;
           await rpc.call('Debugger.enable', {}, identity.sessionId);
           await rpc.call('Profiler.enable', {}, identity.sessionId);
           await rpc.call('Profiler.setSamplingInterval', { interval: 1000 }, identity.sessionId);
@@ -158,6 +164,7 @@ async function chromium(browser, workload, area) {
     await rpc.call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
     await rpc.call('Page.enable', {}, sessionId);
     await rpc.call('Runtime.enable', {}, sessionId);
+    sessions[0].isolateId = (await rpc.call('Runtime.getIsolateId', {}, sessionId)).id;
     await rpc.call('Debugger.enable', {}, sessionId);
     await rpc.call('Page.navigate', { url: pathToFileURL(workload).href }, sessionId);
     await until(async () => (await rpc.call('Runtime.evaluate', { expression: 'typeof globalThis.run === "function"', returnByValue: true }, sessionId)).result.value, child, 'prepared page initialization');
@@ -165,6 +172,8 @@ async function chromium(browser, workload, area) {
     await rpc.call('Profiler.setSamplingInterval', { interval: 1000 }, sessionId);
     await rpc.call('Profiler.start', {}, sessionId);
     sessions[0].ready = true;
+    await Promise.all(arming);
+    sessions[0].targetInfo = (await rpc.call('Target.getTargetInfo', { targetId })).targetInfo;
     const processes = (await rpc.call('SystemInfo.getProcessInfo')).processInfo;
     return {
       pid: child.child.pid, processes, targets: sessions, version,
@@ -184,15 +193,37 @@ async function chromium(browser, workload, area) {
             profiles.push({ ...identity, profile });
           } catch (error) { sourceFailures.push(`${identity.targetId}: ${String(error)}`); }
         }
-        const scripts = []; let scriptBytes = 0;
-        for (const identity of rpc.scripts.filter(x => sessions.some(s => s.sessionId === x.sessionId) && x.url.startsWith('file:'))) {
-          const { scriptSource } = await rpc.call('Debugger.getScriptSource', { scriptId: identity.scriptId }, identity.sessionId);
-          if (Buffer.byteLength(scriptSource) > 512 * 1024) throw new Error('executed script exceeds identity capture budget');
-          scriptBytes += Buffer.byteLength(scriptSource);
-          if (scriptBytes > 4 * 1024 * 1024) throw new Error('executed scripts exceed collection identity budget');
-          scripts.push({ ...identity, source: scriptSource, sha256: crypto.createHash('sha256').update(scriptSource).digest('hex') });
+        const reportedTargets = (await rpc.call('Target.getTargets')).targetInfos;
+        const contextObservers = [...sessions];
+        // another page can share the profiled isolate; inspect its context identity without starting a second profiler.
+        for (const info of reportedTargets.filter(info => info.type === 'page' && !sessions.some(s => s.targetId === info.targetId))) {
+          if (contextObservers.length >= 128) { sourceFailures.push('context identity observer budget exceeded'); break; }
+          try {
+            identityOnlyTargets.add(info.targetId);
+            const { sessionId: contextSessionId } = await rpc.call('Target.attachToTarget', { targetId: info.targetId, flatten: true });
+            await rpc.call('Runtime.enable', {}, contextSessionId);
+            const { id: isolateId } = await rpc.call('Runtime.getIsolateId', {}, contextSessionId);
+            await rpc.call('Debugger.enable', {}, contextSessionId);
+            contextObservers.push({ targetId: info.targetId, sessionId: contextSessionId, isolateId, targetInfo: info, diagnosticOnly: true });
+          } catch (error) { sourceFailures.push(`context identity ${info.targetId}: ${String(error)}`); }
         }
-        return { kind: 'chromium', version, processes, profiles, scripts, sourceFailures, launch_configuration: { profile: 'fresh owned credential-free directory', secret_store: secretStore }, scope: 'selected page and acknowledged worker isolates; browser/renderer resources have broader process scope; stopped or unarmed workers are explicit source failures' };
+        const frameTrees = [];
+        for (const observer of contextObservers.filter(observer => observer.targetInfo?.type === 'page')) {
+          try { frameTrees.push({ targetId: observer.targetId, sessionId: observer.sessionId, frameTree: (await rpc.call('Page.getFrameTree', {}, observer.sessionId)).frameTree }); }
+          catch (error) { sourceFailures.push(`frame identity ${observer.targetId}: ${String(error)}`); }
+        }
+        const scripts = []; let scriptBytes = 0;
+        for (const identity of rpc.scripts.filter(x => contextObservers.some(s => s.sessionId === x.sessionId) && (x.url.startsWith('file:') || x.url.startsWith('blob:')))) {
+          try {
+            const { scriptSource } = await rpc.call('Debugger.getScriptSource', { scriptId: identity.scriptId }, identity.sessionId);
+            if (Buffer.byteLength(scriptSource) > 512 * 1024) throw new Error('executed script exceeds identity capture budget');
+            if (scriptBytes + Buffer.byteLength(scriptSource) > 4 * 1024 * 1024) throw new Error('executed scripts exceed collection identity budget');
+            scriptBytes += Buffer.byteLength(scriptSource);
+            const observer = contextObservers.find(s => s.sessionId === identity.sessionId);
+            scripts.push({ ...identity, targetId: observer.targetId, isolateId: observer.isolateId, source: scriptSource, sha256: crypto.createHash('sha256').update(scriptSource).digest('hex') });
+          } catch (error) { sourceFailures.push(`script identity ${identity.sessionId}/${identity.scriptId}: ${String(error)}`); }
+        }
+        return { kind: 'chromium', version, processes, profiles, scripts, sourceFailures, selectedTargetId: targetId, targets: sessions, reportedTargets, contextObservers, executionContexts: rpc.contexts, frameTrees, launch_configuration: { profile: 'fresh owned credential-free directory', secret_store: secretStore }, scope: 'profiler target sessions may share an isolate with other pages; context projection requires captured isolate/script/execution-context identity; browser/renderer resources have broader process scope; stopped or unarmed workers are explicit source failures' };
       },
       async close() {
         const exited = child.child.exitCode !== null ? Promise.resolve() : new Promise(resolve => child.child.once('exit', resolve));
@@ -243,14 +274,15 @@ async function firefox(browser, driver, workload, area) {
         const scripts = []; let scriptBytes = 0;
         const listed = await rpc.call('moz:debugging.listScripts', { context });
         if (!Array.isArray(listed.scripts) || listed.scripts.length > 4096) throw new Error('firefox script identity budget exceeded');
-        for (const url of listed.scripts.filter(x => typeof x === 'string' && x.startsWith('file:'))) {
+        for (const url of listed.scripts.filter(x => typeof x === 'string' && (x.startsWith('file:') || x.startsWith('blob:')))) {
           const { source } = await rpc.call('moz:debugging.getScriptSource', { context, scriptUrl: url });
           if (typeof source !== 'string' || Buffer.byteLength(source) > 512 * 1024) throw new Error('firefox script source exceeds budget');
           scriptBytes += Buffer.byteLength(source);
           if (scriptBytes > 4 * 1024 * 1024) throw new Error('firefox script collection exceeds budget');
           scripts.push({ scriptId: url, url, context, page_url: pathToFileURL(workload).href, source, sha256: crypto.createHash('sha256').update(source).digest('hex'), identity_origin: 'browser debugger returned bytes' });
         }
-        return { kind: 'firefox', version: caps, profile, scripts, inputPath: saved, targets: [{ context }], scope: 'global profiler in fresh owned browser; samples are not attributed to one tab by activeContext' };
+        const scopeBindings = { selectedContext: context, contexts: await rpc.call('browsingContext.getTree', {}), realms: await rpc.call('script.getRealms', {}) };
+        return { kind: 'firefox', version: caps, profile, scripts, inputPath: saved, targets: [{ context }], scopeBindings, scope: 'global profiler in fresh owned browser; samples are not attributed to one tab by activeContext' };
       },
       async close() { rpc.close(); await jsonRequest(base, 'DELETE', `/session/${session.sessionId}`); child.child.kill(); },
     };

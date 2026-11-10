@@ -3,6 +3,13 @@ use crate::{Error, Extraction, Limits, Result, record, schema};
 use hunin_core::records::{Clock, FieldType, RecordTime};
 use serde_json::{Value, json};
 
+pub(super) fn window_identity(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .filter(|id| *id != 0 && *id <= 9_007_199_254_740_991)
+}
+use std::collections::BTreeSet;
+
 pub(super) fn extract(
     profile: &Value,
     subject: &str,
@@ -38,9 +45,10 @@ pub(super) fn extract(
             .transpose()
             .map_err(|_| Error("gecko pid overflow".into()))?;
         let key = format!("process-{}", streams.len());
+        let process_subject = format!("{subject}/gecko-{key}");
         let mut extraction = Extraction::new(
             remaining_limits,
-            json!({"format":"gecko-36","process_id":pid,"scope":"profile-defined process; pid alone does not bind a live OS instance","units":process["meta"]["sampleUnits"],"raw_meta":process["meta"]}),
+            json!({"format":"gecko-36","process_id":pid,"scope":"profile-defined process; pid alone does not bind a live OS instance","units":process["meta"]["sampleUnits"],"raw_meta":process["meta"],"subject_projection":"original thread plus raw innerWindowID association when present; worker window IDs may name their creator; samples require one unambiguous raw window on the stack; no page CPU ownership"}),
         );
         extraction.schemas = vec![
             schema(
@@ -98,6 +106,12 @@ pub(super) fn extract(
                     ("table", FieldType::String, None, "producer table name"),
                     ("index", FieldType::Unsigned, None, "original row index"),
                     (
+                        "scope",
+                        FieldType::Object,
+                        None,
+                        "raw window/thread identity; mixed or missing window bindings remain explicit",
+                    ),
+                    (
                         "values",
                         FieldType::Array,
                         None,
@@ -111,13 +125,14 @@ pub(super) fn extract(
             if matches!(name.as_str(), "threads" | "processes") {
                 continue;
             }
-            store_metadata(&mut extraction, subject, "process", name, value)?;
+            store_metadata(&mut extraction, &process_subject, "process", name, value)?;
         }
         for (thread_index, thread) in threads.iter().enumerate() {
             if thread["pid"].as_u64() != pid.map(u64::from) {
                 return Err(Error("mixed pid within gecko process".into()));
             }
             let owner = format!("thread-{thread_index}");
+            let thread_subject = format!("{process_subject}/{owner}");
             let strings = thread["stringTable"]
                 .as_array()
                 .ok_or_else(|| Error("gecko string table missing".into()))?;
@@ -134,7 +149,7 @@ pub(super) fn extract(
                 extraction.push(record(
                     format!("{owner}:string:{index}"),
                     "gecko.string",
-                    subject,
+                    &thread_subject,
                     json!({"thread":owner,"index":index,"text":text}),
                 ))?;
             }
@@ -143,11 +158,23 @@ pub(super) fn extract(
             let location_column = column(&thread["frameTable"]["schema"], "location")?;
             let frame_column = column(&thread["stackTable"]["schema"], "frame")?;
             let prefix_column = column(&thread["stackTable"]["schema"], "prefix")?;
+            let window_column = thread["frameTable"]["schema"]["innerWindowID"]
+                .as_u64()
+                .map(usize::try_from)
+                .transpose()
+                .map_err(|_| Error("gecko window column overflow".into()))?;
+            let mut windows = Vec::new();
+            let mut raw_windows = Vec::new();
             let mut positions = Vec::new();
             for row in frame {
                 let location_index = index_at(row, location_column, strings.len(), false)?
                     .ok_or_else(|| Error("missing frame location".into()))?;
                 positions.push(position(strings[location_index].as_str().unwrap()));
+                let window = window_column
+                    .and_then(|index| row.get(index))
+                    .unwrap_or(&Value::Null);
+                raw_windows.push(window.clone());
+                windows.push(window_identity(window));
             }
             let mut frame_indices = Vec::new();
             let mut prefixes = Vec::new();
@@ -192,7 +219,7 @@ pub(super) fn extract(
                     extraction.push(record(
                         format!("{owner}:{name}:schema"),
                         "gecko.table-schema",
-                        subject,
+                        &thread_subject,
                         json!({"thread":owner,"table":name,"schema":columns}),
                     ))?;
                     for (index, row) in rows.iter().enumerate() {
@@ -202,11 +229,21 @@ pub(super) fn extract(
                         let mut result = record(
                             format!("{owner}:{name}:{index}"),
                             "gecko.table-row",
-                            subject,
-                            json!({"thread":owner,"table":name,"index":index,"values":row}),
+                            &thread_subject,
+                            json!({"thread":owner,"table":name,"index":index,"values":row,"scope":{"thread":owner,"raw_thread_id":thread["tid"],"window_ids":[],"binding":"thread scope; no window inference"}}),
                         );
                         if name == "frameTable" {
                             (result.function, result.location) = positions[index].clone();
+                            result.payload["scope"]["raw_inner_window_id"] =
+                                raw_windows[index].clone();
+                            if let Some(window) = windows[index] {
+                                result.subject = format!("{thread_subject}/window-{window}");
+                                result.payload["scope"] = json!({"thread":owner,"raw_thread_id":thread["tid"],"window_ids":[window],"binding":"raw frame innerWindowID; page metadata retained separately","raw_inner_window_id":raw_windows[index]});
+                            } else if !raw_windows[index].is_null() && raw_windows[index] != 0 {
+                                result.payload["scope"]["binding"] = json!(
+                                    "unsupported/nonexact raw window id retained without projection"
+                                );
+                            }
                         }
                         if name == "samples" {
                             let time = column(&value["schema"], "time")?;
@@ -228,13 +265,22 @@ pub(super) fn extract(
                                     uncertainty: 1,
                                 });
                             }
+                            let mut sample_windows = BTreeSet::new();
+                            let mut unsupported_window = false;
                             if let Some(mut at) = index_at(row, stack, stacks.len(), true)? {
                                 for _ in 0..1024 {
-                                    let position = &positions[frame_indices[at]];
-                                    if position.0.is_some() {
+                                    let frame = frame_indices[at];
+                                    if let Some(window) = windows[frame] {
+                                        sample_windows.insert(window);
+                                    } else if !raw_windows[frame].is_null()
+                                        && raw_windows[frame] != 0
+                                    {
+                                        unsupported_window = true;
+                                    }
+                                    let position = &positions[frame];
+                                    if result.function.is_none() && position.0.is_some() {
                                         result.function = position.0.clone();
                                         result.location = position.1.clone();
-                                        break;
                                     }
                                     match prefixes[at] {
                                         Some(next) => at = next,
@@ -242,6 +288,13 @@ pub(super) fn extract(
                                     }
                                 }
                             }
+                            if sample_windows.len() == 1 && !unsupported_window {
+                                result.subject = format!(
+                                    "{thread_subject}/window-{}",
+                                    sample_windows.first().unwrap()
+                                );
+                            }
+                            result.payload["scope"] = json!({"thread":owner,"raw_thread_id":thread["tid"],"window_ids":sample_windows,"unsupported_window_id_on_stack":unsupported_window,"binding":if unsupported_window{"thread scope; unsupported/nonexact raw window id"}else if sample_windows.len()==1{"one raw window on full sample stack"}else if sample_windows.is_empty(){"thread scope; no raw window"}else{"thread scope; mixed raw windows"}});
                         }
                         extraction.push(result)?;
                     }
@@ -251,14 +304,14 @@ pub(super) fn extract(
                     if !extra.is_empty() {
                         store_metadata(
                             &mut extraction,
-                            subject,
+                            &thread_subject,
                             &owner,
                             &format!("{name}:extra"),
                             &Value::Object(extra),
                         )?;
                     }
                 } else {
-                    store_metadata(&mut extraction, subject, &owner, name, value)?;
+                    store_metadata(&mut extraction, &thread_subject, &owner, name, value)?;
                 }
             }
         }
@@ -274,13 +327,43 @@ pub(super) fn extract(
             key,
             process_id: pid,
             extraction,
-            interpretation: "browser-gecko36-v1",
+            interpretation: "browser-gecko36-v2",
         });
         for child in process["processes"].as_array().into_iter().flatten().rev() {
             pending.push((child, depth + 1));
         }
     }
     Ok(streams)
+}
+
+pub(super) fn worker_source_matches(thread: &Value, origin: &str) -> bool {
+    if !thread["name"]
+        .as_str()
+        .is_some_and(|name| name.contains("Worker"))
+    {
+        return false;
+    }
+    let Some(location) = thread["frameTable"]["schema"]["location"]
+        .as_u64()
+        .and_then(|column| usize::try_from(column).ok())
+    else {
+        return false;
+    };
+    thread["frameTable"]["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.get(location)?.as_u64())
+        .filter_map(|index| {
+            thread["stringTable"]
+                .get(usize::try_from(index).ok()?)?
+                .as_str()
+        })
+        .any(|text| {
+            position(text)
+                .1
+                .is_some_and(|location| location.starts_with(&format!("{origin}:")))
+        })
 }
 
 fn store_metadata(

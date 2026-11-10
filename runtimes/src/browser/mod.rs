@@ -1,3 +1,4 @@
+mod cdp;
 mod gecko;
 pub mod maps;
 pub mod safari;
@@ -149,7 +150,7 @@ pub fn prepare(
 }
 
 fn collection_schemas() -> Vec<hunin_core::records::RecordSchema> {
-    vec![
+    let mut schemas = vec![
         schema(
             "browser.collection",
             "browser collection identity, scope and exported stream bindings",
@@ -165,6 +166,12 @@ fn collection_schemas() -> Vec<hunin_core::records::RecordSchema> {
                     FieldType::Object,
                     None,
                     "source configuration, browser identity and scope",
+                ),
+                (
+                    "coverage",
+                    FieldType::Object,
+                    None,
+                    "source roster/export gaps and interpretation; not page ownership",
                 ),
             ],
         ),
@@ -221,7 +228,32 @@ fn collection_schemas() -> Vec<hunin_core::records::RecordSchema> {
                 ),
             ],
         ),
-    ]
+    ];
+    for (name, meaning) in [
+        (
+            "browser.target",
+            "declared profiler roster, reported targets and identity-only observers; role is explicit",
+        ),
+        (
+            "browser.execution-context",
+            "Runtime.executionContextCreated identity including source session and raw frame binding",
+        ),
+        (
+            "browser.frame",
+            "raw Page.getFrameTree frame and its source target/session",
+        ),
+        (
+            "browser.browsing-context",
+            "raw BiDi browsing context and selection metadata",
+        ),
+        (
+            "browser.realm",
+            "raw BiDi realm identity, worker ownership and context bindings",
+        ),
+    ] {
+        schemas.push(schema(name, meaning, &[("role", FieldType::String, None, "source identity collection role"),("binding",FieldType::Object,None,"source-specific identity fields preserved without inferred operation ownership")]));
+    }
+    schemas
 }
 
 impl PreparedBrowser {
@@ -324,7 +356,7 @@ impl PreparedBrowser {
             target: Some(target.clone()),
             schemas: collection_schemas(),
             clocks: vec![],
-            interpretation: "browser-collection-v1".into(),
+            interpretation: "browser-collection-v2".into(),
             metadata: json!({"method":if self.kind==BrowserKind::Safari {"compiler-inserted function observation"}else{"browser profiler"},"kind":format!("{:?}",self.kind),"stream_registration":"source-specific streams are declared before durable extraction; data may become available only at source stop"}),
         }
     }
@@ -343,6 +375,166 @@ impl PreparedBrowser {
     }
 }
 
+fn identity_records(out: &mut Extraction, body: &Value, subject: &str) -> Result<()> {
+    for (field, role) in [
+        ("targets", "profiler-roster"),
+        ("reportedTargets", "reported-target"),
+        ("contextObservers", "context-observer"),
+    ] {
+        for (index, binding) in body[field].as_array().into_iter().flatten().enumerate() {
+            out.push(record(
+                format!("identity:{field}:{index}"),
+                "browser.target",
+                subject,
+                json!({"role":role,"binding":binding}),
+            ))?;
+        }
+    }
+    for (index, binding) in body["executionContexts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        out.push(record(
+            format!("identity:context:{index}"),
+            "browser.execution-context",
+            subject,
+            json!({"role":"execution-context-created","binding":binding}),
+        ))?;
+    }
+    for (tree_index, tree) in body["frameTrees"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let mut pending = vec![(&tree["frameTree"], 0usize)];
+        let mut index = 0;
+        while let Some((node, depth)) = pending.pop() {
+            if depth > 32 {
+                return Err(Error("browser frame tree exceeds depth budget".into()));
+            }
+            out.push(record(format!("identity:frame:{tree_index}:{index}"),"browser.frame",subject,json!({"role":"page-frame-tree","binding":{"frame":node["frame"],"targetId":tree["targetId"],"sessionId":tree["sessionId"]}})))?;
+            index += 1;
+            pending.extend(
+                node["childFrames"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|child| (child, depth + 1)),
+            );
+        }
+    }
+    for (index, binding) in body["scopeBindings"]["contexts"]["contexts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        out.push(record(format!("identity:browsing-context:{index}"),"browser.browsing-context",subject,json!({"role":"bidi-context-tree","binding":binding,"selected":binding["context"]==body["scopeBindings"]["selectedContext"]})))?;
+    }
+    for (index, binding) in body["scopeBindings"]["realms"]["realms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        out.push(record(
+            format!("identity:realm:{index}"),
+            "browser.realm",
+            subject,
+            json!({"role":"bidi-realm","binding":binding}),
+        ))?;
+    }
+    Ok(())
+}
+
+fn coverage_warnings(body: &Value, kind: &str) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    if kind == "chromium" {
+        let Some(targets) = body["targets"].as_array() else {
+            return Ok(vec![
+                "target readiness roster unavailable; worker coverage is unverified".into(),
+            ]);
+        };
+        if targets.len() > 128 {
+            return Err(Error("browser target roster exceeds budget".into()));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for target in targets {
+            let id = target["targetId"]
+                .as_str()
+                .filter(|id| !id.is_empty() && id.len() <= 128)
+                .ok_or_else(|| Error("invalid declared target id".into()))?;
+            if !seen.insert(id) {
+                return Err(Error("duplicate declared target identity".into()));
+            }
+            let matching = body["profiles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|profile| {
+                    profile["targetId"] == id && profile["sessionId"] == target["sessionId"]
+                });
+            if target["ready"] != true || matching.is_none() {
+                warnings.push(format!(
+                    "declared {} target {id} did not provide an acknowledged matching profile",
+                    target["type"].as_str().unwrap_or("unknown")
+                ));
+            }
+        }
+        for profile in body["profiles"].as_array().into_iter().flatten() {
+            if !profile["targetId"]
+                .as_str()
+                .is_some_and(|id| seen.contains(id))
+            {
+                warnings.push("exported profile has no declared target binding".into());
+            }
+        }
+    } else if kind == "firefox" {
+        let Some(realms) = body["scopeBindings"]["realms"]["realms"].as_array() else {
+            return Ok(vec![
+                "realm roster unavailable; global-preset worker coverage is unverified".into(),
+            ]);
+        };
+        let mut pending = vec![(&body["profile"], 0usize)];
+        let mut thread_sources = Vec::new();
+        let mut processes = 0;
+        while let Some((profile, depth)) = pending.pop() {
+            processes += 1;
+            if depth > 16 || processes > 128 {
+                return Err(Error("gecko process graph exceeds budget".into()));
+            }
+            for thread in profile["threads"].as_array().into_iter().flatten() {
+                thread_sources.push(thread);
+            }
+            pending.extend(
+                profile["processes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|child| (child, depth + 1)),
+            );
+        }
+        for realm in realms
+            .iter()
+            .filter(|realm| realm["type"] == "dedicated-worker")
+        {
+            let origin = realm["origin"].as_str().filter(|origin| !origin.is_empty());
+            let observed = origin.is_some_and(|origin| {
+                thread_sources
+                    .iter()
+                    .any(|thread| gecko::worker_source_matches(thread, origin))
+            });
+            if !observed {
+                warnings.push("known worker realm has no matching source identity in the global preset; absent thread and sampling silence cannot be distinguished".into());
+            }
+        }
+    }
+    Ok(warnings)
+}
+
 pub fn extract(
     body: &Value,
     subject: &str,
@@ -352,8 +544,10 @@ pub fn extract(
     let kind = body["kind"]
         .as_str()
         .ok_or_else(|| Error("missing browser source kind".into()))?;
-    let mut collection = Extraction::new(limits, json!({"interpretation":"browser-collection-v1"}));
+    let mut collection = Extraction::new(limits, json!({"interpretation":"browser-collection-v2"}));
     collection.schemas = collection_schemas();
+    collection.warnings = coverage_warnings(body, kind)?;
+    collection.capture_complete = collection.warnings.is_empty();
     if body["sourceFailures"]
         .as_array()
         .is_some_and(|v| !v.is_empty())
@@ -364,19 +558,20 @@ pub fn extract(
                 .into(),
         );
     }
-    let mut metadata = body
+    let metadata: serde_json::Map<String, Value> = body
         .as_object()
-        .cloned()
-        .ok_or_else(|| Error("browser source must be an object".into()))?;
-    for name in ["profiles", "profile", "scripts"] {
-        metadata.remove(name);
-    }
+        .ok_or_else(|| Error("browser source must be an object".into()))?
+        .iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "profiles" | "profile" | "scripts"))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
     collection.push(record(
         "collection".into(),
         "browser.collection",
         subject,
-        json!({"kind":kind,"metadata":metadata}),
+        json!({"kind":kind,"metadata":metadata,"coverage":{"complete":collection.capture_complete,"warnings":collection.warnings,"meaning":"declared source export coverage, not exclusive selected-page execution"}}),
     ))?;
+    identity_records(&mut collection, body, subject)?;
     if let Some(report) = report {
         if !report["outcome"].is_string() {
             return Err(Error("browser report needs an application outcome".into()));
@@ -393,10 +588,10 @@ pub fn extract(
             .as_object()
             .cloned()
             .ok_or_else(|| Error("invalid executed script descriptor".into()))?;
-        let source = metadata
-            .remove("source")
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .ok_or_else(|| Error("executed script bytes missing".into()))?;
+        let source = match metadata.remove("source") {
+            Some(Value::String(source)) => source,
+            _ => return Err(Error("executed script bytes missing".into())),
+        };
         if source.len() > 512 * 1024 {
             return Err(Error("script content exceeds identity budget".into()));
         }
@@ -461,18 +656,28 @@ pub fn extract(
                 }
                 let mut extracted = v8::extract(
                     &serde_json::to_vec(&profile["profile"]).map_err(|e| Error(e.to_string()))?,
-                    &format!("page-{target}"),
+                    &format!("profile-{target}"),
                     remaining_limits,
                 )?;
-                let mut binding = profile.as_object().ok_or_else(|| Error("invalid target profile binding".into()))?.clone();
+                cdp::project_contexts(&mut extracted, body, profile)?;
+                let mut binding = profile
+                    .as_object()
+                    .ok_or_else(|| Error("invalid target profile binding".into()))?
+                    .clone();
                 binding.remove("profile");
-                let metadata = extracted.metadata.as_object_mut().ok_or_else(|| Error("invalid v8 source metadata".into()))?;
-                metadata.insert("browser".into(),json!("chromium"));
-                metadata.insert("target_id".into(),json!(target));
-                metadata.insert("session_id".into(),profile["sessionId"].clone());
-                metadata.insert("target_binding".into(),Value::Object(binding));
-                metadata.insert("clock_scope".into(),json!("this exported target profile; no implicit cross-target alignment"));
-                metadata.insert("version".into(),body["version"].clone());
+                let metadata = extracted
+                    .metadata
+                    .as_object_mut()
+                    .ok_or_else(|| Error("invalid v8 source metadata".into()))?;
+                metadata.insert("browser".into(), json!("chromium"));
+                metadata.insert("target_id".into(), json!(target));
+                metadata.insert("session_id".into(), profile["sessionId"].clone());
+                metadata.insert("target_binding".into(), Value::Object(binding));
+                metadata.insert(
+                    "clock_scope".into(),
+                    json!("this exported target profile; no implicit cross-target alignment"),
+                );
+                metadata.insert("version".into(), body["version"].clone());
                 remaining_limits.max_records = remaining_limits
                     .max_records
                     .checked_sub(extracted.records.len())
@@ -485,7 +690,7 @@ pub fn extract(
                     key: format!("target-{target}"),
                     process_id: None,
                     extraction: extracted,
-                    interpretation: "browser-v8-v1",
+                    interpretation: "browser-v8-v2",
                 });
             }
             streams
