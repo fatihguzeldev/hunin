@@ -156,19 +156,32 @@ pub fn prepare(
             return Err(Error("JFR repository path cannot contain a comma".into()));
         }
         let compiler = executable.with_file_name(if cfg!(windows) { "javac.exe" } else { "javac" });
-        compile_java(&compiler, &helper_path, &workload, &area)?;
+        let source_bytes = bounded_file(&workload, 4 * 1024 * 1024)?;
+        let source_area = area.join("java-source");
+        fs::create_dir(&source_area).map_err(|e| Error(e.to_string()))?;
+        let snapshot = source_area.join(
+            workload
+                .file_name()
+                .ok_or_else(|| Error("Java source filename missing".into()))?,
+        );
+        let mut source = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&snapshot)
+            .map_err(|e| Error(e.to_string()))?;
+        source
+            .write_all(&source_bytes)
+            .map_err(|e| Error(e.to_string()))?;
+        source.sync_all().map_err(|e| Error(e.to_string()))?;
+        compile_java(&compiler, &helper_path, &snapshot, &area)?;
         let manifest = area.join("class-bindings.txt");
         let mut bindings = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&manifest)
             .map_err(|e| Error(e.to_string()))?;
-        writeln!(
-            bindings,
-            "source {:x}",
-            Sha256::digest(bounded_file(&workload, 4 * 1024 * 1024)?)
-        )
-        .map_err(|e| Error(e.to_string()))?;
+        writeln!(bindings, "source {:x}", Sha256::digest(&source_bytes))
+            .map_err(|e| Error(e.to_string()))?;
         for entry in fs::read_dir(&area).map_err(|e| Error(e.to_string()))? {
             let path = entry.map_err(|e| Error(e.to_string()))?.path();
             if path.extension().is_some_and(|ext| ext == "class") {
