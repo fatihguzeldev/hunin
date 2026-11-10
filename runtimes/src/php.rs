@@ -1,7 +1,15 @@
 use crate::{Error, Extraction, Limits, Result, record, schema};
-use hunin_core::records::{FieldType, RecordSchema};
+use hunin_core::{
+    execution::PreparedLaunch,
+    records::{FieldType, RecordSchema},
+};
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
+};
 
 pub fn schemas() -> Vec<RecordSchema> {
     vec![
@@ -495,3 +503,90 @@ fn resolve_name(
     }
 }
 
+pub fn prepare(
+    executable: &Path,
+    extension: &Path,
+    workload: &Path,
+    area: &Path,
+) -> Result<crate::prepared::PreparedRuntime> {
+    if ![executable, extension, workload, area]
+        .iter()
+        .all(|path| path.is_absolute())
+    {
+        return Err(Error("php preparation paths must be absolute".into()));
+    }
+    if !fs::symlink_metadata(area)
+        .map_err(|error| Error(error.to_string()))?
+        .file_type()
+        .is_dir()
+    {
+        return Err(Error(
+            "php preparation area must be an owned directory".into(),
+        ));
+    }
+    let executable = fs::canonicalize(executable).map_err(|error| Error(error.to_string()))?;
+    let extension = fs::canonicalize(extension).map_err(|error| Error(error.to_string()))?;
+    let workload = fs::canonicalize(workload).map_err(|error| Error(error.to_string()))?;
+    let area = fs::canonicalize(area).map_err(|error| Error(error.to_string()))?;
+    for path in [&extension, &area] {
+        if path.to_string_lossy().contains(['\n', '\r', '"']) {
+            return Err(Error(
+                "php ini path contains an unsupported delimiter".into(),
+            ));
+        }
+    }
+    let helper = area.join("xdebug.php");
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&helper)
+        .map_err(|error| Error(error.to_string()))?;
+    output
+        .write_all(include_str!("../helpers/php.php").as_bytes())
+        .map_err(|error| Error(error.to_string()))?;
+    let profile_path = area.join("runtime-profile.cachegrind");
+    let report_path = area.join("runtime-report.json");
+    if profile_path.exists() || report_path.exists() {
+        return Err(Error("php prepared outputs already exist".into()));
+    }
+    let mut args = vec![
+        "-n".into(),
+        "-d".into(),
+        format!("zend_extension={}", extension.display()),
+    ];
+    for setting in [
+        "xdebug.mode=profile".to_owned(),
+        "xdebug.start_with_request=yes".into(),
+        "xdebug.use_compression=0".into(),
+        "xdebug.profiler_append=0".into(),
+        "xdebug.profiler_output_name=runtime-profile.cachegrind".into(),
+        "xdebug.control_socket=off".into(),
+        format!("xdebug.output_dir={}", area.display()),
+        format!("sys_temp_dir={}", area.display()),
+    ] {
+        args.extend(["-d".into(), setting]);
+    }
+    args.extend(
+        [&helper, &workload, &profile_path, &report_path]
+            .map(|path| path.to_string_lossy().into_owned()),
+    );
+    let environment = BTreeMap::from([
+        ("TMPDIR".into(), area.to_string_lossy().into_owned()),
+        ("TMP".into(), area.to_string_lossy().into_owned()),
+        ("TEMP".into(), area.to_string_lossy().into_owned()),
+        ("XDEBUG_MODE".into(), "profile".into()),
+        ("XDEBUG_CONFIG".into(), String::new()),
+    ]);
+    Ok(crate::prepared::PreparedRuntime {
+        launch: PreparedLaunch {
+            program: executable,
+            args,
+            directory: area,
+            environment,
+            stdout_limit: 64 * 1024,
+        },
+        profile_path,
+        report_path,
+        kind: crate::prepared::RuntimeKind::PHP,
+    })
+}

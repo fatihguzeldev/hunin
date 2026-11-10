@@ -1,9 +1,19 @@
 use crate::{
     Error, Extraction, Limits, Result, array, input, object, record, schema, text, unsigned,
 };
-use hunin_core::records::{Clock, FieldType, RecordSchema, RecordTime};
+use hunin_core::{
+    execution::PreparedLaunch,
+    records::{Clock, FieldType, RecordSchema, RecordTime},
+};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
+    process::Command,
+    time::Duration,
+};
 
 const CLOCK: &str = "eventpipe.relative-ns";
 
@@ -450,3 +460,133 @@ fn nullable_unsigned(object: &serde_json::Map<String, Value>, key: &str) -> Resu
     }
 }
 
+pub fn prepare(
+    executable: &Path,
+    workload: &Path,
+    area: &Path,
+) -> Result<crate::prepared::PreparedRuntime> {
+    if ![executable, workload, area]
+        .iter()
+        .all(|path| path.is_absolute())
+    {
+        return Err(Error("CoreCLR preparation paths must be absolute".into()));
+    }
+    if !fs::symlink_metadata(area)
+        .map_err(|error| Error(error.to_string()))?
+        .file_type()
+        .is_dir()
+    {
+        return Err(Error("CoreCLR area must be an owned directory".into()));
+    }
+    let area = fs::canonicalize(area).map_err(|error| Error(error.to_string()))?;
+    let executable = fs::canonicalize(executable).map_err(|error| Error(error.to_string()))?;
+    let workload = fs::canonicalize(workload).map_err(|error| Error(error.to_string()))?;
+    if cfg!(unix) && area.as_os_str().as_encoded_bytes().len() > 58 {
+        return Err(Error("project temporary path is too long for CoreCLR diagnostic sockets; configure a shorter project data root".into()));
+    }
+    let bytes = fs::read(&workload).map_err(|error| Error(error.to_string()))?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(Error("CoreCLR workload source exceeds 4 mib".into()));
+    }
+    for (name, bytes) in [
+        (
+            "HuninTrace.cs",
+            include_bytes!("../helpers/clr/HuninTrace.cs").as_slice(),
+        ),
+        (
+            "HuninTrace.csproj",
+            include_bytes!("../helpers/clr/HuninTrace.csproj").as_slice(),
+        ),
+        (
+            "packages.lock.json",
+            include_bytes!("../helpers/clr/packages.lock.json").as_slice(),
+        ),
+        (
+            "global.json",
+            b"{\"sdk\":{\"version\":\"10.0.404\",\"rollForward\":\"disable\"}}".as_slice(),
+        ),
+        ("Workload.cs", bytes.as_slice()),
+    ] {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(area.join(name))
+            .map_err(|error| Error(error.to_string()))?;
+        file.write_all(bytes)
+            .map_err(|error| Error(error.to_string()))?;
+    }
+    let environment = environment(&executable, &area);
+    build(&executable, &area, &environment)?;
+    let profile_path = area.join("runtime-profile.json");
+    let report_path = area.join("runtime-report.json");
+    if profile_path.exists() || report_path.exists() {
+        return Err(Error("CoreCLR prepared outputs already exist".into()));
+    }
+    let assembly = area.join("bin/Release/net10.0/HuninTrace.dll");
+    let args = [&assembly, &workload, &profile_path, &report_path]
+        .map(|path| path.to_string_lossy().into_owned())
+        .to_vec();
+    Ok(crate::prepared::PreparedRuntime {
+        launch: PreparedLaunch {
+            program: executable,
+            args,
+            directory: area,
+            environment,
+            stdout_limit: 64 * 1024,
+        },
+        profile_path,
+        report_path,
+        kind: crate::prepared::RuntimeKind::CoreCLR,
+    })
+}
+
+fn environment(executable: &Path, area: &Path) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    for name in ["TMPDIR", "TMP", "TEMP"] {
+        environment.insert(name.into(), area.to_string_lossy().into_owned());
+    }
+    for (name, value) in [
+        ("DOTNET_ROOT", executable.parent().unwrap().to_path_buf()),
+        ("DOTNET_CLI_HOME", area.join("cli-home")),
+        ("NUGET_PACKAGES", area.join("nuget")),
+    ] {
+        environment.insert(name.into(), value.to_string_lossy().into_owned());
+    }
+    for (name, value) in [
+        ("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
+        ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"),
+        ("DOTNET_GENERATE_ASPNET_CERTIFICATE", "false"),
+        ("DOTNET_CLI_USE_MSBUILD_SERVER", "0"),
+        ("MSBUILDDISABLENODEREUSE", "1"),
+    ] {
+        environment.insert(name.into(), value.into());
+    }
+    environment
+}
+
+fn build(executable: &Path, area: &Path, environment: &BTreeMap<String, String>) -> Result<()> {
+    let mut command = Command::new(executable);
+    command
+        .args([
+            "build",
+            "HuninTrace.csproj",
+            "--configuration",
+            "Release",
+            "--no-incremental",
+            "--disable-build-servers",
+            "-p:RestoreLockedMode=true",
+            "-p:UseSharedCompilation=false",
+            "-p:NuGetAudit=false",
+        ])
+        .current_dir(area)
+        .envs(environment);
+    let output = hunin_platforms::tools::run(&mut command, area, Duration::from_secs(120), 65536)
+        .map_err(|error| Error(error.to_string()))?;
+    if !output.status.success() {
+        return Err(Error(format!(
+            "CoreCLR helper build failed: {} {}",
+            output.stdout, output.stderr
+        )));
+    }
+    Ok(())
+}

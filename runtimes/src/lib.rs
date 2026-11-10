@@ -1,13 +1,25 @@
 //! source-specific runtime observation and extraction.
 
-pub mod v8;
-pub mod php;
 pub mod clr;
-pub mod source_maps;
+pub mod jfr;
+pub mod php;
+pub mod pprof;
+pub mod prepared;
 pub mod python;
 pub mod ruby;
-pub mod jfr;
-pub mod pprof;
+pub mod source_maps;
+pub mod v8;
+
+pub use prepared::{PreparedRuntime, RuntimeKind, prepare};
+
+pub mod helpers {
+    pub const INSPECTOR: &str = include_str!("../helpers/node.cjs");
+    pub const PYTHON: &str = include_str!("../helpers/python.py");
+    pub const RUBY: &str = include_str!("../helpers/ruby.rb");
+    pub const JFR: &str = include_str!("../helpers/HuninJfr.java");
+    pub const GO: &str = include_str!("../helpers/go.go");
+    pub const PHP: &str = include_str!("../helpers/php.php");
+}
 
 use hunin_core::records::{Clock, FieldSchema, FieldType, Record, RecordSchema};
 use serde_json::{Map, Value};

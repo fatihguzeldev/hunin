@@ -1,3 +1,4 @@
+mod paired;
 
 use hunin_runtimes::{Limits, php};
 use serde_json::json;
@@ -110,3 +111,125 @@ fn xdebug_rejects_input_output_record_and_string_pressure() {
     }
 }
 
+#[test]
+#[ignore = "requires absolute HUNIN_PHP and HUNIN_XDEBUG matching PHP8.5.4/Xdebug3.5.3"]
+fn real_php_records_known_calls_and_reopens_without_the_cachegrind_input() {
+    use hunin_core::{
+        execution::PreparedProcess,
+        project::Project,
+        query::{FieldFilter, Query, QueryLimits},
+    };
+    use std::{fs, path::PathBuf, time::Duration};
+    let executable = PathBuf::from(std::env::var_os("HUNIN_PHP").expect("set HUNIN_PHP"));
+    let extension = PathBuf::from(std::env::var_os("HUNIN_XDEBUG").expect("set HUNIN_XDEBUG"));
+    let directory = tempfile::tempdir().unwrap();
+    let project = Project::create(directory.path(), "php").unwrap();
+    let investigation = project
+        .create_investigation("i", "php preview", json!({}))
+        .unwrap();
+    let run = project
+        .create_run(&investigation, "r", json!({"fixture":"pixel preview"}))
+        .unwrap();
+    let area = project.directory().join("tmp/php");
+    fs::create_dir(&area).unwrap();
+    let workload = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preview.php");
+    let mut prepared = php::prepare(&executable, &extension, &workload, &area).unwrap();
+    prepared
+        .launch
+        .environment
+        .insert("HUNIN_FINALIZE_GATE".into(), "1".into());
+    let mut process = PreparedProcess::spawn(&prepared.launch).unwrap();
+    process.await_ready(Duration::from_secs(10)).unwrap();
+    let mut resources = paired::Resources::start(&project, &run, process.id());
+    let target = resources.target.clone();
+    let source = project
+        .register_source(&run, prepared.definition("xdebug", &target))
+        .unwrap();
+    source
+        .ready(json!({"active_profile_verified":true,"scope":"owned process startup through exit"}))
+        .unwrap();
+    process.release().unwrap();
+    let (resource_count, cpu_ns) = resources.finish_work(&mut process);
+    let outcome = process.wait(Duration::from_secs(30)).unwrap();
+    assert!(outcome.success, "{outcome:?}");
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&prepared.report_path).unwrap()).unwrap();
+    assert_eq!(report["runtime"]["php"], "8.5.4");
+    assert_eq!(report["runtime"]["xdebug"], "3.5.3");
+    assert_eq!(report["outcome"], "completed");
+    for (index, pixel) in report["output"]["pixels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(
+            pixel.as_u64().unwrap(),
+            (((index * 3 + 7) ^ index) & 255) as u64
+        );
+    }
+    let extraction = prepared.extract("php-process", Limits::default()).unwrap();
+    assert!(extraction.warnings.is_empty());
+    let expected = extraction.records.len();
+    assert_eq!(
+        extraction
+            .records
+            .iter()
+            .filter(|record| record.schema == "xdebug.cost"
+                && record.function.as_deref() == Some("resize"))
+            .count(),
+        7
+    );
+    assert_eq!(
+        extraction
+            .records
+            .iter()
+            .filter(|record| record.schema == "xdebug.call"
+                && record.payload["callee_function"] == "resize")
+            .map(|record| record.payload["calls"].as_u64().unwrap())
+            .sum::<u64>(),
+        7
+    );
+    for batch in extraction.records.chunks(256) {
+        source.append(batch).unwrap();
+    }
+    source
+        .close(json!({"complete":true,"records":expected}))
+        .unwrap();
+    fs::remove_dir_all(&area).unwrap();
+    drop(source);
+    drop(resources);
+    drop(project);
+    let reopened = Project::open(directory.path(), "php").unwrap();
+    let discovered = reopened
+        .sources(&run, QueryLimits::default(), None)
+        .unwrap();
+    assert!(
+        discovered
+            .items
+            .iter()
+            .any(|source| source.id == "xdebug" && source.closed)
+    );
+    paired::verify_reopened(&reopened, &run, resource_count);
+    eprintln!(
+        "php-paired resource_records={resource_count} cpu_ns={cpu_ns} runtime_records={expected} platform={}",
+        std::env::consts::OS
+    );
+    let mut query = Query::new(run);
+    query.source = Some("xdebug".into());
+    query.schema = Some("xdebug.cost".into());
+    query.fields.push(FieldFilter {
+        name: "function".into(),
+        value: json!("resize"),
+    });
+    let page = reopened
+        .query(&query, QueryLimits::default(), None)
+        .unwrap();
+    assert_eq!(page.records.len(), 7);
+    assert!(page.records.iter().all(|entry| {
+        entry.record.as_ref().unwrap().payload["time_10ns"]
+            .as_u64()
+            .unwrap()
+            > 0
+    }));
+}
