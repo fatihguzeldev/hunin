@@ -1,6 +1,7 @@
 //! source-specific runtime observation and extraction.
 
 pub mod v8;
+pub mod source_maps;
 pub mod python;
 pub mod ruby;
 pub mod jfr;
