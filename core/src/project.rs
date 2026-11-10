@@ -72,7 +72,7 @@ impl std::fmt::Debug for Project {
 }
 
 const APPLICATION_ID: i64 = 0x4855_4e49;
-const DATABASE_VERSION: i64 = 1;
+const DATABASE_VERSION: i64 = 2;
 
 impl Project {
     pub fn new_id() -> Result<String> {
@@ -163,7 +163,7 @@ impl Project {
             transaction.pragma_update(None, "user_version", DATABASE_VERSION)?;
             transaction.commit()?;
         } else {
-            if app != APPLICATION_ID || version != DATABASE_VERSION {
+            if app != APPLICATION_ID || !(1..=DATABASE_VERSION).contains(&version) {
                 return Err(Error::Invalid(
                     "unknown project database or incompatible schema".into(),
                 ));
@@ -173,6 +173,15 @@ impl Project {
                     .query_row("SELECT project_id FROM project_info", [], |row| row.get(0))?;
             if stored != id {
                 return Err(Error::ForeignProject);
+            }
+            if version == 1 {
+                let transaction =
+                    connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                transaction.execute_batch("ALTER TABLE investigations ADD COLUMN created_revision INTEGER NOT NULL DEFAULT 0; ALTER TABLE runs ADD COLUMN created_revision INTEGER NOT NULL DEFAULT 0; ALTER TABLE targets ADD COLUMN created_revision INTEGER NOT NULL DEFAULT 0; ALTER TABLE sources ADD COLUMN created_revision INTEGER NOT NULL DEFAULT 0;")?;
+                transaction
+                    .execute_batch("CREATE INDEX IF NOT EXISTS records_run ON records(run,seq)")?;
+                transaction.pragma_update(None, "user_version", DATABASE_VERSION)?;
+                transaction.commit()?;
             }
         }
         configure(&connection)?;
@@ -284,11 +293,11 @@ impl Project {
                     return Err(Error::Conflict(format!("investigation {id}")));
                 }
             } else {
+                let revision = bump_revision(transaction)?;
                 transaction.execute(
-                    "INSERT INTO investigations(id,name,metadata) VALUES (?1,?2,?3)",
-                    params![id, name, body],
+                    "INSERT INTO investigations(id,name,metadata,created_revision) VALUES (?1,?2,?3,?4)",
+                    params![id, name, body, revision],
                 )?;
-                bump_revision(transaction)?;
             }
             Ok(self.reference(id))
         })
@@ -317,11 +326,11 @@ impl Project {
                     return Err(Error::Conflict(format!("run {id}")));
                 }
             } else {
+                let revision = bump_revision(transaction)?;
                 transaction.execute(
-                    "INSERT INTO runs(id,investigation,conditions) VALUES (?1,?2,?3)",
-                    params![id, investigation.id, body],
+                    "INSERT INTO runs(id,investigation,conditions,created_revision) VALUES (?1,?2,?3,?4)",
+                    params![id, investigation.id, body, revision],
                 )?;
-                bump_revision(transaction)?;
             }
             Ok(self.reference(id))
         })
@@ -352,11 +361,11 @@ impl Project {
                 }
             } else {
                 ensure_run_active(transaction, &run.id)?;
+                let revision = bump_revision(transaction)?;
                 transaction.execute(
-                    "INSERT INTO targets(run,id,identity,owned) VALUES (?1,?2,?3,?4)",
-                    params![run.id, id, body, owned],
+                    "INSERT INTO targets(run,id,identity,owned,created_revision) VALUES (?1,?2,?3,?4,?5)",
+                    params![run.id, id, body, owned, revision],
                 )?;
-                bump_revision(transaction)?;
             }
             Ok(TargetRef { project: self.id().to_owned(), run: run.id.clone(), id: id.to_owned() })
         })
@@ -426,11 +435,77 @@ pub(crate) fn canonical(value: Value) -> Value {
 }
 
 pub(crate) fn encode_bounded(value: &impl Serialize) -> Result<String> {
-    let body = serde_json::to_string(&canonical(serde_json::to_value(value)?))?;
-    if body.len() > MAX_VALUE_BYTES {
-        return Err(Error::Limit("structured value exceeds 1 mib".into()));
+    let first = bounded_json(value)?;
+    let value: Value = serde_json::from_slice(&first)?;
+    let bytes = bounded_json(&canonical(value))?;
+    String::from_utf8(bytes)
+        .map_err(|_| Error::Invalid("json serializer returned invalid utf8".into()))
+}
+
+fn bounded_json(value: &impl Serialize) -> Result<Vec<u8>> {
+    struct Buffer {
+        bytes: Vec<u8>,
+        exceeded: bool,
+        depth: usize,
+        in_string: bool,
+        escape: bool,
     }
-    Ok(body)
+    impl std::io::Write for Buffer {
+        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+            if input.len() > MAX_VALUE_BYTES.saturating_sub(self.bytes.len()) {
+                self.exceeded = true;
+                return Err(std::io::Error::other("structured value exceeds limit"));
+            }
+            for &byte in input {
+                if self.in_string {
+                    if self.escape {
+                        self.escape = false;
+                    } else if byte == b'\\' {
+                        self.escape = true;
+                    } else if byte == b'"' {
+                        self.in_string = false;
+                    }
+                } else {
+                    match byte {
+                        b'"' => self.in_string = true,
+                        b'[' | b'{' => {
+                            self.depth += 1;
+                            if self.depth > 120 {
+                                self.exceeded = true;
+                                return Err(std::io::Error::other(
+                                    "structured value nesting exceeds limit",
+                                ));
+                            }
+                        }
+                        b']' | b'}' => self.depth = self.depth.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+            }
+            self.bytes.extend_from_slice(input);
+            Ok(input.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut buffer = Buffer {
+        bytes: Vec::new(),
+        exceeded: false,
+        depth: 0,
+        in_string: false,
+        escape: false,
+    };
+    if let Err(error) = serde_json::to_writer(&mut buffer, value) {
+        return if buffer.exceeded {
+            Err(Error::Limit(
+                "structured value exceeds 1 mib or 120 nesting levels".into(),
+            ))
+        } else {
+            Err(error.into())
+        };
+    }
+    Ok(buffer.bytes)
 }
 
 pub(crate) fn revision(connection: &Connection) -> Result<u64> {
@@ -468,23 +543,35 @@ pub(crate) fn require_id(connection: &Connection, table: &str, id: &str) -> Resu
 
 pub(crate) fn ensure_run_active(connection: &Connection, run: &str) -> Result<()> {
     require_id(connection, "runs", run)?;
-    let terminal: Option<Option<String>> = connection.query_row("SELECT terminal FROM control_scopes WHERE run_id=?1", [run], |row| row.get(0)).optional()?;
-    if terminal.flatten().is_some() { return Err(Error::Conflict("run is terminal; new work needs a new run".into())); }
+    let terminal: Option<Option<String>> = connection
+        .query_row(
+            "SELECT terminal FROM control_scopes WHERE run_id=?1",
+            [run],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if terminal.flatten().is_some() {
+        return Err(Error::Conflict(
+            "run is terminal; new work needs a new run".into(),
+        ));
+    }
     Ok(())
 }
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS project_info(project_id TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0),metadata TEXT NOT NULL) STRICT;
-CREATE TABLE IF NOT EXISTS investigations(id TEXT PRIMARY KEY,name TEXT NOT NULL,metadata TEXT NOT NULL) STRICT;
-CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,investigation TEXT NOT NULL REFERENCES investigations(id),conditions TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS investigations(id TEXT PRIMARY KEY,name TEXT NOT NULL,metadata TEXT NOT NULL,created_revision INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,investigation TEXT NOT NULL REFERENCES investigations(id),conditions TEXT NOT NULL,created_revision INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS control_scopes(run_id TEXT PRIMARY KEY REFERENCES runs(id),generation INTEGER NOT NULL,terminal TEXT) STRICT;
 CREATE TABLE IF NOT EXISTS control_requests(caller TEXT NOT NULL,id TEXT NOT NULL,run_id TEXT NOT NULL REFERENCES runs(id),action TEXT NOT NULL,arguments TEXT NOT NULL,generation INTEGER NOT NULL,state TEXT NOT NULL,result TEXT,PRIMARY KEY(caller,id)) STRICT;
-CREATE TABLE IF NOT EXISTS targets(run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,identity TEXT NOT NULL,owned INTEGER NOT NULL CHECK(owned IN(0,1)),PRIMARY KEY(run,id)) STRICT;
-CREATE TABLE IF NOT EXISTS sources(run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,definition TEXT NOT NULL,closed INTEGER NOT NULL DEFAULT 0 CHECK(closed IN(0,1)),outcome TEXT,cutoff INTEGER,PRIMARY KEY(run,id)) STRICT;
+CREATE TABLE IF NOT EXISTS targets(run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,identity TEXT NOT NULL,owned INTEGER NOT NULL CHECK(owned IN(0,1)),created_revision INTEGER NOT NULL,PRIMARY KEY(run,id)) STRICT;
+CREATE TABLE IF NOT EXISTS sources(run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,definition TEXT NOT NULL,closed INTEGER NOT NULL DEFAULT 0 CHECK(closed IN(0,1)),outcome TEXT,cutoff INTEGER,created_revision INTEGER NOT NULL,PRIMARY KEY(run,id)) STRICT;
 CREATE TABLE IF NOT EXISTS source_schemas(run TEXT NOT NULL,source TEXT NOT NULL,name TEXT NOT NULL,version INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(run,source,name,version),FOREIGN KEY(run,source) REFERENCES sources(run,id)) STRICT;
 CREATE TABLE IF NOT EXISTS source_events(seq INTEGER PRIMARY KEY,run TEXT NOT NULL,source TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL,UNIQUE(run,source,kind,id),FOREIGN KEY(run,source) REFERENCES sources(run,id)) STRICT;
+CREATE INDEX IF NOT EXISTS events_scope ON source_events(run,source,kind,revision,seq);
 CREATE TABLE IF NOT EXISTS delivery_batches(run TEXT NOT NULL,source TEXT NOT NULL,id TEXT NOT NULL,digest BLOB NOT NULL,record_count INTEGER NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(run,source,id),FOREIGN KEY(run,source) REFERENCES sources(run,id)) STRICT;
 CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY,run TEXT NOT NULL,source TEXT NOT NULL,id TEXT NOT NULL,schema_name TEXT NOT NULL,schema_version INTEGER NOT NULL,subject TEXT NOT NULL,clock TEXT,start INTEGER,end INTEGER,uncertainty TEXT,function TEXT,location TEXT,operation TEXT,body TEXT NOT NULL,body_bytes INTEGER NOT NULL,revision INTEGER NOT NULL,UNIQUE(run,source,id),FOREIGN KEY(run,source) REFERENCES sources(run,id)) STRICT;
+CREATE INDEX IF NOT EXISTS records_run ON records(run,seq);
 CREATE INDEX IF NOT EXISTS records_source ON records(run,source,seq);
 CREATE INDEX IF NOT EXISTS records_function ON records(run,function,seq);
 CREATE INDEX IF NOT EXISTS records_operation ON records(run,operation,seq);
@@ -493,7 +580,95 @@ CREATE INDEX IF NOT EXISTS records_time ON records(run,clock,start,seq);
 CREATE TABLE IF NOT EXISTS record_fields(record INTEGER NOT NULL REFERENCES records(seq),name TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(record,name)) STRICT;
 CREATE INDEX IF NOT EXISTS field_lookup ON record_fields(name,value,record);
 CREATE TABLE IF NOT EXISTS contexts(seq INTEGER PRIMARY KEY,run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,subject TEXT NOT NULL,origin TEXT NOT NULL,body TEXT NOT NULL,corrects TEXT,revision INTEGER NOT NULL,UNIQUE(run,id)) STRICT;
+CREATE INDEX IF NOT EXISTS context_corrections ON contexts(run,corrects,revision);
 CREATE TABLE IF NOT EXISTS relationships(seq INTEGER PRIMARY KEY,run TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,from_run TEXT NOT NULL,from_source TEXT NOT NULL,from_id TEXT NOT NULL,to_run TEXT NOT NULL,to_source TEXT NOT NULL,to_id TEXT NOT NULL,kind TEXT NOT NULL,origin TEXT NOT NULL,body TEXT NOT NULL,corrects TEXT,revision INTEGER NOT NULL,UNIQUE(run,id)) STRICT;
 CREATE INDEX IF NOT EXISTS relations_forward ON relationships(from_run,from_source,from_id,revision,seq);
 CREATE INDEX IF NOT EXISTS relations_reverse ON relationships(to_run,to_source,to_id,revision,seq);
+CREATE INDEX IF NOT EXISTS relation_corrections ON relationships(run,corrects,revision);
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn prior_catalog_schema_migrates_atomically_and_preserves_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = Project::create(directory.path(), "p").unwrap();
+        let investigation = project
+            .create_investigation("i", "retained", json!({"known":true}))
+            .unwrap();
+        project.create_run(&investigation, "r", json!({})).unwrap();
+        let before = project.revision().unwrap();
+        project.with_connection(|connection|{
+            connection.execute_batch("DROP INDEX records_run; ALTER TABLE investigations DROP COLUMN created_revision; ALTER TABLE runs DROP COLUMN created_revision; ALTER TABLE targets DROP COLUMN created_revision; ALTER TABLE sources DROP COLUMN created_revision; PRAGMA user_version=1;")?;Ok(())
+        }).unwrap();
+        drop(project);
+        let reopened = Project::open(directory.path(), "p").unwrap();
+        assert_eq!(reopened.revision().unwrap(), before);
+        let page = reopened
+            .investigations(crate::query::QueryLimits::default(), None)
+            .unwrap();
+        assert_eq!(
+            page.items[0].metadata.value.as_ref().unwrap()["known"],
+            true
+        );
+        assert_eq!(
+            reopened
+                .runs(&investigation, crate::query::QueryLimits::default(), None)
+                .unwrap()
+                .items[0]
+                .reference
+                .id,
+            "r"
+        );
+        reopened
+            .with_connection(|connection| {
+                assert_eq!(
+                    connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?,
+                    DATABASE_VERSION
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn revision_exhaustion_and_deep_values_leave_no_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = Project::create(directory.path(), "p").unwrap();
+        let mut nested = json!(null);
+        for _ in 0..150 {
+            nested = json!([nested]);
+        }
+        assert!(matches!(project.set_metadata(nested), Err(Error::Limit(_))));
+        assert_eq!(project.revision().unwrap(), 0);
+        project
+            .with_connection(|connection| {
+                connection.execute("UPDATE project_info SET revision=?1", [i64::MAX])?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(matches!(
+            project.set_metadata(json!({"lost":true})),
+            Err(Error::Limit(_))
+        ));
+        assert_eq!(project.metadata().unwrap(), json!({}));
+        assert!(matches!(
+            project.create_investigation("i", "exhausted", json!({})),
+            Err(Error::Limit(_))
+        ));
+        project
+            .with_connection(|connection| {
+                assert_eq!(
+                    connection
+                        .query_row("SELECT count(*) FROM investigations", [], |row| row
+                            .get::<_, i64>(0))?,
+                    0
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+}

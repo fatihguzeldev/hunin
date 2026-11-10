@@ -5,3 +5,4 @@ pub mod control;
 pub mod execution;
 pub mod project;
 pub mod records;
+pub mod query;
