@@ -149,3 +149,56 @@ fn suspended_bodies_cannot_close_or_mark_loss_in_a_later_capture() {
         assert_eq!(value["current"]["lost_events"], 0);
     }
 }
+
+#[test]
+#[ignore = "requires HUNIN_BABEL_NODE and HUNIN_BABEL_ROOT"]
+fn strict_tail_calls_are_rejected_before_publishing_instrumented_source() {
+    let node = PathBuf::from(std::env::var("HUNIN_BABEL_NODE").unwrap());
+    let babel = PathBuf::from(std::env::var("HUNIN_BABEL_ROOT").unwrap());
+    let area = tempfile::tempdir().unwrap();
+    for (index, source) in [
+        "'use strict';function loop(n){return loop(n-1)}",
+        "function ownStrict(){'use strict';return next()}",
+        "'use strict';function f(x){return x?next():0}",
+        "'use strict';function f(x){return x||next()}",
+        "'use strict';function f(){return (side(),next())}",
+        "'use strict';const f=()=>next?.()",
+        "class Example{method(){return next()}}",
+        "'use strict';function f(){try{return next()}finally{side()}}",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path = area.path().join(format!("tail-{index}.js"));
+        std::fs::write(&path, source).unwrap();
+        let output = area.path().join(format!("tail-{index}.out.js"));
+        let binding = area.path().join(format!("tail-{index}.json"));
+        let error =
+            safari::instrument(&node, &babel, &path, &output, &binding, area.path()).unwrap_err();
+        assert!(error.to_string().contains("tail-call"), "{error}");
+        assert!(!output.exists());
+        assert!(!binding.exists());
+    }
+    for (index, source) in [
+        "'use strict';function recurse(n){return n?recurse(n-1)+1:0}",
+        "function sloppy(){return next()}",
+        "'use strict';async function f(){return next()}",
+        "'use strict';function* f(){return next()}",
+        "'use strict';function f(){return (side(),0)}",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path = area.path().join(format!("safe-{index}.js"));
+        std::fs::write(&path, source).unwrap();
+        safari::instrument(
+            &node,
+            &babel,
+            &path,
+            &area.path().join(format!("safe-{index}.out.js")),
+            &area.path().join(format!("safe-{index}.json")),
+            area.path(),
+        )
+        .unwrap();
+    }
+}

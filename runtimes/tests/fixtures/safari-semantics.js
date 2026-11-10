@@ -5,7 +5,7 @@ class Base { constructor(value) { this.value=value; } method() { return this.val
 class Derived extends Base {
   constructor(value) { super(value+1); }
   #triple(value) { return value*3; }
-  get total() { return this.#triple(this.value); }
+  get total() { return this.#triple(this.value)+0; }
   method(add=2,...rest) { return super.method()+this.total+add+rest.length; }
 }
 function recur(n) { return n===0 ? 0 : recur(n-1)+1; }

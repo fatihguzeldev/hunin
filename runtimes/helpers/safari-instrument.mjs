@@ -25,6 +25,17 @@ const transformId = digest(`hunin-safari-body-events-v1\0babel8.1.0\0${originalH
 const functions = [];
 let hook;
 let strictProgram=false;
+function tailCall(expression) {
+  if (!expression) return false;
+  switch (expression.type) {
+    case 'CallExpression': case 'OptionalCallExpression': case 'TaggedTemplateExpression': return true;
+    case 'ConditionalExpression': return tailCall(expression.consequent) || tailCall(expression.alternate);
+    case 'LogicalExpression': return tailCall(expression.right);
+    case 'SequenceExpression': return tailCall(expression.expressions.at(-1));
+    case 'ParenthesizedExpression': return tailCall(expression.expression);
+    default: return false;
+  }
+}
 const transformed = babel.transformSync(source, {
   filename: input, sourceType: 'unambiguous', configFile: false, babelrc: false, comments: true,
   plugins: [({ types: t }) => ({ visitor: {
@@ -38,6 +49,12 @@ const transformed = babel.transformSync(source, {
     Function: { exit(p) {
       const node = p.node;
       if (!node.body || !node.loc) return;
+      const strict=p.isInStrictMode() || node.body.directives?.some(item=>item.value.value==='use strict');
+      if (strict && !node.async && !node.generator) {
+        let unsafe=tailCall(node.body);
+        p.traverse({Function(nested){nested.skip();},ReturnStatement(statement){if(tailCall(statement.node.argument))unsafe=true;}});
+        if(unsafe)throw p.buildCodeFrameError('strict synchronous tail-call source needs a separate instrumentation path; body wrappers would change stack use');
+      }
       if (functions.length >= 10000) throw p.buildCodeFrameError('function declaration budget exceeded');
       const ordinal = functions.length;
       let name = node.id?.name;
@@ -87,7 +104,7 @@ const runtime = `;(() => {
 })();\n`;
 const registration = {transform_id:transformId,source_name:input,original_sha256:originalHash,functions};
 const generated = (strictProgram ? '"use strict";\n' : '') + runtime + `var ${hook.name}=globalThis.__HuninObservation.register(${JSON.stringify(registration)});\n` + transformed.code + '\n';
-const metadata = {format:'hunin.safari-transform-v1',babel_version:'8.1.0',transform_id:transformId,source_name:input,original_sha256:originalHash,instrumented_sha256:digest(generated),functions,caveats:['observed body wall spans include suspension and observer overhead','no inferred async parent or operation-owned cpu','generator entry occurs on resume, not generator object creation','promise settlement after a returned thenable is not observed','source text reflection and exact stack locations change under instrumentation','direct eval, with, and a program-level globalThis binding are rejected']};
+const metadata = {format:'hunin.safari-transform-v1',babel_version:'8.1.0',transform_id:transformId,source_name:input,original_sha256:originalHash,instrumented_sha256:digest(generated),functions,caveats:['observed body wall spans include suspension and observer overhead','no inferred async parent or operation-owned cpu','generator entry occurs on resume, not generator object creation','promise settlement after a returned thenable is not observed','source text reflection and exact stack locations change under instrumentation','parameter initialization and engine-level completion checks are outside the inserted body interval','strict synchronous tail-call source is conservatively rejected, including returns inside an existing finally scope','direct eval, with, and a program-level globalThis binding are rejected']};
 for (const [filename,value] of [[output,generated],[metadataPath,JSON.stringify(metadata)]]) {
  const descriptor=fs.openSync(filename,'wx',0o600);try{fs.writeFileSync(descriptor,value);fs.fsyncSync(descriptor);}finally{fs.closeSync(descriptor);}
 }
