@@ -1,3 +1,4 @@
+pub mod channel;
 pub mod clocks;
 pub mod compare;
 pub mod control;
