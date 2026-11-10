@@ -571,6 +571,7 @@ pub fn prepare(
             .map(|path| path.to_string_lossy().into_owned()),
     );
     let environment = BTreeMap::from([
+        ("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into()),
         ("TMPDIR".into(), area.to_string_lossy().into_owned()),
         ("TMP".into(), area.to_string_lossy().into_owned()),
         ("TEMP".into(), area.to_string_lossy().into_owned()),

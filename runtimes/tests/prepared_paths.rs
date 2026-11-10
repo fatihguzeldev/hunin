@@ -48,6 +48,9 @@ fn target_configuration_preserves_collector_environment_and_lifecycle_ownership(
         ("TMPDIR", "elsewhere"),
         ("XDEBUG_MODE", "off"),
         ("HUNIN_FINALIZE_GATE", "0"),
+        ("HUNIN_CONTROL_PROTOCOL", "legacy"),
+        ("HUNIN_CONTROL_TOKEN", "caller-supplied"),
+        ("hunin_control_token", "caller-supplied"),
     ] {
         let mut prepared = make();
         let before = prepared.launch.environment.clone();
@@ -86,5 +89,50 @@ fn target_configuration_preserves_collector_environment_and_lifecycle_ownership(
                 )
                 .is_err()
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn interpreted_preparation_requests_factory_owned_nonce_control() {
+    use hunin_runtimes::{RuntimeKind, prepare};
+    use std::path::{Path, PathBuf};
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (kind, fixture) in [
+        (RuntimeKind::Node, "preview.cjs"),
+        (RuntimeKind::Deno, "preview.cjs"),
+        (RuntimeKind::Bun, "preview.cjs"),
+        (RuntimeKind::CPython, "preview.py"),
+        (RuntimeKind::PyPy, "preview.py"),
+        (RuntimeKind::CRuby, "preview.rb"),
+    ] {
+        let area = tempfile::tempdir().unwrap();
+        let prepared = prepare(
+            kind,
+            Path::new("/usr/bin/true"),
+            &fixtures.join(fixture),
+            area.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.launch.environment["HUNIN_CONTROL_PROTOCOL"],
+            "nonce-lines-v1"
+        );
+        assert!(
+            !prepared
+                .launch
+                .environment
+                .contains_key("HUNIN_CONTROL_TOKEN")
+        );
+        if kind == RuntimeKind::Deno {
+            assert!(
+                prepared
+                    .launch
+                    .args
+                    .iter()
+                    .any(|arg| arg.starts_with("--allow-env=")
+                        && arg.contains("HUNIN_CONTROL_TOKEN"))
+            );
+        }
     }
 }

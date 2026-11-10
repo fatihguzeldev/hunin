@@ -20,6 +20,15 @@ internal static class HuninTrace
 
     static async Task<int> Main(string[] args)
     {
+        var controlToken = Environment.GetEnvironmentVariable("HUNIN_CONTROL_TOKEN");
+        var finalizeGate = Environment.GetEnvironmentVariable("HUNIN_FINALIZE_GATE") == "1";
+        var controlOutput = Console.Out;
+        var controlInput = Console.In;
+        void ControlLine(string label)
+        {
+            controlOutput.Write(label + (controlToken == null ? "" : " " + controlToken) + "\n");
+            controlOutput.Flush();
+        }
         if (args.Length != 3) throw new ArgumentException("expected original workload, profile and report paths");
         var workload = Path.GetFullPath(args[0]);
         var profile = Path.GetFullPath(args[1]);
@@ -44,9 +53,8 @@ internal static class HuninTrace
         {
             using var file = new FileStream(raw, FileMode.CreateNew, FileAccess.Write);
             var copying = CopyBounded(session.EventStream, file);
-            Console.WriteLine("HUNIN_READY");
-            Console.Out.Flush();
-            var command = Console.ReadLine();
+            ControlLine("HUNIN_READY");
+            var command = controlInput.ReadLine();
             try
             {
                 if (command == "HUNIN_GO")
@@ -80,10 +88,10 @@ internal static class HuninTrace
             runtime = new { clr = Environment.Version.ToString(), pid = Environment.ProcessId },
             work_start_qpc = workStart, work_end_qpc = workEnd, helper_frequency = Stopwatch.Frequency,
             coverage = "acknowledged in-process EventPipe session before gate; runtime startup excluded" });
-        if (Environment.GetEnvironmentVariable("HUNIN_FINALIZE_GATE") == "1")
+        if (finalizeGate)
         {
-            Console.WriteLine("HUNIN_WORK_COMPLETE");Console.Out.Flush();
-            if (Console.ReadLine() is not ("HUNIN_EXIT" or "HUNIN_STOP" or null or ""))
+            ControlLine("HUNIN_WORK_COMPLETE");
+            if (controlInput.ReadLine() is not ("HUNIN_EXIT" or "HUNIN_STOP" or null or ""))
                 throw new InvalidOperationException("invalid finalization gate command");
         }
         return applicationError == null ? 0 : 1;

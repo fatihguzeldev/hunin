@@ -1,6 +1,14 @@
 require 'json'
 require 'fiber'
 
+control_token = ENV['HUNIN_CONTROL_TOKEN']
+finalize_gate = ENV['HUNIN_FINALIZE_GATE'] == '1'
+control_write, control_flush, control_read = STDOUT.method(:write), STDOUT.method(:flush), STDIN.method(:gets)
+control_line = ->(name) do
+  control_write.call(name + (control_token.nil? ? '' : " #{control_token}") + "\n")
+  control_flush.call
+end
+
 workload, profile_path, report_path = ARGV
 unless [workload, profile_path, report_path].all? { |p| p && File.absolute_path?(p) }
   raise 'helper paths must be absolute'
@@ -40,9 +48,8 @@ outcome = 'stopped_before_work'
 work_start_ns = nil
 work_end_ns = nil
 trace.enable
-STDOUT.write("HUNIN_READY\n")
-STDOUT.flush
-command = STDIN.gets
+control_line.call('HUNIN_READY')
+command = control_read.call
 begin
   if command == "HUNIN_GO\n"
     work_start_ns = Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
@@ -76,10 +83,9 @@ File.open(report_path, 'wx') do |stream|
   stream.flush
   stream.fsync
 end
-if ENV['HUNIN_FINALIZE_GATE'] == '1'
-  STDOUT.write("HUNIN_WORK_COMPLETE\n")
-  STDOUT.flush
-  finish = STDIN.gets
+if finalize_gate
+  control_line.call('HUNIN_WORK_COMPLETE')
+  finish = control_read.call
   raise 'invalid finalize gate command' if finish && !["HUNIN_EXIT\n", "HUNIN_STOP\n"].include?(finish)
 end
 exit(application_error ? 1 : 0)

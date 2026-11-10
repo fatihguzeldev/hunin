@@ -117,7 +117,7 @@ pub fn prepare(
         args.extend([
             "run".into(),
             "--allow-sys=inspector".into(),
-            "--allow-env=HUNIN_FINALIZE_GATE,HUNIN_SCRIPT_SOURCES".into(),
+            "--allow-env=HUNIN_FINALIZE_GATE,HUNIN_SCRIPT_SOURCES,HUNIN_CONTROL_TOKEN".into(),
             format!(
                 "--allow-read={},{}",
                 area.display(),
@@ -238,6 +238,7 @@ pub fn prepare(
         executable.clone()
     };
     let mut environment = BTreeMap::from([
+        ("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into()),
         ("TMPDIR".into(), area.to_string_lossy().into_owned()),
         ("TEMP".into(), area.to_string_lossy().into_owned()),
         ("TMP".into(), area.to_string_lossy().into_owned()),
@@ -291,9 +292,16 @@ impl PreparedRuntime {
             }
         };
         for (key, value) in environment {
-            if same_key(key, "HUNIN_FINALIZE_GATE") {
+            if [
+                "HUNIN_FINALIZE_GATE",
+                "HUNIN_CONTROL_PROTOCOL",
+                "HUNIN_CONTROL_TOKEN",
+            ]
+            .iter()
+            .any(|owned| key.eq_ignore_ascii_case(owned))
+            {
                 return Err(Error(
-                    "HUNIN_FINALIZE_GATE is owned by the prepared process lifecycle".into(),
+                    "control environment is owned by the prepared process lifecycle".into(),
                 ));
             }
             if self

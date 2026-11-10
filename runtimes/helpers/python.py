@@ -61,6 +61,15 @@ def export(profiler):
 
 
 def main():
+    control_token = os.environ.get("HUNIN_CONTROL_TOKEN")
+    finalize_gate = os.environ.get("HUNIN_FINALIZE_GATE") == "1"
+    control_write, control_flush = sys.stdout.write, sys.stdout.flush
+    control_read = sys.stdin.readline
+
+    def control_line(name):
+        control_write(name + ("" if control_token is None else " " + control_token) + "\n")
+        control_flush()
+
     workload, profile_path, report_path = [Path(p) for p in sys.argv[1:4]]
     if not all(p.is_absolute() for p in [workload, profile_path, report_path]):
         raise ValueError("helper paths must be absolute")
@@ -68,8 +77,8 @@ def main():
     start_before_ns = time.monotonic_ns()
     profiler.enable()
     start_after_ns = time.monotonic_ns()
-    print("HUNIN_READY", flush=True)
-    command = sys.stdin.readline().rstrip("\r\n")
+    control_line("HUNIN_READY")
+    command = control_read().rstrip("\r\n")
     output = None
     application_error = None
     outcome = "stopped_before_work"
@@ -104,9 +113,9 @@ def main():
                    "work_start_ns": work_start_ns, "work_end_ns": work_end_ns}, stream, allow_nan=False)
         stream.flush()
         os.fsync(stream.fileno())
-    if os.environ.get("HUNIN_FINALIZE_GATE") == "1":
-        print("HUNIN_WORK_COMPLETE", flush=True)
-        finish = sys.stdin.readline().rstrip("\r\n")
+    if finalize_gate:
+        control_line("HUNIN_WORK_COMPLETE")
+        finish = control_read().rstrip("\r\n")
         if finish not in ["HUNIN_EXIT", "HUNIN_STOP", ""]:
             raise ValueError("invalid finalize gate command")
     return 1 if application_error else 0

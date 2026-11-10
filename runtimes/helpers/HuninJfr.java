@@ -47,6 +47,9 @@ public class HuninJfr {
     static Map<String,Object> values(Object... fields) {
         Map<String,Object> result=new LinkedHashMap<>();for(int i=0;i<fields.length;i+=2)result.put((String)fields[i],fields[i+1]);return result;
     }
+    static void controlLine(PrintStream output,String label,String token) {
+        output.print(label+(token==null?"":" "+token)+"\n");output.flush();
+    }
     static void skipAttributes(DataInputStream in) throws Exception {
         int n=in.readUnsignedShort();for(int i=0;i<n;i++){in.readUnsignedShort();in.skipNBytes(Integer.toUnsignedLong(in.readInt()));}
     }
@@ -102,6 +105,9 @@ public class HuninJfr {
         return result;
     }
     public static void main(String[] args) throws Exception {
+        String controlToken=System.getenv("HUNIN_CONTROL_TOKEN");
+        boolean finalizeGate="1".equals(System.getenv("HUNIN_FINALIZE_GATE"));
+        PrintStream controlOutput=System.out;
         String workload=args[0];Path source=Path.of(args[1]),raw=Path.of(args[2]),profile=Path.of(args[3]),report=Path.of(args[4]);
         String sourceHash=null;
         for(String line:Files.readAllLines(Path.of(args[5]))) {
@@ -116,7 +122,7 @@ public class HuninJfr {
             recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(10)).withStackTrace();
             recording.start();long readyNs=System.nanoTime();
             if(recording.getState()!=RecordingState.RUNNING)throw new IllegalStateException("recording did not start");
-            System.out.println("HUNIN_READY");System.out.flush();String command=commands.readLine();
+            controlLine(controlOutput,"HUNIN_READY",controlToken);String command=commands.readLine();
             try {
                 if("HUNIN_GO".equals(command)) {
                     workStart=System.nanoTime();output=Class.forName(workload).getMethod("run").invoke(null);outcome="completed";
@@ -150,7 +156,7 @@ public class HuninJfr {
             write(report,values("outcome",outcome,"output",output,"application_error",failure,"helper_clock","System.nanoTime",
                 "source_ready_ns",readyNs,"work_start_ns",workStart,"work_end_ns",workEnd));
         }
-        if("1".equals(System.getenv("HUNIN_FINALIZE_GATE"))){System.out.println("HUNIN_WORK_COMPLETE");System.out.flush();String finish=commands.readLine();if(finish!=null&&!finish.equals("HUNIN_EXIT")&&!finish.equals("HUNIN_STOP"))throw new IllegalArgumentException("invalid finalize command");}
+        if(finalizeGate){controlLine(controlOutput,"HUNIN_WORK_COMPLETE",controlToken);String finish=commands.readLine();if(finish!=null&&!finish.equals("HUNIN_EXIT")&&!finish.equals("HUNIN_STOP"))throw new IllegalArgumentException("invalid finalize command");}
         if(failure!=null)System.exit(1);
     }
 }

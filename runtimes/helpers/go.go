@@ -28,6 +28,17 @@ func writeJSON(path string, value any) {
 	}
 }
 func main() {
+	controlToken, hasControlToken := os.LookupEnv("HUNIN_CONTROL_TOKEN")
+	finalizeGate := os.Getenv("HUNIN_FINALIZE_GATE") == "1"
+	controlOutput := os.Stdout
+	controlLine := func(label string) {
+		if hasControlToken {
+			label += " " + controlToken
+		}
+		if _, err := fmt.Fprint(controlOutput, label+"\n"); err != nil {
+			panic(err)
+		}
+	}
 	profile, err := os.OpenFile(os.Args[1], os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		panic(err)
@@ -36,7 +47,7 @@ func main() {
 		panic(err)
 	}
 	input := bufio.NewReader(os.Stdin)
-	fmt.Println("HUNIN_READY")
+	controlLine("HUNIN_READY")
 	command, _ := input.ReadString('\n')
 	outcome := "cancelled"
 	var output any
@@ -66,8 +77,8 @@ func main() {
 	}
 	build, _ := debug.ReadBuildInfo()
 	writeJSON(os.Args[2], map[string]any{"outcome": outcome, "output": output, "failure": failure, "runtime": runtime.Version(), "pid": os.Getpid(), "build": build, "clock": "time.Since helper origin monotonic nanoseconds; pprof profile uses its own epoch aggregate header", "work_start_ns": workStart, "work_end_ns": workEnd, "scope": "process-wide Go runtime CPU sampling; aggregate stacks, not per-call durations; c-archive/c-shared SIGPROF compatibility not claimed"})
-	if os.Getenv("HUNIN_FINALIZE_GATE") == "1" {
-		fmt.Println("HUNIN_WORK_COMPLETE")
+	if finalizeGate {
+		controlLine("HUNIN_WORK_COMPLETE")
 		command, _ = input.ReadString('\n')
 		if c := strings.TrimSpace(command); c != "HUNIN_EXIT" && c != "HUNIN_STOP" && c != "" {
 			panic("invalid final command")

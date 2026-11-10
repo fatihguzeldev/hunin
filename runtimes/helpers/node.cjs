@@ -38,6 +38,10 @@ async function connectDebugger(url, onScript) {
 }
 
 async function main() {
+  const controlToken = process.env.HUNIN_CONTROL_TOKEN;
+  const finalizeGate = process.env.HUNIN_FINALIZE_GATE === '1';
+  const writeControl = process.stdout.write.bind(process.stdout);
+  const controlLine = name => writeControl(name + (controlToken === undefined ? '' : ' ' + controlToken) + '\n');
   const [workload, profilePath, reportPath] = process.argv.slice(2);
   for (const value of [workload, profilePath, reportPath]) {
     if (!value || !path.isAbsolute(value)) throw new Error('helper paths must be absolute');
@@ -76,7 +80,7 @@ async function main() {
   const input = readline.createInterface({ input: process.stdin });
   cleanup.input = input;
   const commands = input[Symbol.asyncIterator]();
-  process.stdout.write('HUNIN_READY\n');
+  controlLine('HUNIN_READY');
   const first = await commands.next();
   const command = first.done ? 'EOF' : first.value;
   let outcome = 'stopped_before_work';
@@ -132,8 +136,8 @@ async function main() {
     helperClock: 'process.hrtime nanoseconds',
     startBeforeNs, startAfterNs, stopBeforeNs, stopAfterNs, workStartNs, workEndNs,
   });
-  if (process.env.HUNIN_FINALIZE_GATE === '1') {
-    process.stdout.write('HUNIN_WORK_COMPLETE\n');
+  if (finalizeGate) {
+    controlLine('HUNIN_WORK_COMPLETE');
     const final = await commands.next();
     const finish = final.done ? 'EOF' : final.value;
     if (!['HUNIN_EXIT', 'HUNIN_STOP', 'EOF'].includes(finish)) throw new Error('invalid finalize gate command');

@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 
+$controlToken = getenv('HUNIN_CONTROL_TOKEN');
+$finalizeGate = getenv('HUNIN_FINALIZE_GATE') === '1';
+$controlOutput = STDOUT;
+$controlLine = static function (string $label) use ($controlToken, $controlOutput): void {
+    $line = $label . ($controlToken === false ? '' : ' ' . $controlToken) . "\n";
+    if (fwrite($controlOutput, $line) !== strlen($line) || !fflush($controlOutput)) {
+        throw new RuntimeException('cannot write prepared control marker');
+    }
+};
+
 [$script, $workload, $profile, $report] = $argv;
 if (!extension_loaded('xdebug') || phpversion('xdebug') !== '3.5.3') {
     throw new RuntimeException('xdebug 3.5.3 must be explicitly loaded');
@@ -14,8 +24,7 @@ $output = null;
 $applicationError = null;
 $workStart = null;
 $workEnd = null;
-echo "HUNIN_READY\n";
-flush();
+$controlLine('HUNIN_READY');
 $command = rtrim((string) fgets(STDIN), "\r\n");
 try {
     if ($command === 'HUNIN_GO') {
@@ -52,9 +61,8 @@ if (fwrite($stream, $encoded) !== strlen($encoded) || !fflush($stream) || !fsync
     throw new RuntimeException('cannot persist prepared report');
 }
 fclose($stream);
-if (getenv('HUNIN_FINALIZE_GATE') === '1') {
-    echo "HUNIN_WORK_COMPLETE\n";
-    flush();
+if ($finalizeGate) {
+    $controlLine('HUNIN_WORK_COMPLETE');
     $finish = rtrim((string) fgets(STDIN), "\r\n");
     if (!in_array($finish, ['HUNIN_EXIT', 'HUNIN_STOP', ''], true)) {
         throw new RuntimeException('invalid finalize gate command');

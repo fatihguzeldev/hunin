@@ -542,6 +542,7 @@ pub fn prepare(
 
 fn environment(executable: &Path, area: &Path) -> BTreeMap<String, String> {
     let mut environment = BTreeMap::new();
+    environment.insert("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into());
     for name in ["TMPDIR", "TMP", "TEMP"] {
         environment.insert(name.into(), area.to_string_lossy().into_owned());
     }
