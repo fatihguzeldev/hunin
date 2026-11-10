@@ -3,10 +3,13 @@ use std::path::PathBuf;
 
 pub mod control;
 pub mod coverage;
+pub mod etw;
 pub mod macos;
 pub mod perf;
 mod recording;
 pub mod symbols;
+#[cfg(windows)]
+pub mod windows;
 pub mod xctrace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
