@@ -1,5 +1,6 @@
 //! source-specific runtime observation and extraction.
 
+pub mod browser;
 pub mod clr;
 pub mod jfr;
 pub mod php;
