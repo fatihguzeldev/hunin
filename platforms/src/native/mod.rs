@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 pub mod control;
 pub mod macos;
+pub mod perf;
 mod recording;
 pub mod symbols;
 
