@@ -2,3 +2,15 @@
 name = "hunin-core"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+getrandom = "=0.4.3"
+libsqlite3-sys = { version = "=0.39.1", features = ["bundled"] }
+rusqlite = { version = "=0.41.1", features = ["bundled", "blob", "hooks", "limits", "fallible_uint"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
