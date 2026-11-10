@@ -1,6 +1,8 @@
 //! source-specific runtime observation and extraction.
 
 pub mod v8;
+pub mod php;
+pub mod clr;
 pub mod source_maps;
 pub mod python;
 pub mod ruby;
