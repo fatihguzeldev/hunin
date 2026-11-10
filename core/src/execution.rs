@@ -65,6 +65,8 @@ pub struct PreparedProcess {
     input: Option<ChildStdin>,
     ready: Receiver<Result<(), String>>,
     output: Receiver<(Vec<u8>, bool)>,
+    completion: Receiver<Result<(), String>>,
+    work_complete: bool,
     phase: ExecutionPhase,
     started: Instant,
     released: Option<Instant>,
@@ -97,6 +99,7 @@ impl PreparedProcess {
             .ok_or(ExecutionError::Invalid("missing stdout pipe"))?;
         let (ready_tx, ready) = mpsc::sync_channel(1);
         let (output_tx, output) = mpsc::sync_channel(1);
+        let (completion_tx, completion) = mpsc::sync_channel(1);
         let limit = spec.stdout_limit;
         std::thread::spawn(move || {
             let mut first = Vec::with_capacity(32);
@@ -127,10 +130,30 @@ impl PreparedProcess {
             let mut bytes = Vec::new();
             let mut truncated = false;
             let mut buffer = [0; 8192];
+            let mut line = Vec::new();
+            let mut long_line = false;
+            let mut completed = false;
             loop {
                 match stdout.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
+                        for byte in &buffer[..n] {
+                            if *byte == b'\n' {
+                                if line.last() == Some(&b'\r') {
+                                    line.pop();
+                                }
+                                if !long_line && !completed && line == b"HUNIN_WORK_COMPLETE" {
+                                    let _ = completion_tx.send(Ok(()));
+                                    completed = true;
+                                }
+                                line.clear();
+                                long_line = false;
+                            } else if line.len() < 1024 {
+                                line.push(*byte);
+                            } else {
+                                long_line = true;
+                            }
+                        }
                         let remaining = limit.saturating_sub(bytes.len());
                         bytes.extend_from_slice(&buffer[..n.min(remaining)]);
                         truncated |= n > remaining;
@@ -141,6 +164,11 @@ impl PreparedProcess {
                     }
                 }
             }
+            if !completed {
+                let _ = completion_tx.send(Err(
+                    "stdout closed before work completion acknowledgment".into(),
+                ));
+            }
             let _ = output_tx.send((bytes, truncated));
         });
         Ok(Self {
@@ -148,6 +176,8 @@ impl PreparedProcess {
             input,
             ready,
             output,
+            completion,
+            work_complete: false,
             phase: ExecutionPhase::AwaitingReadiness,
             started,
             released: None,
@@ -194,6 +224,36 @@ impl PreparedProcess {
         Ok(())
     }
 
+    pub fn work_complete(&mut self) -> Result<bool, ExecutionError> {
+        if self.work_complete {
+            return Ok(true);
+        }
+        match self.completion.try_recv() {
+            Ok(Ok(())) => {
+                self.work_complete = true;
+                Ok(true)
+            }
+            Ok(Err(error)) => Err(ExecutionError::Readiness(error)),
+            Err(mpsc::TryRecvError::Empty) => Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => Err(ExecutionError::Readiness(
+                "work completion channel closed".into(),
+            )),
+        }
+    }
+
+    pub fn finish(&mut self) -> Result<(), ExecutionError> {
+        if self.phase != ExecutionPhase::Running || !self.work_complete {
+            return Err(ExecutionError::Invalid(
+                "final exit requires work completion acknowledgment",
+            ));
+        }
+        self.input
+            .take()
+            .ok_or(ExecutionError::Invalid("closed input"))?
+            .write_all(b"HUNIN_EXIT\n")?;
+        Ok(())
+    }
+
     fn poll_exit(&mut self, deadline: Duration) -> Result<Option<ExitStatus>, ExecutionError> {
         let until = Instant::now()
             .checked_add(deadline)
@@ -216,7 +276,7 @@ impl PreparedProcess {
         let measured_elapsed = self.released.map(|t| t.elapsed());
         // A descendant may retain stdout; never wait indefinitely for that borrowed descriptor.
         let output = self.output.recv_timeout(Duration::from_millis(100));
-        let output_pending = output.is_err();
+        let output_pending = matches!(output, Err(mpsc::RecvTimeoutError::Timeout));
         let (stdout, stdout_truncated) = output.unwrap_or((Vec::new(), true));
         self.phase = if cancelled {
             ExecutionPhase::Cancelled
@@ -261,7 +321,17 @@ impl PreparedProcess {
         }
         let mut status = self.poll_exit(grace)?;
         if status.is_none() {
-            self.child.as_mut().expect("owned child").kill()?;
+            if let Err(error) = self.child.as_mut().expect("owned child").kill() {
+                if self
+                    .child
+                    .as_mut()
+                    .expect("owned child")
+                    .try_wait()?
+                    .is_none()
+                {
+                    return Err(error.into());
+                }
+            }
             status = self.poll_exit(forced)?;
         }
         Ok(self.outcome(status, true))
@@ -343,5 +413,24 @@ mod tests {
             Err(ExecutionError::Readiness(_))
         ));
         p.cancel(Duration::ZERO, Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn final_gate_keeps_target_alive_until_observer_finishes_snapshot() {
+        let mut p = fixture(
+            "printf 'HUNIN_READY\\n'; read gate; test \"$gate\" = HUNIN_GO || exit 17; printf 'HUNIN_WORK_COMPLETE\\n'; read gate; test \"$gate\" = HUNIN_EXIT",
+            128,
+        );
+        p.await_ready(Duration::from_secs(2)).unwrap();
+        p.release().unwrap();
+        assert!(p.finish().is_err());
+        let until = Instant::now() + Duration::from_secs(2);
+        while !p.work_complete().unwrap() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(p.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        p.finish().unwrap();
+        assert!(p.wait(Duration::from_secs(2)).unwrap().success);
     }
 }
