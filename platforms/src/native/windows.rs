@@ -333,8 +333,7 @@ fn consume(event: &EVENT_RECORD, state: &mut Consumer) -> Result<()> {
         ));
     }
     if equal(header.ProviderId, STACK_WALK) && opcode == 32 {
-        let stack = super::etw::stack_event(data, width, version, 128)?;
-        if stack.process_id == state.target {
+        if let Some(stack) = super::etw::target_stack_event(data, width, version, state.target)? {
             let key = (stack.timestamp, stack.thread_id);
             if state.stacks.insert(key, stack).is_some() {
                 state.profile.issues.push("multiple stackwalk records share original timestamp/thread; ambiguous stack rejected".into());

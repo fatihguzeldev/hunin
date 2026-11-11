@@ -75,3 +75,21 @@ pub fn stack_event(
             .collect::<Result<_>>()?,
     })
 }
+
+pub fn target_stack_event(
+    bytes: &[u8],
+    pointer_width: usize,
+    version: u8,
+    process_id: u32,
+) -> Result<Option<StackEvent>> {
+    if version != 2 || bytes.len() < 16 {
+        return Err(Error::new(
+            ErrorKind::UnsupportedFormat,
+            "unsupported stackwalk event version or layout",
+        ));
+    }
+    if word(bytes, 8, 4)? != u64::from(process_id) {
+        return Ok(None);
+    }
+    stack_event(bytes, pointer_width, version, 192).map(Some)
+}
