@@ -39,6 +39,17 @@ function resize(string $source, int $width, int $height): string {
     return "P6\n32 32\n255\n" . $output;
 }
 
+function preview_directory(string $path): string {
+    if (PHP_OS_FAMILY !== 'Windows') return $path;
+    if (str_starts_with($path, "\\\\?\\UNC\\")) return "\\\\" . substr($path, 8);
+    if (str_starts_with($path, "\\\\?\\")) {
+        $drive = substr($path, 4);
+        if (strlen($drive) >= 3 && str_contains('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', $drive[0])
+            && $drive[1] === ':' && $drive[2] === DIRECTORY_SEPARATOR) return $drive;
+    }
+    return $path;
+}
+
 function run(): array {
     $input = getenv('PREVIEW_INPUT');
     $output = getenv('PREVIEW_OUTPUT');
@@ -47,6 +58,8 @@ function run(): array {
     if (!is_string($input) || !is_string($output) || $repetitions < 1) {
         throw new RuntimeException('preview input, output and positive repetitions are required');
     }
+    $input = preview_directory($input);
+    $output = preview_directory($output);
     if (!is_dir($output) && !mkdir($output, 0700, true)) throw new RuntimeException('cannot create preview output');
     $names = array_values(array_filter(scandir($input), static fn(string $name): bool => str_ends_with($name, '.ppm') && is_file($input . DIRECTORY_SEPARATOR . $name)));
     sort($names, SORT_STRING);

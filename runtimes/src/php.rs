@@ -552,7 +552,7 @@ pub fn prepare(
     let mut args = vec![
         "-n".into(),
         "-d".into(),
-        format!("zend_extension={}", extension.display()),
+        format!("zend_extension={}", php_path(&extension)),
     ];
     for setting in [
         "xdebug.mode=profile".to_owned(),
@@ -561,15 +561,12 @@ pub fn prepare(
         "xdebug.profiler_append=0".into(),
         "xdebug.profiler_output_name=runtime-profile.cachegrind".into(),
         "xdebug.control_socket=off".into(),
-        format!("xdebug.output_dir={}", area.display()),
-        format!("sys_temp_dir={}", area.display()),
+        format!("xdebug.output_dir={}", php_path(&area)),
+        format!("sys_temp_dir={}", php_path(&area)),
     ] {
         args.extend(["-d".into(), setting]);
     }
-    args.extend(
-        [&helper, &workload, &profile_path, &report_path]
-            .map(|path| path.to_string_lossy().into_owned()),
-    );
+    args.extend([&helper, &workload, &profile_path, &report_path].map(|path| php_path(path)));
     let environment = BTreeMap::from([
         ("HUNIN_CONTROL_PROTOCOL".into(), "nonce-lines-v1".into()),
         ("TMPDIR".into(), area.to_string_lossy().into_owned()),
@@ -590,4 +587,46 @@ pub fn prepare(
         report_path,
         kind: crate::prepared::RuntimeKind::PHP,
     })
+}
+
+fn php_path(path: &Path) -> String {
+    let value = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        // PHP's ini parser does not recognize verbatim Windows paths as absolute.
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+            {
+                return rest.to_owned();
+            }
+        }
+    }
+    value
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn ini_paths_preserve_drive_and_unc_locations_without_verbatim_prefixes() {
+        for (input, expected) in [
+            (r"\\?\C:\owned\xdebug.dll", r"C:\owned\xdebug.dll"),
+            (r"\\?\UNC\server\share\profile", r"\\server\share\profile"),
+            (r"C:\owned\profile", r"C:\owned\profile"),
+            (
+                r"\\?\Volume{d25c9aab-39d8-4e65-aacc-c506e5661df1}\profile",
+                r"\\?\Volume{d25c9aab-39d8-4e65-aacc-c506e5661df1}\profile",
+            ),
+        ] {
+            assert_eq!(php_path(Path::new(input)), expected);
+        }
+    }
 }
