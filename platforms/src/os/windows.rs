@@ -1,7 +1,10 @@
 use crate::process::{Counter, Error, ErrorKind, MemoryReading, ProcessInstance, Result};
 use std::{mem, path::PathBuf};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE},
+    Foundation::{
+        CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
+    },
     System::{
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
@@ -13,7 +16,7 @@ use windows_sys::Win32::{
         },
         Threading::{
             GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            QueryFullProcessImageNameW,
+            PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
         },
     },
 };
@@ -27,11 +30,26 @@ impl Drop for Handle {
     }
 }
 fn open(pid: u32) -> Result<Handle> {
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
     if handle.is_null() {
         return Err(std::io::Error::last_os_error().into());
     }
-    Ok(Handle(handle))
+    let handle = Handle(handle);
+    match unsafe { WaitForSingleObject(handle.0, 0) } {
+        WAIT_TIMEOUT => Ok(handle),
+        WAIT_OBJECT_0 => Err(Error::new(ErrorKind::ProcessGone, "process has exited")),
+        WAIT_FAILED => Err(std::io::Error::last_os_error().into()),
+        _ => Err(Error::new(
+            ErrorKind::CollectorFailure,
+            "unexpected process wait state",
+        )),
+    }
 }
 fn integer(time: FILETIME) -> u64 {
     (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
