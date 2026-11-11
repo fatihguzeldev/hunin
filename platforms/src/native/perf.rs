@@ -115,21 +115,30 @@ pub fn parse_maps(text: &str) -> Result<Vec<Image>> {
 fn bind_sample_images(
     sample: &mut Sample,
     target_pid: u32,
+    images_valid_after: u64,
     images: &[Image],
     invalid_images: &std::collections::BTreeSet<usize>,
 ) -> bool {
-    if sample.process_id != target_pid {
+    if sample.process_id != target_pid || sample.timestamp < images_valid_after {
         for frame in &mut sample.frames {
             frame.image = None;
             if frame.resolution != "perf_context_marker" {
-                frame.resolution =
-                    "sample process differs from target; no target image attribution".into();
+                frame.resolution = if sample.process_id != target_pid {
+                    "sample process differs from target; no target image attribution"
+                } else {
+                    "sample precedes armed image snapshot; no image attribution"
+                }
+                .into();
             }
         }
-        return false;
+        return sample.process_id == target_pid;
     }
     for frame in &mut sample.frames {
-        if frame.resolution.starts_with("sample process differs") {
+        if frame.resolution.starts_with("sample process differs")
+            || frame
+                .resolution
+                .starts_with("sample precedes armed image snapshot")
+        {
             frame.resolution = "unresolved".into();
         }
         frame.image = images.iter().enumerate().position(|(i, image)| {
@@ -257,6 +266,7 @@ mod linux {
         extracted_bytes: usize,
         captured_bytes: u64,
         invalid_images: std::collections::BTreeSet<usize>,
+        images_valid_after: u64,
     }
     impl PerfCollector {
         pub fn start(
@@ -295,21 +305,6 @@ mod linux {
                     ErrorKind::CollectorFailure,
                     "unsupported perf page size",
                 ));
-            }
-            let maps = fs::read_to_string(format!("/proc/{}/maps", target.pid))?;
-            let mut images = parse_maps(&maps)?;
-            let mut issues = Vec::new();
-            for image in &mut images {
-                match mapped_build_id(target.pid, image, &maps, page as u64) {
-                    Ok((id, _, virtual_address)) => {
-                        image.identity = id;
-                        image.mapped_virtual_address = Some(virtual_address);
-                    }
-                    Err(error) => issues.push(format!(
-                        "image build identity unavailable for {}: {error}",
-                        image.path.display()
-                    )),
-                }
             }
             let mut rings = Vec::new();
             let mut affinity: libc::cpu_set_t = unsafe { mem::zeroed() };
@@ -434,6 +429,30 @@ mod linux {
                     return Err(std::io::Error::last_os_error().into());
                 }
             }
+            // Initial bindings are acquired only while every ring can report mapping changes.
+            let image_snapshot_start = crate::os::monotonic_ns()?;
+            let maps = fs::read_to_string(format!("/proc/{}/maps", target.pid))?;
+            let mut images = parse_maps(&maps)?;
+            let mut issues = Vec::new();
+            for image in &mut images {
+                match mapped_build_id(target.pid, image, &maps, page as u64) {
+                    Ok((id, _, virtual_address)) => {
+                        image.identity = id;
+                        image.mapped_virtual_address = Some(virtual_address);
+                    }
+                    Err(error) => issues.push(format!(
+                        "image build identity unavailable for {}: {error}",
+                        image.path.display()
+                    )),
+                }
+            }
+            if !target.same_instance(&inspect_process(target.pid)?) {
+                return Err(Error::new(
+                    ErrorKind::InstanceChanged,
+                    "perf target changed while acquiring armed image bindings",
+                ));
+            }
+            let images_valid_after = crate::os::monotonic_ns()?;
             Ok(Self {
                 target: target.clone(),
                 rings,
@@ -450,7 +469,7 @@ mod linux {
                     start: Some(enabled_start),
                     end: None,
                     issues,
-                    metadata: serde_json::json!({"sample_type":SAMPLE_TYPE,"lifetime_events":[],"frequency":frequency,"inherit":true,"inherit_thread":true,"cpus":cpus,"exclude_kernel":true,"callchain":"frame_pointer","sample_max_stack":requested_stack,"kernel_perf_event_max_stack":kernel_stack_limit,"mapping_page_size":page,"pid":target.pid}),
+                    metadata: serde_json::json!({"sample_type":SAMPLE_TYPE,"lifetime_events":[],"frequency":frequency,"inherit":true,"inherit_thread":true,"cpus":cpus,"exclude_kernel":true,"callchain":"frame_pointer","sample_max_stack":requested_stack,"kernel_perf_event_max_stack":kernel_stack_limit,"mapping_page_size":page,"pid":target.pid,"armed_image_snapshot_start_ns":image_snapshot_start,"images_valid_after_ns":images_valid_after,"image_binding_scope":"initial snapshot acquired after all rings enabled; earlier sample addresses remain unbound; later overlapping mapping events invalidate bindings"}),
                 },
                 maximum_samples,
                 maximum_frames,
@@ -458,6 +477,7 @@ mod linux {
                 extracted_bytes: 0,
                 captured_bytes: 0,
                 invalid_images: std::collections::BTreeSet::new(),
+                images_valid_after,
             })
         }
         pub fn drain(&mut self) -> Result<usize> {
@@ -521,10 +541,16 @@ mod linux {
                             if !bind_sample_images(
                                 &mut sample,
                                 self.target.pid,
+                                self.images_valid_after,
                                 &self.profile.images,
                                 &self.invalid_images,
                             ) {
                                 let issue = "sample process differs from target; foreign addresses remain unbound";
+                                if !self.profile.issues.iter().any(|s| s == issue) {
+                                    self.profile.issues.push(issue.into());
+                                }
+                            } else if sample.timestamp < self.images_valid_after {
+                                let issue = "samples precede armed image snapshot; retained addresses have no image attribution";
                                 if !self.profile.issues.iter().any(|s| s == issue) {
                                     self.profile.issues.push(issue.into());
                                 }
@@ -738,6 +764,7 @@ mod tests {
         assert!(!bind_sample_images(
             &mut sample,
             8,
+            0,
             &images,
             &BTreeSet::new()
         ));
@@ -749,6 +776,7 @@ mod tests {
         assert!(bind_sample_images(
             &mut sample,
             7,
+            0,
             &images,
             &BTreeSet::new()
         ));
@@ -756,6 +784,20 @@ mod tests {
         assert!(bind_sample_images(
             &mut sample,
             7,
+            1,
+            &images,
+            &BTreeSet::new()
+        ));
+        assert_eq!(sample.frames[0].image, None);
+        assert!(
+            sample.frames[0]
+                .resolution
+                .contains("precedes armed image snapshot")
+        );
+        assert!(bind_sample_images(
+            &mut sample,
+            7,
+            0,
             &images,
             &BTreeSet::from([0])
         ));

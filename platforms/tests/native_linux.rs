@@ -10,10 +10,188 @@ use hunin_platforms::{
     tools,
 };
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+#[test]
+#[ignore = "requires actual perf access and a controlled pre-arm executable mapping replacement"]
+fn mapping_replaced_before_arm_cannot_borrow_the_initial_images_identity() {
+    let temporary = tempfile::tempdir().unwrap();
+    let dir = temporary.path();
+    let mut libraries = Vec::new();
+    let mut symbols = Vec::new();
+    for name in ["a", "b"] {
+        let source = dir.join(format!("{name}.c"));
+        let symbol = format!("mapping_{name}_work");
+        std::fs::write(&source, format!("__attribute__((noinline)) unsigned long {symbol}(unsigned long n){{unsigned long value=1;while(n--){{value=value*1664525+1013904223;__asm__ volatile(\"\" : \"+r\"(value));}}return value;}}")).unwrap();
+        let binary = dir.join(format!("lib{name}.so"));
+        tools::require_success(
+            tools::run(
+                Command::new("clang")
+                    .args([
+                        "-shared",
+                        "-fPIC",
+                        "-O1",
+                        "-g",
+                        "-fno-omit-frame-pointer",
+                        "-Wl,--build-id=sha1",
+                    ])
+                    .arg(&source)
+                    .arg("-o")
+                    .arg(&binary),
+                dir,
+                Duration::from_secs(20),
+                65536,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let names = tools::require_success(
+            tools::run(
+                Command::new("llvm-nm").arg("--defined-only").arg(&binary),
+                dir,
+                Duration::from_secs(10),
+                65536,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .stdout;
+        symbols.push(
+            names
+                .lines()
+                .find(|line| line.ends_with(&symbol))
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .to_owned(),
+        );
+        libraries.push(binary);
+    }
+    assert_eq!(
+        symbols[0], symbols[1],
+        "both functions must occupy the same ELF address"
+    );
+    let fixture = dir.join("replace");
+    tools::require_success(
+        tools::run(
+            Command::new("clang")
+                .args(["-O1", "-g", "-pthread"])
+                .arg(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/perf-map-replacement.c"),
+                )
+                .args(["-ldl", "-o"])
+                .arg(&fixture),
+            dir,
+            Duration::from_secs(20),
+            65536,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mut child = Command::new(&fixture)
+        .args(&libraries)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+    let mut input = child.stdin.take().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let mut child = Child(child);
+    let mut ready = String::new();
+    output.read_line(&mut ready).unwrap();
+    let words: Vec<_> = ready.split_whitespace().collect();
+    assert_eq!(words[0], "ready");
+    let begin = u64::from_str_radix(words[1], 16).unwrap();
+    let end = u64::from_str_radix(words[2], 16).unwrap();
+    let target = hunin_platforms::inspect_process(child.0.id()).unwrap();
+    let switched = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(Instant::now() < deadline, "no perf descriptor appeared");
+            if std::fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .any(|entry| {
+                    std::fs::read_link(entry.path())
+                        .is_ok_and(|path| path.to_string_lossy().contains("perf_event"))
+                })
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        input.write_all(b"s\n").unwrap();
+        input.flush().unwrap();
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        let timestamp: u64 = line
+            .strip_prefix("switched ")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        (input, output, timestamp)
+    });
+    let collector = PerfCollector::start(&target, Language::C, 199, 100000, 128);
+    let (mut input, mut output, replacement_ns) = switched.join().unwrap();
+    let collector = collector.unwrap();
+    input.write_all(b"g\n").unwrap();
+    input.flush().unwrap();
+    let mut done = String::new();
+    output.read_line(&mut done).unwrap();
+    assert!(done.starts_with("done "));
+    let mut profile = collector.stop().unwrap();
+    assert!(child.0.wait().unwrap().success());
+    assert!(
+        replacement_ns < profile.start.unwrap(),
+        "the independent control must replace the mapping before perf is enabled"
+    );
+    assert!(
+        profile
+            .samples
+            .iter()
+            .any(|sample| begin <= sample.instruction_pointer && sample.instruction_pointer < end)
+    );
+    if profile
+        .images
+        .iter()
+        .any(|image| image.path == libraries[0])
+    {
+        resolve_elf_profile(&mut profile, &libraries[0], dir).unwrap();
+    }
+    if profile
+        .images
+        .iter()
+        .any(|image| image.path == libraries[1])
+    {
+        resolve_elf_profile(&mut profile, &libraries[1], dir).unwrap();
+    }
+    if let Some(destination) = std::env::var_os("HUNIN_PERF_REPLACEMENT_OUTPUT") {
+        std::fs::write(destination, serde_json::to_vec_pretty(&serde_json::json!({"replacement_ns":replacement_ns,"begin":begin,"end":end,"profile":profile})).unwrap()).unwrap();
+    }
+    assert!(
+        profile
+            .samples
+            .iter()
+            .flat_map(|sample| &sample.frames)
+            .all(|frame| frame.function.as_deref() != Some("mapping_a_work")),
+        "replacement B executed; pre-arm A debug names cannot be attributed to its addresses"
+    );
+}
 #[test]
 #[ignore = "requires an explicitly provisioned perf_event_open environment; denial is not native baseline success"]
 fn perf_is_armed_before_work_and_resolves_real_matched_code() {
