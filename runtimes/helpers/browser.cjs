@@ -128,6 +128,19 @@ function remoteValue(value, depth = 0) {
   }
 }
 
+function chromiumEndpoint(filename) {
+  let text;
+  try { text = fs.readFileSync(filename, 'utf8'); }
+  catch (error) {
+    if (['ENOENT', 'EBUSY'].includes(error.code)) return null;
+    throw error;
+  }
+  const [port, route] = text.trim().split('\n');
+  const prefix = '/devtools/browser/';
+  if (!/^\d+$/.test(port) || !route?.startsWith(prefix) || route.length === prefix.length) return null;
+  return `ws://127.0.0.1:${port}${route}`;
+}
+
 async function chromium(browser, workload, area) {
   const profileDirectory = path.join(area, 'chrome-profile'); fs.mkdirSync(profileDirectory);
   // this disposable, credential-free profile must never access the user's OS secret store.
@@ -136,12 +149,7 @@ async function chromium(browser, workload, area) {
   let rpc;
   try {
     const active = path.join(profileDirectory, 'DevToolsActivePort');
-    const endpoint = await until(() => {
-      if (!fs.existsSync(active)) return null;
-      const [port, route] = fs.readFileSync(active, 'utf8').trim().split('\n');
-      if (!/^\d+$/.test(port) || !route?.startsWith('/devtools/browser/')) return null;
-      return `ws://127.0.0.1:${port}${route}`;
-    }, child, 'chromium diagnostic startup');
+    const endpoint = await until(() => chromiumEndpoint(active), child, 'chromium diagnostic startup');
     rpc = await Rpc.connect(endpoint);
     const version = await rpc.call('Browser.getVersion');
     const { targetId } = await rpc.call('Target.createTarget', { url: 'about:blank' });
@@ -289,12 +297,17 @@ async function firefox(browser, driver, workload, area) {
         const scopeBindings = { selectedContext: context, contexts: await rpc.call('browsingContext.getTree', {}), realms: await rpc.call('script.getRealms', {}) };
         return { kind: 'firefox', version: caps, profile, scripts, inputPath: saved, targets: [{ context }], scopeBindings, scope: 'global profiler in fresh owned browser; samples are not attributed to one tab by activeContext' };
       },
-      async close() { rpc.close(); await jsonRequest(base, 'DELETE', `/session/${session.sessionId}`); child.child.kill(); },
+      async close() {
+        rpc.close();
+        try { await jsonRequest(base, 'DELETE', `/session/${session.sessionId}`); }
+        finally { abortOwnedTool(child); }
+      },
     };
   } catch (error) {
     rpc?.close();
     if (session) { try { await jsonRequest(base, 'DELETE', `/session/${session.sessionId}`); } catch {} }
-    abortOwnedTool(child); throw error;
+    abortOwnedTool(child);
+    throw new Error(`${error.stack || error}\nowned firefox diagnostics: ${child.diagnostics()}`);
   }
 }
 
@@ -394,8 +407,14 @@ async function safari(browser, driver, workload, area) {
   }
 }
 
+function browserPath(filename) {
+  if (process.platform !== 'win32') return filename;
+  if (filename.startsWith('\\\\?\\UNC\\')) return '\\\\' + filename.slice(8);
+  return /^\\\\\?\\[A-Za-z]:\\/.test(filename) ? filename.slice(4) : filename;
+}
+
 async function main() {
-  const [kind, browser, driver, workload, area] = process.argv.slice(2);
+  const [kind, browser, driver, workload, area] = process.argv.slice(2).map(browserPath);
   for (const filename of [browser, workload, area]) if (!path.isAbsolute(filename)) throw new Error('browser paths must be absolute');
   let preparedDriver;
   if (process.env.HUNIN_BROWSER_DRIVER) {
