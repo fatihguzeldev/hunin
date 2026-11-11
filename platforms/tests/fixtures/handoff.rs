@@ -15,6 +15,8 @@ fn snapshot() {
 }
 #[inline(never)]
 fn thread_work(mut n: u64) -> u64 {
+    // Distinct physical code prevents identical-function folding in this attribution control.
+    std::hint::black_box(1_u8);
     for i in 0..50_000_000 {
         n = n
             .wrapping_mul(6364136223846793005)
@@ -25,6 +27,7 @@ fn thread_work(mut n: u64) -> u64 {
 }
 #[inline(never)]
 fn process_work(mut n: u64) -> u64 {
+    std::hint::black_box(2_u8);
     for i in 0..50_000_000 {
         n = n
             .wrapping_mul(6364136223846793005)
@@ -35,6 +38,7 @@ fn process_work(mut n: u64) -> u64 {
 }
 #[inline(never)]
 fn unrelated_work(mut n: u64) -> u64 {
+    std::hint::black_box(3_u8);
     for i in 0..50_000_000 {
         n = n
             .wrapping_mul(6364136223846793005)

@@ -12,8 +12,13 @@ pub fn executable(name: &str) -> PathBuf {
     if Path::new(name).is_absolute() {
         return PathBuf::from(name);
     }
+    let filename = if cfg!(windows) && Path::new(name).extension().is_none() {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|path| path.join(name))
+        .map(|path| path.join(&filename))
         .find(|path| path.is_file())
         .unwrap_or_else(|| panic!("missing selected executable:{name}"))
 }

@@ -221,7 +221,12 @@ fn investigation(language: Language) {
             project.add_context(&run,Context{id:"live-asset-label".into(),subject:"preview-batch".into(),origin:Origin::Contributed,value:json!({"asset":"alpha.ppm","selection":"agent supplied while execution is running"}),corrects:None}).unwrap();
             let started = Instant::now();
             let mut readings = 1;
-            while !process.work_complete().unwrap() {
+            while !process.work_complete().unwrap_or_else(|error| {
+                panic!(
+                    "{error}; target outcome: {:?}",
+                    process.wait(Duration::from_secs(1))
+                )
+            }) {
                 assert!(
                     started.elapsed() < Duration::from_secs(20),
                     "native fixture work deadline"

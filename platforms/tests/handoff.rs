@@ -27,8 +27,13 @@ use std::{
     time::{Duration, Instant},
 };
 fn tool(name: &str) -> PathBuf {
+    let filename = if cfg!(windows) && Path::new(name).extension().is_none() {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|directory| directory.join(name))
+        .map(|directory| directory.join(&filename))
         .find(|path| path.is_file())
         .unwrap_or_else(|| panic!("missing {name}"))
 }
@@ -479,7 +484,15 @@ fn explicit_thread_and_process_handoffs_survive_reopen_without_attributing_unlin
                 && (!record.schema.ends_with(".region")
                     || record.payload["count"].as_u64().unwrap() > 0)
         })
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "thread_work not resolved; actual functions: {:?}",
+                parent_records
+                    .iter()
+                    .filter_map(|record| record.function.as_ref())
+                    .collect::<std::collections::BTreeSet<_>>()
+            )
+        });
     let child_work = child_records
         .iter()
         .find(|record| {
