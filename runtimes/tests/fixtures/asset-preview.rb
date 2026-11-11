@@ -48,6 +48,7 @@ module HuninWorkload
     input,output = ENV.fetch('PREVIEW_INPUT'),ENV.fetch('PREVIEW_OUTPUT')
     repetitions = Integer(ENV.fetch('PREVIEW_REPETITIONS','32'))
     raise 'invalid preview input/output/repetitions' unless File.absolute_path?(input) && File.absolute_path?(output) && (1..100000).cover?(repetitions)
+    input,output = [input,output].map { |path| File.expand_path(path) }
     Dir.mkdir(output) unless Dir.exist?(output)
     assets = Dir.children(input).select { |name| name.end_with?('.ppm') }.sort.map do |name|
       image = read_image(File.binread(File.join(input,name)))
