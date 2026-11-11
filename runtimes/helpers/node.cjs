@@ -42,10 +42,15 @@ async function main() {
   const finalizeGate = process.env.HUNIN_FINALIZE_GATE === '1';
   const writeControl = process.stdout.write.bind(process.stdout);
   const controlLine = name => writeControl(name + (controlToken === undefined ? '' : ' ' + controlToken) + '\n');
-  const [workload, profilePath, reportPath] = process.argv.slice(2);
-  for (const value of [workload, profilePath, reportPath]) {
+  const [workloadPath, profilePath, reportPath] = process.argv.slice(2);
+  for (const value of [workloadPath, profilePath, reportPath]) {
     if (!value || !path.isAbsolute(value)) throw new Error('helper paths must be absolute');
   }
+  // Bun's loader and debugger URLs use conventional Windows paths, not Rust's verbatim spelling.
+  const workload = fs.realpathSync.native(workloadPath);
+  const isWorkload = filename => {
+    try { return fs.realpathSync.native(filename) === workload; } catch { return false; }
+  };
   const captureScripts = process.env.HUNIN_SCRIPT_SOURCES === '1';
   let ownedInspector = false;
   if (captureScripts && process.versions.bun) {
@@ -66,7 +71,7 @@ async function main() {
     const onScript = params => {
       let filename = params.url;
       try { if (filename.startsWith('file:')) filename = fileURLToPath(filename); } catch { return; }
-      if (filename === workload) workloadScripts.push({ scriptId: params.scriptId, url: params.url });
+      if (isWorkload(filename)) workloadScripts.push({ scriptId: params.scriptId, url: params.url });
     };
     if (process.versions.bun) debugPost = await connectDebugger(inspector.url(), onScript);
     else session.on('Debugger.scriptParsed', ({ params }) => onScript(params));
@@ -112,7 +117,7 @@ async function main() {
       const identity = node.callFrame;
       let filename = identity.url;
       try { if (filename.startsWith('file:')) filename = fileURLToPath(filename); } catch { continue; }
-      if (filename === workload && !workloadScripts.some(script => script.scriptId === identity.scriptId)) {
+      if (isWorkload(filename) && !workloadScripts.some(script => script.scriptId === identity.scriptId)) {
         workloadScripts.push({ scriptId: identity.scriptId, url: identity.url });
       }
     }
