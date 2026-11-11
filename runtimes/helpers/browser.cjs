@@ -145,7 +145,9 @@ async function chromium(browser, workload, area) {
   const profileDirectory = path.join(area, 'chrome-profile'); fs.mkdirSync(profileDirectory);
   // this disposable, credential-free profile must never access the user's OS secret store.
   const secretStore = process.platform === 'darwin' ? ['--use-mock-keychain'] : process.platform === 'linux' ? ['--password-store=basic'] : [];
-  const child = launch(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`, ...secretStore, '--no-first-run', '--disable-popup-blocking', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], area);
+  // fresh Windows profiles otherwise probe a blank OS password and can lock the user's account (chromium issue 541310282).
+  const deviceAuthentication = process.platform === 'win32' ? ['--disable-features=AutofillAiWalletPrivatePasses'] : [];
+  const child = launch(browser, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profileDirectory}`, ...secretStore, ...deviceAuthentication, '--no-first-run', '--disable-popup-blocking', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', 'about:blank'], area);
   let rpc;
   try {
     const active = path.join(profileDirectory, 'DevToolsActivePort');
@@ -236,7 +238,7 @@ async function chromium(browser, workload, area) {
             scripts.push({ ...identity, targetId: observer.targetId, isolateId: observer.isolateId, source: scriptSource, sha256: crypto.createHash('sha256').update(scriptSource).digest('hex') });
           } catch (error) { sourceFailures.push(`script identity ${identity.sessionId}/${identity.scriptId}: ${String(error)}`); }
         }
-        return { kind: 'chromium', version, processes, profiles, scripts, sourceFailures, selectedTargetId: targetId, targets: sessions, reportedTargets, contextObservers, executionContexts: rpc.contexts, frameTrees, launch_configuration: { profile: 'fresh owned credential-free directory', secret_store: secretStore }, scope: 'profiler target sessions may share an isolate with other pages; context projection requires captured isolate/script/execution-context identity; browser/renderer resources have broader process scope; stopped or unarmed workers are explicit source failures' };
+        return { kind: 'chromium', version, processes, profiles, scripts, sourceFailures, selectedTargetId: targetId, targets: sessions, reportedTargets, contextObservers, executionContexts: rpc.contexts, frameTrees, launch_configuration: { profile: 'fresh owned credential-free directory', secret_store: secretStore, device_authentication: deviceAuthentication }, scope: 'profiler target sessions may share an isolate with other pages; context projection requires captured isolate/script/execution-context identity; browser/renderer resources have broader process scope; stopped or unarmed workers are explicit source failures' };
       },
       async close() {
         const exited = child.child.exitCode !== null ? Promise.resolve() : new Promise(resolve => child.child.once('exit', resolve));
