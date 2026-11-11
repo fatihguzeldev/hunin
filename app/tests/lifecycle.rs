@@ -500,11 +500,54 @@ fn readiness_failure_records_failed_intent_and_removes_preparation_scratch() {
     ));
 }
 
-#[test]
+#[cfg(any(unix, windows))]
+struct DeleteBlocker {
+    #[cfg(unix)]
+    directory: PathBuf,
+    #[cfg(windows)]
+    _file: fs::File,
+}
+
+#[cfg(any(unix, windows))]
+impl DeleteBlocker {
+    fn new(area: &Path) -> Self {
+        let directory = area.join("protected");
+        fs::create_dir(&directory).unwrap();
+        let file = directory.join("retained");
+        fs::write(&file, "owned scratch").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+            assert!(fs::remove_file(&file).is_err());
+            Self { directory }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let handle = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&file)
+                .unwrap();
+            assert!(fs::remove_file(&file).is_err());
+            Self { _file: handle }
+        }
+    }
+}
+
 #[cfg(unix)]
-#[ignore = "requires selected HUNIN_PYTHON and ordinary-user filesystem permissions"]
+impl Drop for DeleteBlocker {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.directory, fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+#[ignore = "requires selected HUNIN_PYTHON and enforced delete permissions or share modes"]
 fn failed_finalization_delete_retains_a_durable_cleanup_locator() {
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let project = Project::create(directory.path(), "p").unwrap();
     let workload = directory.path().join("work.py");
@@ -528,12 +571,9 @@ fn failed_finalization_delete_retains_a_durable_cleanup_locator() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
-    let protected = area.join("protected");
-    fs::create_dir(&protected).unwrap();
-    fs::write(protected.join("retained"), "owned scratch").unwrap();
-    fs::set_permissions(&protected, fs::Permissions::from_mode(0o500)).unwrap();
+    let blocker = DeleteBlocker::new(&area);
     let result = capture.finish(Duration::from_secs(5));
-    fs::set_permissions(&protected, fs::Permissions::from_mode(0o700)).unwrap();
+    drop(blocker);
     assert!(result.is_err());
     assert!(area.exists());
     let reopened = Project::open(directory.path(), "p").unwrap();
@@ -563,10 +603,9 @@ fn failed_finalization_delete_retains_a_durable_cleanup_locator() {
 }
 
 #[test]
-#[cfg(unix)]
-#[ignore = "requires selected HUNIN_PYTHON and ordinary-user filesystem permissions"]
+#[cfg(any(unix, windows))]
+#[ignore = "requires selected HUNIN_PYTHON and enforced delete permissions or share modes"]
 fn failed_cancellation_delete_keeps_its_locator_across_cleanup_retries() {
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let project = Project::create(directory.path(), "p").unwrap();
     let workload = directory.path().join("work.py");
@@ -588,10 +627,7 @@ fn failed_cancellation_delete_keeps_its_locator_across_cleanup_retries() {
         .unwrap()
         .unwrap()
         .path();
-    let protected = area.join("protected");
-    fs::create_dir(&protected).unwrap();
-    fs::write(protected.join("retained"), "owned scratch").unwrap();
-    fs::set_permissions(&protected, fs::Permissions::from_mode(0o500)).unwrap();
+    let blocker = DeleteBlocker::new(&area);
     let cancel = RequestId {
         project: "p".into(),
         caller: "agent".into(),
@@ -599,7 +635,7 @@ fn failed_cancellation_delete_keeps_its_locator_across_cleanup_retries() {
     };
     let first = capture.cancel(cancel.clone());
     let second = capture.cancel(cancel.clone());
-    fs::set_permissions(&protected, fs::Permissions::from_mode(0o700)).unwrap();
+    drop(blocker);
     for outcome in [first.unwrap(), second.unwrap()] {
         assert_eq!(outcome.state, "uncertain");
         assert_eq!(outcome.result.as_ref().unwrap()["cleanup_pending"], true);
