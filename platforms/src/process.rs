@@ -141,15 +141,24 @@ pub struct Discovery {
     pub unavailable: Vec<UnavailableTarget>,
 }
 
-pub fn inspect_process(pid: u32) -> Result<ProcessInstance> {
+pub(crate) fn validate_pid(pid: u32) -> Result<()> {
     if pid == 0 || pid > i32::MAX as u32 {
         return Err(Error::invalid(
             "pid is outside the supported process-id range",
         ));
     }
+    Ok(())
+}
+pub fn inspect_process(pid: u32) -> Result<ProcessInstance> {
+    validate_pid(pid)?;
     crate::os::inspect(pid)
 }
 
+#[cfg(windows)]
+pub fn discover_processes() -> Result<Discovery> {
+    crate::os::discover()
+}
+#[cfg(not(windows))]
 pub fn discover_processes() -> Result<Discovery> {
     let mut result = Discovery {
         processes: Vec::new(),
@@ -165,8 +174,9 @@ pub fn discover_processes() -> Result<Discovery> {
 }
 
 pub fn read_resources(expected: &ProcessInstance) -> Result<ResourceSnapshot> {
+    validate_pid(expected.pid)?;
     let start_ns = crate::os::monotonic_ns()?;
-    let before = inspect_process(expected.pid)?;
+    let before = crate::os::inspect_for_resources(expected.pid)?;
     if !expected.same_instance(&before) {
         return Err(Error::new(
             ErrorKind::InstanceChanged,
@@ -174,7 +184,7 @@ pub fn read_resources(expected: &ProcessInstance) -> Result<ResourceSnapshot> {
         ));
     }
     let (user_cpu, system_cpu, memory) = crate::os::resources(expected.pid)?;
-    let after = inspect_process(expected.pid)?;
+    let after = crate::os::inspect_for_resources(expected.pid)?;
     if !expected.same_instance(&after) {
         return Err(Error::new(
             ErrorKind::InstanceChanged,
@@ -188,6 +198,11 @@ pub fn read_resources(expected: &ProcessInstance) -> Result<ResourceSnapshot> {
             "monotonic clock moved backwards",
         ));
     }
+    #[cfg(windows)]
+    let after = ProcessInstance {
+        parent_pid: expected.parent_pid,
+        ..after
+    };
     Ok(ResourceSnapshot {
         instance: after,
         acquired: AcquisitionWindow {

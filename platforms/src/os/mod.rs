@@ -13,3 +13,10 @@ pub(crate) use windows::*;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("hunin-platforms currently implements linux, macos, and windows");
+
+#[cfg(not(windows))]
+pub(crate) fn inspect_for_resources(
+    pid: u32,
+) -> crate::process::Result<crate::process::ProcessInstance> {
+    inspect(pid)
+}
