@@ -16,7 +16,6 @@ fn managed_control_is_not_application_stdout_and_survives_replaced_output_writer
         .unwrap();
     #[cfg(not(unix))]
     let root = tempfile::Builder::new().prefix("hnc-").tempdir().unwrap();
-    let expected = b"HUNIN_READY\nHUNIN_WORK_COMPLETE\npartial";
     for (name, kind, variable, filename, source) in [
         (
             "node",
@@ -77,6 +76,15 @@ fn managed_control_is_not_application_stdout_and_survives_replaced_output_writer
             clr(),
         ),
     ] {
+        let expected: &[u8] = if cfg!(windows)
+            && matches!(
+                kind,
+                RuntimeKind::CPython | RuntimeKind::PyPy | RuntimeKind::CRuby
+            ) {
+            b"HUNIN_READY\r\nHUNIN_WORK_COMPLETE\r\npartial"
+        } else {
+            b"HUNIN_READY\nHUNIN_WORK_COMPLETE\npartial"
+        };
         let executable = PathBuf::from(std::env::var_os(variable).expect(variable));
         let directory = root.path().join(name);
         let area = directory.join("capture");
