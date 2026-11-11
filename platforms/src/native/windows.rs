@@ -891,6 +891,8 @@ impl EtwRecording {
     }
 }
 pub fn resolve_pdb_profile(profile: &mut Profile, binary: &Path, pdb: &Path) -> Result<()> {
+    use super::symbol_budget::{SymbolBudget, encoded_size};
+    let mut budget = SymbolBudget::new(profile)?;
     let (identity, _) = super::symbols::pe_pdb_identity(binary)?;
     let indices: Vec<_> = profile
         .images
@@ -905,51 +907,78 @@ pub fn resolve_pdb_profile(profile: &mut Profile, binary: &Path, pdb: &Path) -> 
             "expected PE/PDB identity is absent from recorded modules",
         ));
     }
-    let mut count = 0;
+    let mut updates = BTreeMap::new();
     for image in indices {
         let mut unique = BTreeMap::new();
         for sample in &profile.samples {
             for frame in &sample.frames {
                 if frame.image == Some(image) {
-                    unique.entry(frame.address).or_insert_with(|| frame.clone());
+                    let fields = (
+                        &frame.function,
+                        &frame.reported_function,
+                        &frame.source,
+                        &frame.resolution,
+                    );
+                    let bytes = encoded_size(&fields)?;
+                    let entry = unique
+                        .entry(frame.address)
+                        .or_insert_with(|| (frame.clone(), 0usize, 0usize));
+                    entry.1 += 1;
+                    entry.2 = entry
+                        .2
+                        .checked_add(bytes)
+                        .ok_or_else(|| Error::invalid("symbol size overflow"))?;
                 }
             }
         }
-        let mut frames: Vec<_> = unique.into_values().collect();
-        if frames.is_empty() {
-            continue;
-        }
-        resolve_pdb(&profile.images[image], pdb, &mut frames)?;
-        count += frames.len();
-        let resolved: BTreeMap<_, _> = frames
-            .into_iter()
-            .map(|frame| (frame.address, frame))
-            .collect();
-        for sample in &mut profile.samples {
-            for frame in &mut sample.frames {
-                if frame.image == Some(image)
-                    && let Some(symbol) = resolved.get(&frame.address)
-                {
-                    frame.function = symbol.function.clone();
-                    frame.reported_function = symbol.reported_function.clone();
-                    frame.source = symbol.source.clone();
-                    frame.resolution = symbol.resolution.clone();
-                }
+        let unique: Vec<_> = unique.into_iter().collect();
+        for chunk in unique.chunks(1024) {
+            let mut frames: Vec<_> = chunk
+                .iter()
+                .map(|(_, (frame, _, _))| frame.clone())
+                .collect();
+            resolve_pdb(&profile.images[image], pdb, &mut frames)?;
+            for ((address, (_, repetitions, old_bytes)), frame) in chunk.iter().zip(frames) {
+                let fields = (
+                    &frame.function,
+                    &frame.reported_function,
+                    &frame.source,
+                    &frame.resolution,
+                );
+                budget.replace_repeated(*old_bytes, &fields, *repetitions)?;
+                updates.insert((image, *address), frame);
             }
         }
     }
-    if count == 0 {
+    if updates.is_empty() {
         return Err(Error::new(
             ErrorKind::CollectorFailure,
             "no samples have an unambiguous mapping for this executable",
         ));
     }
-    profile.issues.push(
+    let mut issues = profile.issues.clone();
+    issues.push(
         "dbghelp resolves physical instruction pointers; inline call chains are not expanded"
             .into(),
     );
+    budget.replace(&profile.issues, &issues)?;
+    for sample in &mut profile.samples {
+        for frame in &mut sample.frames {
+            if let Some(symbol) = frame
+                .image
+                .and_then(|image| updates.get(&(image, frame.address)))
+            {
+                frame.function = symbol.function.clone();
+                frame.reported_function = symbol.reported_function.clone();
+                frame.source = symbol.source.clone();
+                frame.resolution = symbol.resolution.clone();
+            }
+        }
+    }
+    profile.issues = issues;
     Ok(())
 }
+
 #[cfg(test)]
 mod header_tests {
     use super::*;

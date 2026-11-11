@@ -218,6 +218,8 @@ pub fn resolve_elf_profile(
     debug: &Path,
     temporary: &Path,
 ) -> Result<()> {
+    use super::symbol_budget::{SymbolBudget, encoded_size};
+    let mut budget = SymbolBudget::new(profile)?;
     let (identity, _) = elf_build_id(debug)?;
     let images: Vec<_> = profile
         .images
@@ -232,31 +234,46 @@ pub fn resolve_elf_profile(
             "debug build id is absent from recorded images",
         ));
     }
+    let mut updates = std::collections::BTreeMap::new();
     for image_index in images {
         let mut unique = std::collections::BTreeMap::new();
         for sample in &profile.samples {
             for frame in &sample.frames {
                 if frame.image == Some(image_index) {
-                    unique.entry(frame.address).or_insert_with(|| frame.clone());
+                    let fields = (
+                        &frame.function,
+                        &frame.source,
+                        &frame.inline_sites,
+                        &frame.resolution,
+                    );
+                    let bytes = encoded_size(&fields)?;
+                    let entry = unique
+                        .entry(frame.address)
+                        .or_insert_with(|| (frame.clone(), 0usize, 0usize));
+                    entry.1 += 1;
+                    entry.2 = entry
+                        .2
+                        .checked_add(bytes)
+                        .ok_or_else(|| Error::invalid("symbol size overflow"))?;
                 }
             }
         }
-        let mut frames: Vec<_> = unique.into_values().collect();
-        resolve_elf(&profile.images[image_index], debug, &mut frames, temporary)?;
-        let resolved: std::collections::BTreeMap<_, _> = frames
-            .into_iter()
-            .map(|frame| (frame.address, frame))
-            .collect();
-        for sample in &mut profile.samples {
-            for frame in &mut sample.frames {
-                if frame.image == Some(image_index)
-                    && let Some(symbol) = resolved.get(&frame.address)
-                {
-                    frame.function = symbol.function.clone();
-                    frame.source = symbol.source.clone();
-                    frame.inline_sites = symbol.inline_sites.clone();
-                    frame.resolution = symbol.resolution.clone();
-                }
+        let unique: Vec<_> = unique.into_iter().collect();
+        for chunk in unique.chunks(1024) {
+            let mut frames: Vec<_> = chunk
+                .iter()
+                .map(|(_, (frame, _, _))| frame.clone())
+                .collect();
+            resolve_elf(&profile.images[image_index], debug, &mut frames, temporary)?;
+            for ((address, (_, repetitions, old_bytes)), frame) in chunk.iter().zip(frames) {
+                let fields = (
+                    &frame.function,
+                    &frame.source,
+                    &frame.inline_sites,
+                    &frame.resolution,
+                );
+                budget.replace_repeated(*old_bytes, &fields, *repetitions)?;
+                updates.insert((image_index, *address), frame);
             }
         }
     }
@@ -266,7 +283,29 @@ pub fn resolve_elf_profile(
         Duration::from_secs(10),
         65536,
     )?)?;
-    profile.metadata["symbolizer"] = serde_json::json!({"version":version.stdout,"build_id":identity,"address_translation":"executable ELF PT_LOAD virtual address; captured mapping bases include host page alignment"});
+    let mut metadata = profile.metadata.clone();
+    if metadata.is_null() {
+        metadata = serde_json::json!({});
+    }
+    metadata
+        .as_object_mut()
+        .ok_or_else(|| Error::invalid("native profile metadata must be an object"))?
+        .insert("symbolizer".into(), serde_json::json!({"version":version.stdout,"build_id":identity,"address_translation":"executable ELF PT_LOAD virtual address; captured mapping bases include host page alignment"}));
+    budget.replace(&profile.metadata, &metadata)?;
+    for sample in &mut profile.samples {
+        for frame in &mut sample.frames {
+            if let Some(symbol) = frame
+                .image
+                .and_then(|image| updates.get(&(image, frame.address)))
+            {
+                frame.function = symbol.function.clone();
+                frame.source = symbol.source.clone();
+                frame.inline_sites = symbol.inline_sites.clone();
+                frame.resolution = symbol.resolution.clone();
+            }
+        }
+    }
+    profile.metadata = metadata;
     Ok(())
 }
 

@@ -7,6 +7,7 @@ pub mod etw;
 pub mod macos;
 pub mod perf;
 mod recording;
+mod symbol_budget;
 pub mod symbols;
 #[cfg(windows)]
 pub mod windows;
