@@ -179,6 +179,7 @@ impl EtwRecording {
     }
     pub fn stop(mut self, language: Language) -> Result<Profile> {
         self.stop_session()?;
+        let recording_elapsed = self.start.elapsed();
         let properties = unsafe { &*self.properties.as_ptr().cast::<EVENT_TRACE_PROPERTIES>() };
         let mut profile = import_etl(
             &self.path,
@@ -188,7 +189,7 @@ impl EtwRecording {
             Duration::from_secs(30),
         )?;
         profile.metadata["recording_elapsed_ns"] =
-            serde_json::json!(self.start.elapsed().as_nanos().min(u64::MAX as u128) as u64);
+            serde_json::json!(recording_elapsed.as_nanos().min(u64::MAX as u128) as u64);
         profile.metadata["etw_events_lost"] = properties.EventsLost.into();
         profile.metadata["etw_log_buffers_lost"] = properties.LogBuffersLost.into();
         if properties.EventsLost > 0 || properties.LogBuffersLost > 0 {
@@ -539,6 +540,35 @@ fn tdh_fields(event: &EVENT_RECORD) -> Result<serde_json::Map<String, serde_json
     Ok(result)
 }
 
+fn retain_etl_header(profile: &mut Profile, header: &TRACE_LOGFILE_HEADER) -> Result<()> {
+    let details = unsafe { header.Anonymous2.Anonymous };
+    if header.ReservedFlags != 1 || header.PerfFreq <= 0 {
+        return Err(Error::new(
+            ErrorKind::UnsupportedFormat,
+            "etl requires qpc timestamps and a positive recorded frequency",
+        ));
+    }
+    if details.PointerSize as usize != mem::size_of::<usize>() {
+        return Err(Error::new(
+            ErrorKind::UnsupportedFormat,
+            "etl header pointer layout differs from this consumer",
+        ));
+    }
+    profile.metadata["etl_header"] = serde_json::json!({"clock_type":header.ReservedFlags,"qpc_frequency":header.PerfFreq,"pointer_size":details.PointerSize,"events_lost":details.EventsLost,"buffers_lost":header.BuffersLost,"end_filetime":header.EndTime,"finalized":header.EndTime != 0,"loss_scope":"entire recording session; not selected-process loss"});
+    if header.EndTime == 0 {
+        profile.issues.push(
+            "etl file was not finalized; retained observations do not establish complete coverage"
+                .into(),
+        );
+    }
+    if details.EventsLost > 0 || header.BuffersLost > 0 {
+        profile
+            .issues
+            .push("etl header reports session-wide lost events or buffers".into());
+    }
+    Ok(())
+}
+
 pub fn import_etl(
     path: &Path,
     target: &ProcessInstance,
@@ -593,6 +623,12 @@ pub fn import_etl(
     let handle = unsafe { OpenTraceW(&mut log) };
     if handle.Value == u64::MAX {
         return Err(std::io::Error::last_os_error().into());
+    }
+    if let Err(error) = retain_etl_header(&mut consumer.profile, &log.LogfileHeader) {
+        unsafe {
+            CloseTrace(handle);
+        }
+        return Err(error);
     }
     consumer.frequency = log.LogfileHeader.PerfFreq as u64;
     let status = unsafe { ProcessTrace(&handle, 1, ptr::null(), ptr::null()) };
@@ -662,6 +698,18 @@ pub fn import_etl(
 }
 
 pub fn resolve_pdb(image: &Image, pdb: &Path, frames: &mut [Frame]) -> Result<()> {
+    let selected_pdb = std::fs::canonicalize(pdb).map_err(|error| {
+        Error::new(
+            ErrorKind::SymbolMismatch,
+            format!("selected pdb is unavailable: {error}"),
+        )
+    })?;
+    if !selected_pdb.is_file() {
+        return Err(Error::new(
+            ErrorKind::SymbolMismatch,
+            "selected pdb is not a file",
+        ));
+    }
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = LOCK
         .get_or_init(|| Mutex::new(()))
@@ -736,10 +784,16 @@ pub fn resolve_pdb(image: &Image, pdb: &Path, frames: &mut [Frame]) -> Result<()
             .unwrap_or(module.LoadedPdbName.len())],
     ));
     let identity = format!("{}:{}", guid(module.PdbSig70), module.PdbAge);
+    let loaded_pdb = std::fs::canonicalize(loaded).map_err(|error| {
+        Error::new(
+            ErrorKind::SymbolMismatch,
+            format!("loaded pdb is unavailable: {error}"),
+        )
+    })?;
     if module.PdbUnmatched != 0
         || module.DbgUnmatched != 0
         || identity != image.identity
-        || std::fs::canonicalize(loaded).ok() != std::fs::canonicalize(pdb).ok()
+        || loaded_pdb != selected_pdb
     {
         return Err(Error::new(
             ErrorKind::SymbolMismatch,
@@ -895,4 +949,51 @@ pub fn resolve_pdb_profile(profile: &mut Profile, binary: &Path, pdb: &Path) -> 
             .into(),
     );
     Ok(())
+}
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    #[test]
+    fn raw_clock_loss_and_finalization_remain_interpretable() {
+        let mut profile = Profile {
+            schema: String::new(),
+            producer: String::new(),
+            language: Language::C,
+            images: Vec::new(),
+            samples: Vec::new(),
+            aggregates: Vec::new(),
+            clock: None,
+            ticks_per_second: 1,
+            period: None,
+            start: None,
+            end: None,
+            issues: Vec::new(),
+            metadata: serde_json::json!({}),
+        };
+        let mut header: TRACE_LOGFILE_HEADER = unsafe { mem::zeroed() };
+        header.ReservedFlags = 1;
+        header.PerfFreq = 10_000_000;
+        header.EndTime = 1;
+        header.Anonymous2.Anonymous.PointerSize = mem::size_of::<usize>() as u32;
+        retain_etl_header(&mut profile, &header).unwrap();
+        assert!(profile.issues.is_empty());
+        header.EndTime = 0;
+        header.BuffersLost = 2;
+        header.Anonymous2.Anonymous.EventsLost = 3;
+        retain_etl_header(&mut profile, &header).unwrap();
+        assert_eq!(profile.metadata["etl_header"]["events_lost"], 3);
+        assert_eq!(profile.metadata["etl_header"]["buffers_lost"], 2);
+        assert_eq!(profile.metadata["etl_header"]["finalized"], false);
+        assert_eq!(profile.issues.len(), 2);
+        header.ReservedFlags = 2;
+        assert!(retain_etl_header(&mut profile, &header).is_err());
+        header.ReservedFlags = 1;
+        header.PerfFreq = 0;
+        assert!(retain_etl_header(&mut profile, &header).is_err());
+        header.PerfFreq = -1;
+        assert!(retain_etl_header(&mut profile, &header).is_err());
+        header.PerfFreq = 10_000_000;
+        header.Anonymous2.Anonymous.PointerSize = 0;
+        assert!(retain_etl_header(&mut profile, &header).is_err());
+    }
 }
