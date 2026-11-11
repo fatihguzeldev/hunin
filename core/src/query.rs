@@ -31,6 +31,7 @@ pub struct RecordRef {
     pub id: String,
 }
 
+/// matches a stored JSON scalar representation, including its numeric representation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FieldFilter {
     pub name: String,
@@ -329,7 +330,9 @@ impl Project {
             if cursor.project != self.id() {
                 return Err(Error::ForeignProject);
             }
-            if cursor.query != *query || cursor.after < 0 {
+            if project::encode_bounded(&cursor.query)? != project::encode_bounded(query)?
+                || cursor.after < 0
+            {
                 return Err(Error::Conflict(
                     "continuation belongs to another query".into(),
                 ));

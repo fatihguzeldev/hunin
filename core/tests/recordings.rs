@@ -163,6 +163,59 @@ fn small_profiler_durations_keep_their_exact_float_bits_after_reopen() {
 }
 
 #[test]
+fn signed_zero_field_predicates_cannot_switch_a_continuation_to_another_set() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = Project::create(directory.path(), "p").unwrap();
+    let (run, original) = prepared_source(&project);
+    let mut definition = original.definition().unwrap();
+    definition.id = "floats".into();
+    definition.schemas[0].fields.insert(
+        "seconds".into(),
+        FieldSchema {
+            kind: FieldType::Float,
+            required: true,
+            unit: Some("seconds".into()),
+            meaning: "exact source scalar".into(),
+        },
+    );
+    let source = project.register_source(&run, definition).unwrap();
+    for (id, seconds) in [
+        ("negative-one", -0.0),
+        ("negative-two", -0.0),
+        ("positive-one", 0.0),
+        ("positive-two", 0.0),
+    ] {
+        let mut value = record(id, 1);
+        value.payload["seconds"] = json!(seconds);
+        source.append(&[value]).unwrap();
+    }
+    let mut query = Query::new(run);
+    query.source = Some("floats".into());
+    query.fields.push(FieldFilter {
+        name: "seconds".into(),
+        value: json!(-0.0),
+    });
+    let limits = QueryLimits {
+        max_rows: 1,
+        max_bytes: 2048,
+    };
+    let first = project.query(&query, limits, None).unwrap();
+    assert_eq!(first.records[0].reference.id, "negative-one");
+    let cursor = first.continuation.as_ref().unwrap();
+    let mut changed = query.clone();
+    changed.fields[0].value = json!(0.0);
+    let positive = project.query(&changed, limits, None).unwrap();
+    assert_eq!(positive.records[0].reference.id, "positive-one");
+    assert!(matches!(
+        project.query(&changed, limits, Some(cursor)),
+        Err(Error::Conflict(_))
+    ));
+    let second = project.query(&query, limits, Some(cursor)).unwrap();
+    assert_eq!(second.records[0].reference.id, "negative-two");
+    assert!(second.continuation.is_none());
+}
+
+#[test]
 fn replay_conflict_and_invalid_batches_are_atomic_and_fenced() {
     let dir = tempfile::tempdir().unwrap();
     let project = Project::create(dir.path(), "p").unwrap();
