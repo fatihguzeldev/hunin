@@ -42,7 +42,33 @@ fn usage() -> Value {
             + v.ru_stime.tv_usec as u64)
             * 1000
     };
-    json!({"self_cpu_ns":cpu(&own),"descendant_cpu_ns":cpu(&children),"peak_rss_bytes":own.ru_maxrss as u64*if cfg!(target_os="linux"){1024}else{1},"peak_rss_source":if cfg!(target_os="linux"){ "getrusage RUSAGE_SELF ru_maxrss KiB ×1024"}else{"getrusage RUSAGE_SELF ru_maxrss bytes"},"descendant_scope":"reaped direct children including the workload and profiler/export tools; not helper-exclusive cpu"})
+    let report = json!({"self_cpu_ns":cpu(&own),"descendant_cpu_ns":cpu(&children),"peak_rss_bytes":own.ru_maxrss as u64*if cfg!(target_os="linux"){1024}else{1},"peak_rss_source":if cfg!(target_os="linux"){ "getrusage RUSAGE_SELF ru_maxrss KiB ×1024"}else{"getrusage RUSAGE_SELF ru_maxrss bytes"},"descendant_scope":"reaped direct children including the workload and profiler/export tools; not helper-exclusive cpu"});
+    #[cfg(target_os = "linux")]
+    {
+        // ru_maxrss can retain the controller's larger pre-exec address space.
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let fields: Vec<_> = status
+            .lines()
+            .find(|line| line.starts_with("VmHWM:"))
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[2], "kB");
+        let mut report = report;
+        report["raw_getrusage_peak_rss_bytes"] = report["peak_rss_bytes"].clone();
+        report["peak_rss_bytes"] = fields[1]
+            .parse::<u64>()
+            .unwrap()
+            .checked_mul(1024)
+            .unwrap()
+            .into();
+        report["peak_rss_source"] =
+            "linux /proc/self/status VmHWM current-address-space peak KiB ×1024".into();
+        report
+    }
+    #[cfg(not(target_os = "linux"))]
+    report
 }
 #[cfg(windows)]
 fn usage() -> Value {
@@ -93,6 +119,13 @@ fn metric_ns(value: &Value) -> u64 {
 
 #[test]
 fn observer_worker() {
+    #[cfg(target_os = "linux")]
+    if let Ok(limit) = std::env::var("HUNIN_NATIVE_BENCH_MEMORY_LIMIT") {
+        let memory = usage();
+        assert!(memory["peak_rss_bytes"].as_u64().unwrap() < limit.parse::<u64>().unwrap());
+        assert!(memory["raw_getrusage_peak_rss_bytes"].is_u64());
+        return;
+    }
     let Ok(configuration) = std::env::var("HUNIN_NATIVE_BENCH_WORKER") else {
         return;
     };
@@ -351,11 +384,38 @@ fn observer_worker() {
     let end_to_end_ns = ns(observer_start.elapsed());
     let final_usage = usage();
     let result = json!({"mode":mode,"language":language,"build":configuration["build"],"work_ns":work_ns,"work_clock":batch,"completion_acknowledgment_ns":acknowledgment_ns,"target_cpu_ns":cpu_ns,"target_cpu_endpoint_basis":{"user_before":first.user_cpu,"system_before":first.system_cpu,"user_after":last.user_cpu,"system_after":last.system_cpu,"first_acquired":first.acquired,"last_acquired":last.acquired},"prepare_ns":prepare_ns,"finalize_ns":finalization_ns,"end_to_end_ns":end_to_end_ns,"observer_self_cpu_ns":final_usage["self_cpu_ns"].as_u64().unwrap()-first_usage["self_cpu_ns"].as_u64().unwrap(),"observer_descendant_cpu_ns":final_usage["descendant_cpu_ns"],"observer_descendant_scope":final_usage["descendant_scope"],"observer_peak_rss_bytes":final_usage["peak_rss_bytes"],"observer_peak_rss_source":final_usage["peak_rss_source"],"reference_reads":"two identical endpoint CPU/memory reads in every mode; excluded from periodic collector counters","periodic_resource_reads":resource_reads,"periodic_resource_read_ns":resource_read_ns,"resource_ingest_ns":resource_ingest_ns,"max_observed_target_memory_series_bytes":max_memory,"code_requested":code_requested,"code_arm_ns":if code_requested{Some(code_arm_ns)}else{None},"code_drain_ns":if code_requested{Some(code_drain_ns)}else{None},"code_extract_ns":if code_requested{Some(code_extract_ns)}else{None},"code_ingest_ns":if code_requested{Some(code_ingest_ns)}else{None},"recording_bytes":recording_bytes,"kernel_ring_bytes":ring_bytes,"extracted_json_bytes":if code_requested{Some(extracted_bytes)}else{None},"output_checks":checks,"peak_memory_limit":"measured fresh-observer peak; byte/sample/ring admission is enforced, no exact allocator/RSS quota is claimed"});
+    #[cfg(target_os = "linux")]
+    let result = {
+        let mut result = result;
+        result["observer_raw_getrusage_peak_rss_bytes"] =
+            final_usage["raw_getrusage_peak_rss_bytes"].clone();
+        result
+    };
     std::fs::write(
         directory.join("result.json"),
         serde_json::to_vec_pretty(&result).unwrap(),
     )
     .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn observer_memory_peak_excludes_the_controllers_pre_exec_heap() {
+    let held = vec![1u8; 64 * 1024 * 1024];
+    let directory = tempfile::tempdir().unwrap();
+    tools::require_success(
+        tools::run(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "observer_worker", "--nocapture"])
+                .env("HUNIN_NATIVE_BENCH_MEMORY_LIMIT", held.len().to_string()),
+            directory.path(),
+            Duration::from_secs(10),
+            65536,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(std::hint::black_box(&held)[held.len() - 1], 1);
 }
 
 #[test]
@@ -429,7 +489,7 @@ fn native_observation_overhead_preserves_fixed_outputs() {
     } else {
         "windows execution requires a separately pinned host receipt".into()
     };
-    let result = json!({"host":host,"architecture":std::env::consts::ARCH,"trials":trials,"builds":builds,"method":{"warmups":"one complete repetition per language/mode excluded from descriptive summaries","repetitions":5,"ordering":"forward/reverse alternating mode order","fixed_input":"three deterministic P6 assets, nearest-neighbor32x32,10000 repeats per asset","cpu":"target endpoints measured in every mode; periodic collector reads timed separately","memory":"fresh observer subprocess ru_maxrss/PeakWorkingSet; no cross-trial inherited high water mark","claim_ceiling":"descriptive individual trials; no universal overhead percentage, speedup or hard heap/RSS cap"}});
+    let result = json!({"host":host,"architecture":std::env::consts::ARCH,"trials":trials,"builds":builds,"method":{"warmups":"one complete repetition per language/mode excluded from descriptive summaries","repetitions":5,"ordering":"forward/reverse alternating mode order","fixed_input":"three deterministic P6 assets, nearest-neighbor32x32,10000 repeats per asset","cpu":"target endpoints measured in every mode; periodic collector reads timed separately","memory":if cfg!(target_os="linux"){ "fresh observer /proc/self/status VmHWM current-address-space peak; raw getrusage peak retained separately and may include pre-exec high water" }else{"fresh observer subprocess ru_maxrss/PeakWorkingSet; no cross-trial inherited high water mark"},"claim_ceiling":"descriptive individual trials; no universal overhead percentage, speedup or hard heap/RSS cap"}});
     std::fs::write(
         destination.join("results.json"),
         serde_json::to_vec_pretty(&result).unwrap(),
