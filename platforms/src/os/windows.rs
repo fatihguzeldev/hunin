@@ -179,17 +179,6 @@ pub(crate) fn discover() -> Result<Discovery> {
     Ok(result)
 }
 
-#[cfg(test)]
-mod parent_tests {
-    use super::verified_parent;
-    #[test]
-    fn reused_or_unavailable_parent_ids_do_not_become_parentage() {
-        assert_eq!(verified_parent(100, Some(101), 42), None);
-        assert_eq!(verified_parent(100, None, 42), None);
-        assert_eq!(verified_parent(100, Some(99), 42), Some(42));
-    }
-}
-
 pub(crate) fn resources(pid: u32) -> Result<(Counter, Counter, Vec<MemoryReading>)> {
     let handle = open(pid)?;
     let (_, user, kernel) = times(handle.0)?;
@@ -243,4 +232,15 @@ pub(crate) fn clock_identity() -> Result<String> {
         "windows.QPC:observer:{}:{creation}",
         std::process::id()
     ))
+}
+
+#[cfg(test)]
+mod parent_tests {
+    use super::verified_parent;
+    #[test]
+    fn reused_or_unavailable_parent_ids_do_not_become_parentage() {
+        assert_eq!(verified_parent(100, Some(101), 42), None);
+        assert_eq!(verified_parent(100, None, 42), None);
+        assert_eq!(verified_parent(100, Some(99), 42), Some(42));
+    }
 }
