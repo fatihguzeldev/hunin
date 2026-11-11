@@ -140,6 +140,29 @@ fn project_binding_source_lifetimes_and_exact_values_survive_reopen() {
 }
 
 #[test]
+fn small_profiler_durations_keep_their_exact_float_bits_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = Project::create(directory.path(), "p").unwrap();
+    let (_, source) = prepared_source(&project);
+    let mut expected = record("duration", 1);
+    let seconds = 2.0076461125511958e-7_f64;
+    expected.payload["seconds"] = json!(seconds);
+    let reference = source.record_ref("duration");
+    source
+        .append_batch("duration", std::slice::from_ref(&expected))
+        .unwrap();
+    drop(source);
+    drop(project);
+    let reopened = Project::open(directory.path(), "p").unwrap();
+    let actual = reopened.record(&reference, None).unwrap();
+    assert_eq!(
+        actual.payload["seconds"].as_f64().unwrap().to_bits(),
+        seconds.to_bits()
+    );
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn replay_conflict_and_invalid_batches_are_atomic_and_fenced() {
     let dir = tempfile::tempdir().unwrap();
     let project = Project::create(dir.path(), "p").unwrap();
