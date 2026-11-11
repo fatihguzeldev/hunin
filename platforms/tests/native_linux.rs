@@ -6,6 +6,7 @@ use hunin_platforms::{
         perf::PerfCollector,
         symbols::resolve_elf_profile,
     },
+    process::ErrorKind,
     tools,
 };
 use std::{
@@ -84,6 +85,7 @@ fn perf_is_armed_before_work_and_resolves_real_matched_code() {
         }
         let mut profile = collector.stop().unwrap();
         assert!(!profile.samples.is_empty());
+        let captured = profile.clone();
         let index = profile
             .images
             .iter()
@@ -101,6 +103,71 @@ fn perf_is_armed_before_work_and_resolves_real_matched_code() {
                     .as_ref()
                     .is_some_and(|s| s.file.ends_with(&format!("native.{extension}")) && s.line > 0)
         }));
+        let stripped = dir.join("native-without-debug");
+        std::fs::copy(&binary, &stripped).unwrap();
+        tools::require_success(
+            tools::run(
+                Command::new("llvm-strip")
+                    .arg("--strip-debug")
+                    .arg(&stripped),
+                dir,
+                Duration::from_secs(10),
+                65536,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut absent_debug = captured.clone();
+        resolve_elf_profile(&mut absent_debug, &stripped, dir).unwrap();
+        let justified_names: Vec<_> = absent_debug
+            .samples
+            .iter()
+            .flat_map(|sample| &sample.frames)
+            .filter(|frame| {
+                frame
+                    .function
+                    .as_ref()
+                    .is_some_and(|name| name.contains("render_block"))
+            })
+            .collect();
+        assert!(
+            !justified_names.is_empty(),
+            "stripping debug must preserve remaining symbol-table names"
+        );
+        assert!(
+            justified_names.iter().all(|frame| frame.source.is_none()),
+            "removed debug information cannot retain source locations"
+        );
+
+        let wrong_source = dir.join("wrong.c");
+        std::fs::write(&wrong_source,"__attribute__((noinline)) unsigned long render_block(unsigned long n){return n+1;} int main(void){return (int)render_block(8);}").unwrap();
+        let wrong_binary = dir.join("native-wrong-build");
+        tools::require_success(
+            tools::run(
+                Command::new("clang")
+                    .args(["-g", "-O1", "-Wl,--build-id=sha1"])
+                    .arg(&wrong_source)
+                    .arg("-o")
+                    .arg(&wrong_binary),
+                dir,
+                Duration::from_secs(20),
+                65536,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut wrong_build = captured.clone();
+        assert_eq!(
+            resolve_elf_profile(&mut wrong_build, &wrong_binary, dir)
+                .unwrap_err()
+                .kind,
+            ErrorKind::SymbolMismatch
+        );
+        assert_eq!(
+            serde_json::to_value(&wrong_build.samples).unwrap(),
+            serde_json::to_value(&captured.samples).unwrap(),
+            "rejected symbols must leave captured frames unchanged"
+        );
         assert!(process.wait(Duration::from_secs(5)).unwrap().success());
         let project = hunin_core::project::Project::create(dir, "native-storage").unwrap();
         let investigation = project

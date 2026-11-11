@@ -153,7 +153,12 @@ mod linux {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    fn mapped_build_id(pid: u32, image: &Image, maps: &str) -> Result<(String, u16, u64)> {
+    fn mapped_build_id(
+        pid: u32,
+        image: &Image,
+        maps: &str,
+        page_size: u64,
+    ) -> Result<(String, u16, u64)> {
         use std::os::unix::fs::MetadataExt;
         let row = maps
             .lines()
@@ -180,16 +185,18 @@ mod linux {
             std::path::PathBuf::from(format!("/proc/{pid}/exe")),
             image.path.clone(),
         ] {
-            if let Ok(metadata) = fs::metadata(&path) {
-                if metadata.ino() == inode
-                    && libc::major(metadata.dev()) as u64 == major
-                    && libc::minor(metadata.dev()) as u64 == minor
-                {
-                    let (id, kind) = super::super::symbols::elf_build_id(&path)?;
-                    let virtual_address =
-                        super::super::symbols::elf_virtual_address(&path, image.file_offset)?;
-                    return Ok((id, kind, virtual_address));
-                }
+            if let Ok(metadata) = fs::metadata(&path)
+                && metadata.ino() == inode
+                && libc::major(metadata.dev()) as u64 == major
+                && libc::minor(metadata.dev()) as u64 == minor
+            {
+                let (id, kind) = super::super::symbols::elf_build_id(&path)?;
+                let virtual_address = super::super::symbols::elf_virtual_address(
+                    &path,
+                    image.file_offset,
+                    Some(page_size),
+                )?;
+                return Ok((id, kind, virtual_address));
             }
         }
         Err(Error::new(
@@ -282,11 +289,18 @@ mod linux {
                 return Err(Error::invalid("kernel perf stack limit is zero"));
             }
             let requested_stack = (maximum_frames as u16).min(kernel_stack_limit);
+            let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+            if page < 4096 || !(page as u64).is_power_of_two() {
+                return Err(Error::new(
+                    ErrorKind::CollectorFailure,
+                    "unsupported perf page size",
+                ));
+            }
             let maps = fs::read_to_string(format!("/proc/{}/maps", target.pid))?;
             let mut images = parse_maps(&maps)?;
             let mut issues = Vec::new();
             for image in &mut images {
-                match mapped_build_id(target.pid, image, &maps) {
+                match mapped_build_id(target.pid, image, &maps, page as u64) {
                     Ok((id, _, virtual_address)) => {
                         image.identity = id;
                         image.mapped_virtual_address = Some(virtual_address);
@@ -296,13 +310,6 @@ mod linux {
                         image.path.display()
                     )),
                 }
-            }
-            let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-            if page < 4096 {
-                return Err(Error::new(
-                    ErrorKind::CollectorFailure,
-                    "unsupported perf page size",
-                ));
             }
             let mut rings = Vec::new();
             let mut affinity: libc::cpu_set_t = unsafe { mem::zeroed() };
@@ -443,7 +450,7 @@ mod linux {
                     start: Some(enabled_start),
                     end: None,
                     issues,
-                    metadata: serde_json::json!({"sample_type":SAMPLE_TYPE,"lifetime_events":[],"frequency":frequency,"inherit":true,"inherit_thread":true,"cpus":cpus,"exclude_kernel":true,"callchain":"frame_pointer","sample_max_stack":requested_stack,"kernel_perf_event_max_stack":kernel_stack_limit,"pid":target.pid}),
+                    metadata: serde_json::json!({"sample_type":SAMPLE_TYPE,"lifetime_events":[],"frequency":frequency,"inherit":true,"inherit_thread":true,"cpus":cpus,"exclude_kernel":true,"callchain":"frame_pointer","sample_max_stack":requested_stack,"kernel_perf_event_max_stack":kernel_stack_limit,"mapping_page_size":page,"pid":target.pid}),
                 },
                 maximum_samples,
                 maximum_frames,

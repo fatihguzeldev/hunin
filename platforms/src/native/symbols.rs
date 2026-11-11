@@ -144,7 +144,7 @@ pub fn resolve_elf(
                         .checked_add(frame.address - image.load_address)
                         .ok_or_else(|| Error::invalid("elf mapped virtual address overflow"))?
                 } else {
-                    elf_virtual_address(debug, offset)?
+                    elf_virtual_address(debug, offset, None)?
                 }
             };
             command.arg(format!("0x{address:x}"));
@@ -266,7 +266,7 @@ pub fn resolve_elf_profile(
         Duration::from_secs(10),
         65536,
     )?)?;
-    profile.metadata["symbolizer"] = serde_json::json!({"version":version.stdout,"build_id":identity,"address_translation":"loaded file offset through ELF PT_LOAD virtual address"});
+    profile.metadata["symbolizer"] = serde_json::json!({"version":version.stdout,"build_id":identity,"address_translation":"executable ELF PT_LOAD virtual address; captured mapping bases include host page alignment"});
     Ok(())
 }
 
@@ -387,16 +387,33 @@ pub fn pe_pdb_identity(path: &Path) -> Result<(String, u16)> {
     ))
 }
 
-pub(crate) fn elf_virtual_address(path: &Path, file_offset: u64) -> Result<u64> {
+// Mapping starts include the executable segment's leading page padding; sampled bytes do not.
+pub(crate) fn elf_virtual_address(
+    path: &Path,
+    file_offset: u64,
+    mapping_page_size: Option<u64>,
+) -> Result<u64> {
+    if let Some(page) = mapping_page_size
+        && (!page.is_power_of_two() || !file_offset.is_multiple_of(page))
+    {
+        return Err(Error::invalid("invalid ELF mapping page alignment"));
+    }
     let mut file = File::open(path)?;
     let mut header = [0u8; 64];
     file.read_exact(&mut header)?;
+    if &header[..4] != b"\x7fELF" || header[4] != 2 || header[5] != 1 {
+        return Err(Error::new(
+            ErrorKind::UnsupportedFormat,
+            "only 64-bit little-endian ELF addresses are implemented",
+        ));
+    }
     let phoff = u64::from_le_bytes(header[32..40].try_into().unwrap());
     let size = u16::from_le_bytes(header[54..56].try_into().unwrap()) as u64;
     let count = u16::from_le_bytes(header[56..58].try_into().unwrap()) as u64;
     if !(56..=4096).contains(&size) || count > 4096 {
         return Err(Error::invalid("invalid elf program headers"));
     }
+    let mut result = None;
     for i in 0..count {
         file.seek(SeekFrom::Start(
             phoff
@@ -405,20 +422,115 @@ pub(crate) fn elf_virtual_address(path: &Path, file_offset: u64) -> Result<u64> 
         ))?;
         let mut entry = [0u8; 56];
         file.read_exact(&mut entry)?;
-        if u32::from_le_bytes(entry[..4].try_into().unwrap()) != 1 {
+        if u32::from_le_bytes(entry[..4].try_into().unwrap()) != 1
+            || u32::from_le_bytes(entry[4..8].try_into().unwrap()) & 1 == 0
+        {
             continue;
         }
         let offset = u64::from_le_bytes(entry[8..16].try_into().unwrap());
         let virtual_address = u64::from_le_bytes(entry[16..24].try_into().unwrap());
         let length = u64::from_le_bytes(entry[32..40].try_into().unwrap());
-        if file_offset >= offset && file_offset - offset < length {
-            return virtual_address
-                .checked_add(file_offset - offset)
-                .ok_or_else(|| Error::invalid("elf address overflow"));
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| Error::invalid("ELF executable segment range overflow"))?;
+        let (start, virtual_start) = if let Some(page) = mapping_page_size {
+            if offset % page != virtual_address % page {
+                return Err(Error::invalid(
+                    "ELF executable segment is not page-congruent",
+                ));
+            }
+            (offset & !(page - 1), virtual_address & !(page - 1))
+        } else {
+            (offset, virtual_address)
+        };
+        if length != 0 && file_offset >= start && file_offset < end {
+            let address = virtual_start
+                .checked_add(file_offset - start)
+                .ok_or_else(|| Error::invalid("ELF address overflow"))?;
+            if result.is_some_and(|previous| previous != address) {
+                return Err(Error::new(
+                    ErrorKind::SymbolMismatch,
+                    "ELF offset identifies conflicting executable segments",
+                ));
+            }
+            result = Some(address);
         }
     }
-    Err(Error::new(
-        ErrorKind::SymbolMismatch,
-        "sampled mapping file offset has no executable elf segment",
-    ))
+    result.ok_or_else(|| {
+        Error::new(
+            ErrorKind::SymbolMismatch,
+            "file offset has no matching executable ELF segment",
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn elf(
+        executable_flags: u32,
+        executable_virtual: u64,
+        duplicate: bool,
+    ) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut bytes = vec![0u8; 0x18000];
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+        bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&(if duplicate { 3u16 } else { 2u16 }).to_le_bytes());
+        for (index, (flags, offset, address, length)) in [
+            (4u32, 0u64, 0u64, 0x13700u64),
+            (executable_flags, 0x13700, executable_virtual, 0x2000),
+            (5, 0x13700, 0x24700, 0x2000),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let entry = &mut bytes[64 + index * 56..64 + (index + 1) * 56];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[4..8].copy_from_slice(&flags.to_le_bytes());
+            entry[8..16].copy_from_slice(&offset.to_le_bytes());
+            entry[16..24].copy_from_slice(&address.to_le_bytes());
+            entry[32..40].copy_from_slice(&length.to_le_bytes());
+            entry[40..48].copy_from_slice(&length.to_le_bytes());
+            entry[48..56].copy_from_slice(&4096u64.to_le_bytes());
+        }
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn executable_mapping_padding_does_not_borrow_the_preceding_read_only_load() {
+        let file = elf(5, 0x14700, false);
+        assert_eq!(
+            elf_virtual_address(file.path(), 0x13000, Some(4096)).unwrap(),
+            0x14000
+        );
+        assert_eq!(
+            elf_virtual_address(file.path(), 0x13a10, None).unwrap(),
+            0x14a10
+        );
+        assert!(elf_virtual_address(file.path(), 0x13000, None).is_err());
+        for offset in [0, 0x12000, 0x16000] {
+            assert!(elf_virtual_address(file.path(), offset, Some(4096)).is_err());
+        }
+        assert!(elf_virtual_address(file.path(), 0x15700, None).is_err());
+    }
+
+    #[test]
+    fn invalid_or_conflicting_executable_mapping_inputs_fail_explicitly() {
+        let file = elf(5, 0x14700, false);
+        for page in [0, 6000] {
+            assert!(elf_virtual_address(file.path(), 0x13000, Some(page)).is_err());
+        }
+        assert!(elf_virtual_address(file.path(), 0x13700, Some(4096)).is_err());
+        let nonexecuting = elf(4, 0x14700, false);
+        assert!(elf_virtual_address(nonexecuting.path(), 0x13000, Some(4096)).is_err());
+        let incongruent = elf(5, 0x14720, false);
+        assert!(elf_virtual_address(incongruent.path(), 0x13000, Some(4096)).is_err());
+        let ambiguous = elf(5, 0x14700, true);
+        assert!(elf_virtual_address(ambiguous.path(), 0x13000, Some(4096)).is_err());
+    }
 }
