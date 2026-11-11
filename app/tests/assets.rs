@@ -155,7 +155,7 @@ fn asset_investigation(kind: RuntimeKind, variable: &str, fixture: &str, repetit
                 query.schema = Some("eventpipe.frame".into());
                 query.fields.push(FieldFilter {
                     name: "source_file".into(),
-                    value: json!(workload),
+                    value: json!(fs::canonicalize(&workload).unwrap()),
                 });
             } else {
                 query.function = Some(

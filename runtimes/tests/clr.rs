@@ -116,6 +116,7 @@ fn unresolved_eventpipe_symbols_keep_runtime_names_without_source_locations() {
 }
 
 #[test]
+#[cfg(unix)]
 fn coreclr_long_project_paths_fail_before_compilation_or_file_writes() {
     use std::{fs, path::PathBuf};
     let directory = tempfile::tempdir().unwrap();
@@ -155,7 +156,11 @@ fn real_coreclr_samples_match_portable_pdb_and_survive_input_removal() {
             json!({"workload":"seven pixel previews"}),
         )
         .unwrap();
-    let area = project.directory().join("tmp/c");
+    let area = project.directory().join(if cfg!(windows) {
+        "tmp/long-project-temporary-directory-with-windows-named-pipes"
+    } else {
+        "tmp/c"
+    });
     fs::create_dir(&area).unwrap();
     let workload = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Preview.cs");
     let mut prepared = clr::prepare(&executable, &workload, &area).unwrap();
