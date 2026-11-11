@@ -198,11 +198,6 @@ pub fn read_resources(expected: &ProcessInstance) -> Result<ResourceSnapshot> {
             "monotonic clock moved backwards",
         ));
     }
-    #[cfg(windows)]
-    let after = ProcessInstance {
-        parent_pid: expected.parent_pid,
-        ..after
-    };
     Ok(ResourceSnapshot {
         instance: after,
         acquired: AcquisitionWindow {

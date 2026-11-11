@@ -32,14 +32,29 @@ fn current_process_resources_are_bound_to_a_real_instance() {
     }
     std::hint::black_box(sum);
     let second = read_resources(&instance).unwrap();
-    assert_eq!(first.instance, instance);
-    assert_eq!(second.instance, instance);
+    assert!(first.instance.same_instance(&instance));
+    assert!(second.instance.same_instance(&instance));
     assert!(
         second.user_cpu.nanoseconds().unwrap() + second.system_cpu.nanoseconds().unwrap()
             >= first.user_cpu.nanoseconds().unwrap() + first.system_cpu.nanoseconds().unwrap()
     );
     assert!(second.memory.iter().any(|m| m.bytes > 0));
     assert!(second.acquired.end_ns >= second.acquired.start_ns);
+}
+
+#[cfg(windows)]
+#[test]
+fn caller_supplied_parentage_is_never_published_as_a_resource_observation() {
+    let mut expected = inspect_process(std::process::id()).unwrap();
+    expected.parent_pid = Some(u32::MAX);
+    let snapshot = read_resources(&expected).unwrap();
+    assert!(snapshot.instance.same_instance(&expected));
+    assert_eq!(snapshot.instance.parent_pid, None);
+    let record = snapshot.to_record("sample", "target").unwrap();
+    assert_eq!(
+        record.payload["instance"]["parent_pid"],
+        serde_json::Value::Null
+    );
 }
 
 #[test]
