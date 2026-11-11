@@ -53,6 +53,18 @@ fn a_stale_identity_never_becomes_a_new_process() {
 }
 
 #[test]
+fn invalid_resource_target_pid_is_rejected_before_os_inspection() {
+    let mut instance = inspect_process(std::process::id()).unwrap();
+    for pid in [0, u32::MAX] {
+        instance.pid = pid;
+        assert_eq!(
+            read_resources(&instance).unwrap_err().kind,
+            ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
 fn corrupt_unit_scale_or_reversed_acquisition_is_rejected_before_publication() {
     let instance = hunin_platforms::inspect_process(std::process::id()).unwrap();
     let original = hunin_platforms::read_resources(&instance).unwrap();
@@ -96,4 +108,85 @@ fn actual_process_cpu_units_agree_with_independent_getrusage_endpoints() {
         observed.abs_diff(reference) <= 50_000_000.max(reference / 20),
         "source {observed}ns vs independent {reference}ns; raw scales must remain visible"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_process_cpu_scale_agrees_with_independent_busy_thread_times() {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentThread, GetThreadTimes},
+    };
+    fn reference() -> u64 {
+        let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+        let mut exit = creation;
+        let mut kernel = creation;
+        let mut user = creation;
+        assert_ne!(
+            unsafe {
+                GetThreadTimes(
+                    GetCurrentThread(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+            },
+            0
+        );
+        let ticks =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        (ticks(user) + ticks(kernel)) * 100
+    }
+    let instance = inspect_process(std::process::id()).unwrap();
+    let before = read_resources(&instance).unwrap();
+    let thread_before = reference();
+    let start = std::time::Instant::now();
+    let mut value = 1_u64;
+    while start.elapsed() < std::time::Duration::from_millis(250) {
+        for i in 0..1000 {
+            value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(i));
+        }
+    }
+    std::hint::black_box(value);
+    let thread_ns = reference() - thread_before;
+    let after = read_resources(&instance).unwrap();
+    let observed = after.user_cpu.nanoseconds().unwrap() + after.system_cpu.nanoseconds().unwrap()
+        - before.user_cpu.nanoseconds().unwrap()
+        - before.system_cpu.nanoseconds().unwrap();
+    assert!(thread_ns >= 100_000_000);
+    assert!(
+        observed.abs_diff(thread_ns) <= 50_000_000,
+        "process {observed}ns vs independent busy thread {thread_ns}ns"
+    );
+    assert_eq!(after.user_cpu.source_unit, "100ns");
+    assert_eq!(after.user_cpu.nanoseconds_numerator, 100);
+    assert_eq!(after.user_cpu.denominator, 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_private_commit_and_working_set_keep_their_distinct_byte_meanings() {
+    let instance = inspect_process(std::process::id()).unwrap();
+    let first = read_resources(&instance).unwrap();
+    let mut allocation = vec![0u8; 32 * 1024 * 1024];
+    for page in allocation.chunks_mut(4096) {
+        page[0] = std::hint::black_box(71);
+    }
+    std::hint::black_box(&allocation);
+    let second = read_resources(&instance).unwrap();
+    for name in [
+        "windows.PROCESS_MEMORY_COUNTERS_EX.WorkingSetSize",
+        "windows.PROCESS_MEMORY_COUNTERS_EX.PrivateUsage",
+    ] {
+        let before = first.memory.iter().find(|m| m.definition == name).unwrap();
+        let after = second.memory.iter().find(|m| m.definition == name).unwrap();
+        assert!(
+            after.bytes >= before.bytes + 28 * 1024 * 1024,
+            "{name}: {} to {} bytes",
+            before.bytes,
+            after.bytes
+        );
+        assert!(!after.approximate);
+    }
 }
